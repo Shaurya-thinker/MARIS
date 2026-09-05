@@ -1,18 +1,27 @@
-from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from app.models.common import BoundingBox, EnvironmentKind, TimeWindow
 
 
-class WindField(BaseModel):
+class Environment(BaseModel):
+    """Metocean field (wind, current, or other) for an investigation, backed by a stored asset."""
+
+    id: str
+    investigation_id: str
+    asset_id: str
+    kind: EnvironmentKind
     provider: str
-    time_range: tuple[datetime, datetime]
-    spatial_bounds: tuple[float, float, float, float]
-    variables: dict[str, Any]
+    time_window: TimeWindow
+    spatial_bounds: BoundingBox
+    variables: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class CurrentField(BaseModel):
-    provider: str
-    time_range: tuple[datetime, datetime]
-    spatial_bounds: tuple[float, float, float, float]
-    variables: dict[str, Any]
+class WindField(Environment):
+    kind: Literal[EnvironmentKind.WIND] = EnvironmentKind.WIND
+
+
+class CurrentField(Environment):
+    kind: Literal[EnvironmentKind.CURRENT] = EnvironmentKind.CURRENT
