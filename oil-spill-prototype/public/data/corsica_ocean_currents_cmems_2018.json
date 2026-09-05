@@ -1,0 +1,53 @@
+{
+  "scenario": "Ulysse\u2013CSL Virginia, Corsica, 2018",
+  "dataset": "GLOBAL_MULTIYEAR_PHY_001_030",
+  "datasetId": "cmems_mod_glo_phy_my_0.083deg_P1D-m_202311",
+  "description": "Daily mean surface ocean currents extracted at the nearest CMEMS grid cell to the collision area.",
+  "targetPoint": {
+    "lat": 43.25,
+    "lon": 9.5
+  },
+  "depth_m": 0.494025,
+  "variables": [
+    "uo",
+    "vo"
+  ],
+  "records": [
+    {
+      "timestamp": "2018-10-07T00:00:00Z",
+      "lat": 43.25,
+      "lon": 9.50001049041748,
+      "uo_ms": -0.024414807558059692,
+      "vo_ms": 0.03357036039233208,
+      "currentSpeed_ms": 0.04150966062217502,
+      "currentDirectionTo_deg": 323.9726266148964,
+      "currentDirectionFrom_deg": 143.9726266148964,
+      "dataType": "CMEMS ocean physics reanalysis",
+      "source": "Copernicus Marine Service / GLORYS12V1"
+    },
+    {
+      "timestamp": "2018-10-08T00:00:00Z",
+      "lat": 43.25,
+      "lon": 9.50001049041748,
+      "uo_ms": -0.029908139258623123,
+      "vo_ms": 0.06042664870619774,
+      "currentSpeed_ms": 0.06742311671656408,
+      "currentDirectionTo_deg": 333.66691427422023,
+      "currentDirectionFrom_deg": 153.6669142742203,
+      "dataType": "CMEMS ocean physics reanalysis",
+      "source": "Copernicus Marine Service / GLORYS12V1"
+    },
+    {
+      "timestamp": "2018-10-09T00:00:00Z",
+      "lat": 43.25,
+      "lon": 9.50001049041748,
+      "uo_ms": -0.043336283415555954,
+      "vo_ms": 0.07751701772212982,
+      "currentSpeed_ms": 0.08880834136952666,
+      "currentDirectionTo_deg": 330.79240470166525,
+      "currentDirectionFrom_deg": 150.79240470166525,
+      "dataType": "CMEMS ocean physics reanalysis",
+      "source": "Copernicus Marine Service / GLORYS12V1"
+    }
+  ]
+}

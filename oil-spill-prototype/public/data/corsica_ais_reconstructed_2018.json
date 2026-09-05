@@ -1,0 +1,83 @@
+{
+  "incident": {
+    "name": "Ulysse - CSL Virginia collision",
+    "date": "2018-10-07",
+    "location": {
+      "lat": 43.24833,
+      "lon": 9.47833
+    },
+    "dataType": "reconstructed_narrative",
+    "source": "BEA mer investigation evidence",
+    "note": "No raw machine-readable AIS trajectory is publicly available for this incident. Coordinates and event anchors below are reconstructed/estimated from documented investigation evidence and must not be presented as raw AIS."
+  },
+  "vessels": [
+    {
+      "name": "ULYSSE",
+      "imo": "9142459",
+      "mmsi": "672248000",
+      "callsign": "TSMU",
+      "flag": "TN",
+      "vesselType": "Passenger/Ro-Ro cargo ship",
+      "role": "striking vessel (underway)",
+      "track": [
+        {
+          "timestamp": "2018-10-07T06:02:00Z",
+          "lat": 43.24833,
+          "lon": 9.47833,
+          "sogKn": 19,
+          "cogDeg": null,
+          "headingDeg": null,
+          "event": "COLLISION",
+          "dataType": "reconstructed_estimate",
+          "confidence": "medium",
+          "source": "BEA mer investigation evidence"
+        }
+      ],
+      "approach": {
+        "courseDeg": 161,
+        "dataType": "reconstructed_narrative",
+        "confidence": "medium",
+        "source": "BEA mer investigation evidence",
+        "note": "Documented pre-collision course; no intermediate coordinates are fabricated."
+      }
+    },
+    {
+      "name": "CSL VIRGINIA",
+      "imo": "9289568",
+      "mmsi": "212416000",
+      "callsign": "5BEG4",
+      "flag": "CY",
+      "vesselType": "Container ship",
+      "role": "struck vessel (at anchor)",
+      "track": [
+        {
+          "timestamp": "2018-10-07T06:02:00Z",
+          "lat": 43.24833,
+          "lon": 9.47833,
+          "sogKn": 0,
+          "cogDeg": null,
+          "headingDeg": null,
+          "event": "ANCHORED / COLLISION SITE",
+          "dataType": "reconstructed_estimate",
+          "confidence": "medium-high",
+          "source": "BEA mer investigation evidence"
+        }
+      ],
+      "anchor": {
+        "swingCircleDiameterM": 1000,
+        "chainLengthMApprox": 302,
+        "dataType": "reconstructed_narrative",
+        "source": "BEA mer investigation evidence"
+      }
+    }
+  ],
+  "schemaNotes": {
+    "dataTypeValues": [
+      "raw_ais - actual decoded AIS message; not present in this dataset",
+      "reconstructed_narrative - derived from investigation report prose",
+      "reconstructed_estimate - estimated event anchor using documented evidence"
+    ],
+    "usage": "For MARIS historical demonstration only. Do not label these records as raw AIS or live AIS.",
+    "nextStep": "Replace/augment with licensed historical AIS points or manually digitized published AIS figures if obtained."
+  }
+}
