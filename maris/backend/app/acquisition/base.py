@@ -17,11 +17,14 @@ class AcquisitionValidationError(AcquisitionError):
     """The request is not valid for this provider."""
 
 
+class AcquisitionConfigurationError(AcquisitionError):
+    """Required provider configuration is missing or unusable."""
+
+
 class AcquisitionProvider(ABC):
     """Abstract source of investigation assets.
 
-    Implementations must not live in this module. Concrete Sentinel, ERA5,
-    CMEMS, and AIS providers are out of scope for this stage.
+    Concrete providers live under app.acquisition.providers.
     """
 
     @property
@@ -58,7 +61,7 @@ class AcquisitionProvider(ABC):
     def acquire(self, request: AcquisitionRequest) -> AcquisitionResult:
         """Execute acquisition and return artifacts for registration.
 
-        Must be called only after validate(). Implementations must not be added yet.
+        Call validate() before this method.
         """
 
     def artifact_source(self, request: AcquisitionRequest) -> str:

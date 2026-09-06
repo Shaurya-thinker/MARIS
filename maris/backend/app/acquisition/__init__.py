@@ -1,4 +1,5 @@
 from app.acquisition.base import (
+    AcquisitionConfigurationError,
     AcquisitionError,
     AcquisitionProvider,
     AcquisitionProviderCatalog,
@@ -18,6 +19,7 @@ from app.acquisition.schemas import (
 
 __all__ = [
     "AcquiredArtifact",
+    "AcquisitionConfigurationError",
     "AcquisitionError",
     "AcquisitionJob",
     "AcquisitionProvider",

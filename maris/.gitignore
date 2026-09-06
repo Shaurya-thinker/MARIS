@@ -28,5 +28,13 @@ dist-ssr
 __pycache__/
 *.pyc
 
-# Backend environment
+# Backend environment and secrets
 backend/.venv/
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+
+# Acquired scientific data (Sentinel-1 products, etc.)
+backend/data/acquisitions/
