@@ -310,3 +310,78 @@ Validation classification:
 A4.3 does **not** perform drift modelling, interpolation, resampling, or AOI
 intersection. It validates that the ERA5 wind field is structurally sound and
 scientifically interpretable. Read-only: the source NetCDF is never modified.
+
+### A4.4 — CMEMS Near-Surface Current NetCDF Validation
+
+`CmemsValidator` (`app/validation/cmems.py`) validates a CMEMS near-surface
+ocean current NetCDF artifact acquired by the A3.4 provider. It uses `xarray`
+with the `netcdf4` engine. No GDAL, rasterio, scipy, or drift libraries are
+used. Read-only: the source NetCDF is never modified.
+
+Current variables inspected (as produced by GLORYS12V1 / A3.4):
+
+- `uo` — eastward sea-water velocity
+- `vo` — northward sea-water velocity
+
+Retained depth dimension:
+
+The A3.4 provider selects the nearest level to depth 0–1 m, which returns the
+first GLORYS12V1 standard level (~0.494025 m). The depth dimension is
+**retained** in the output (size 1, not squeezed). A4.4 verifies that the
+depth dimension is present and records it. No vertical interpolation is
+performed.
+
+Near-surface depth validation:
+
+A key A4.4 check. The validator checks whether the minimum depth value in the
+artifact matches the expected first GLORYS12V1 level (0.494025 m) within a
+small tolerance. A mismatch produces a **WARNING** (not an ERROR), because the
+artifact may still be scientifically usable; it indicates the A3.4
+near-surface contract may not be fully satisfied.
+
+Checks performed:
+
+- NetCDF can be opened (not corrupt or unreadable)
+- `uo` and `vo` are present
+- `time`, `latitude`, `longitude`, `depth` coordinates are present and non-empty
+- Depth values are positive, finite, in metres; positive direction is `down`
+- Depth ≈ 0.494025 m (first GLORYS12V1 level) within 0.01 m tolerance (WARNING if not)
+- Latitude values are finite and within \[-90, 90\]
+- Longitude values are finite and within \[-180, 180\] (signed; not normalised)
+- Latitude and longitude are monotonically ordered (WARNING if not)
+- Time is monotonically ordered (WARNING if not)
+- Current variable `units` attribute is an accepted m s⁻¹ representation
+  (`m s-1`, `m/s`, or `m s**-1`)
+- Missing `units` attribute → WARNING; unexpected units → ERROR
+- Depth `units` must be metres or clearly equivalent; missing → WARNING; other → ERROR
+- CMEMS `_FillValue` is transparently exposed as NaN by xarray; all-NaN variable → ERROR
+- Partial NaN/missing values → WARNING
+- ±inf values → WARNING
+- Useful dataset-level global attributes are recorded
+
+Metadata recorded in `ValidationResult.metadata`:
+
+- `identified_u_component`, `identified_v_component`
+- `latitude_min`, `latitude_max`, `latitude_count`, `latitude_order`
+- `longitude_min`, `longitude_max`, `longitude_count`, `longitude_order`
+- `depth_min`, `depth_max`, `depth_count`, `depth_units`, `depth_positive`
+- `near_surface_depth`, `near_surface_depth_recognized`
+- `time_start`, `time_end`, `time_count`
+- `u_units`, `v_units`
+- `u_missing_count`, `v_missing_count`, `u_nonfinite_count`, `v_nonfinite_count`
+- `u_dims`, `v_dims`, `u_shape`, `v_shape`
+- `dataset_product_id`, `dataset_dataset_id`, `dataset_source`, `dataset_institution`,
+  `dataset_processing_level`, `dataset_conventions`
+- `validation_classification`
+
+Validation classification:
+
+| Classification | Condition |
+|---|---|
+| `PREFERRED` | no ERRORs, no WARNINGs |
+| `USABLE_WITH_WARNINGS` | no ERRORs, at least one WARNING |
+| `INVALID` | at least one ERROR; `passed=False` |
+
+A4.4 validates CMEMS current data.
+It does **not** perform drift modelling, current interpolation, resampling,
+spill detection, or attribution.
