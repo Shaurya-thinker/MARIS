@@ -35,6 +35,8 @@ class Settings:
         )
         self.cds_url = _env("CDSAPI_URL", "https://cds.climate.copernicus.eu/api")
         self.cds_api_key = _env("CDSAPI_KEY")
+        self.cmems_username = _env("COPERNICUSMARINE_SERVICE_USERNAME") or _env("CMEMS_USERNAME")
+        self.cmems_password = _env("COPERNICUSMARINE_SERVICE_PASSWORD") or _env("CMEMS_PASSWORD")
         for key, value in overrides.items():
             setattr(self, key, value)
 

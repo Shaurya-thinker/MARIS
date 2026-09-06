@@ -1,3 +1,4 @@
 fastapi
 uvicorn
 cdsapi>=0.7.7
+copernicusmarine>=2.0.0
