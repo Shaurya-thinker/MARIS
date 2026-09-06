@@ -37,6 +37,7 @@ class Settings:
         self.cds_api_key = _env("CDSAPI_KEY")
         self.cmems_username = _env("COPERNICUSMARINE_SERVICE_USERNAME") or _env("CMEMS_USERNAME")
         self.cmems_password = _env("COPERNICUSMARINE_SERVICE_PASSWORD") or _env("CMEMS_PASSWORD")
+        self.ais_adapter_id = _env("MARIS_AIS_ADAPTER", "unconfigured")
         for key, value in overrides.items():
             setattr(self, key, value)
 

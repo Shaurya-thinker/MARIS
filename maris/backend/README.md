@@ -4,7 +4,8 @@ This is the MARIS backend foundation.
 
 The current purpose is to provide the initial API foundation, domain contracts,
 and a data-acquisition framework. The HTTP surface is still a health endpoint at `GET /health`. Sentinel-1, ERA5,
-and CMEMS acquisition are library providers, not API routes.
+CMEMS, and AIS acquisition are library providers, not API routes. The AIS
+provider is an adapter boundary only; no live AIS service is configured.
 
 ## Run locally
 
@@ -25,9 +26,9 @@ From this directory:
 python -m unittest discover -s tests -v
 ```
 
-Tests mock CDSE, CDS, and Copernicus Marine HTTP. They do not require Copernicus
-credentials and they do not download Sentinel-1 products, ERA5 NetCDF, or CMEMS
-NetCDF files.
+Tests mock CDSE, CDS, Copernicus Marine, and AIS adapter I/O. They do not require
+Copernicus or AIS credentials and they do not download Sentinel-1 products, ERA5
+NetCDF, CMEMS NetCDF, or live AIS data.
 
 ## Sentinel-1 / CDSE configuration
 
@@ -128,3 +129,49 @@ or committed `.env` files.
 NetCDF artifacts are stored under
 `{MARIS_DATA_DIR}/acquisitions/{investigation_id}/cmems/{request-key}/cmems_surface_currents.nc`.
 That directory is gitignored.
+
+## AIS / historical vessel positions (Stage A3.5)
+
+The AIS provider acquires **historical** vessel positions for an investigation
+AOI and time window. It is not a live vessel lookup and it is not wired to a
+commercial AIS vendor.
+
+Architecture:
+
+```text
+AcquisitionRequest (VESSEL_TRACK)
+        ↓
+AisAcquisitionProvider
+        ↓
+AisSourceAdapter (injectable)
+        ↓
+normalized position records
+        ↓
+JSON artifact + AcquiredArtifact
+```
+
+No live AIS provider is configured. `UnconfiguredAisAdapter` is the default and
+raises a configuration error. A real historical adapter can be injected later
+without changing `AcquisitionProvider` or A2 models.
+
+Normalized observation fields (null when the source omits them):
+
+- timestamp, lat, lon
+- MMSI, IMO, vessel name
+- speed over ground, course over ground, heading
+- navigation status
+
+MARIS does not invent, interpolate, or reconstruct trajectories in this stage.
+
+Optional configuration placeholder (not a credential, not required):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MARIS_AIS_ADAPTER` | `unconfigured` | Name of a future historical AIS adapter |
+
+Do not set CDSE, CDS, or CMEMS credentials for AIS. Future AIS secrets, if any,
+will be AIS-specific and are not defined yet.
+
+JSON artifacts are stored under
+`{MARIS_DATA_DIR}/acquisitions/{investigation_id}/ais/{request-key}/ais_positions.json`.
+That directory is gitignored. MARIS does not currently have live AIS coverage.
