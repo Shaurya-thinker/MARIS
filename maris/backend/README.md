@@ -3,8 +3,8 @@
 This is the MARIS backend foundation.
 
 The current purpose is to provide the initial API foundation, domain contracts,
-and a data-acquisition framework. The HTTP surface is still a health endpoint
-at `GET /health`. Sentinel-1 acquisition is a library provider, not an API route.
+and a data-acquisition framework. The HTTP surface is still a health endpoint at `GET /health`. Sentinel-1 and ERA5
+acquisition are library providers, not API routes.
 
 ## Run locally
 
@@ -25,8 +25,8 @@ From this directory:
 python -m unittest discover -s tests -v
 ```
 
-Tests mock CDSE HTTP. They do not require Copernicus credentials and they do
-not download Sentinel-1 products.
+Tests mock CDSE and CDS HTTP. They do not require Copernicus credentials and they
+do not download Sentinel-1 products or ERA5 NetCDF files.
 
 ## Sentinel-1 / CDSE configuration
 
@@ -55,3 +55,38 @@ Optional:
 | `MARIS_DATA_DIR` | `backend/data` | Local artifact root (not `public/`) |
 
 Downloaded products are stored under `{MARIS_DATA_DIR}/acquisitions/{investigation_id}/sentinel1/{product_id}/`. That directory is gitignored.
+
+## ERA5 / CDS configuration
+
+The ERA5 provider requests hourly 10 m wind from the Copernicus Climate Data
+Store using the official `cdsapi` client. It does not use CDSE credentials.
+
+Dataset: `reanalysis-era5-single-levels` (ERA5 hourly data on single levels).
+
+Variables requested:
+
+- `10m_u_component_of_wind`
+- `10m_v_component_of_wind`
+
+Output: NetCDF (`data_format=netcdf`), clipped to the investigation bounding box
+(`area` as north, west, south, east). The provider does not request a global
+grid.
+
+Required:
+
+| Variable | Purpose |
+|---|---|
+| `CDSAPI_KEY` | CDS personal access token from https://cds.climate.copernicus.eu/how-to-api |
+
+Optional:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CDSAPI_URL` | `https://cds.climate.copernicus.eu/api` | CDS API base URL |
+
+Accept the ERA5 dataset licence on the CDS website before live downloads will
+succeed. Do not put `CDSAPI_KEY` in source files or committed `.env` files.
+
+NetCDF artifacts are stored under
+`{MARIS_DATA_DIR}/acquisitions/{investigation_id}/era5/{request-key}/era5_10m_wind.nc`.
+That directory is gitignored.

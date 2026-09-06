@@ -33,6 +33,8 @@ class Settings:
             "CDSE_DOWNLOAD_URL",
             "https://zipper.dataspace.copernicus.eu/odata/v1",
         )
+        self.cds_url = _env("CDSAPI_URL", "https://cds.climate.copernicus.eu/api")
+        self.cds_api_key = _env("CDSAPI_KEY")
         for key, value in overrides.items():
             setattr(self, key, value)
 
