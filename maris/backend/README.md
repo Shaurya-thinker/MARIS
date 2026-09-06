@@ -175,3 +175,58 @@ will be AIS-specific and are not defined yet.
 JSON artifacts are stored under
 `{MARIS_DATA_DIR}/acquisitions/{investigation_id}/ais/{request-key}/ais_positions.json`.
 That directory is gitignored. MARIS does not currently have live AIS coverage.
+
+## Scientific Data Validation (Stage A4)
+
+Validation runs after acquisition. It is a separate, read-only step that never
+modifies, moves, or deletes an acquired artifact.
+
+### A4.1 — Generic Artifact Validation
+
+The validation framework lives in `app/validation/`. It is provider-independent:
+it knows nothing about Sentinel-1, ERA5, CMEMS, AIS, NetCDF, GeoTIFF, or any
+other format.
+
+Architecture:
+
+```text
+AcquiredArtifact
+      ↓
+ScientificValidator.validate(artifact)
+      ↓
+ValidationResult
+      ↓
+INFO / WARNING / ERROR issues
+```
+
+`GenericArtifactValidator` performs checks applicable to every artifact:
+
+- artifact location is a non-empty string
+- artifact path exists on the filesystem
+- artifact is accessible (file or directory)
+- artifact is not empty (size > 0)
+- provider/source field is present
+- provenance object is available
+
+Severity rules:
+
+- `ERROR` — artifact is not valid for downstream scientific processing;
+  `ValidationResult.passed` is `False`
+- `WARNING` — artifact may proceed but the limitation must remain visible;
+  does not affect `passed`
+- `INFO` — informational only; does not affect `passed`
+
+All checks are independent: a location failure does not suppress a source check.
+Fail-closed: an unexpected error during a check produces an `ERROR` issue, not
+a silent downgrade to `WARNING`.
+
+Validation provenance is recorded in every `ValidationResult`:
+
+- `validator_name` and `validator_version`
+- `validated_at` (UTC timestamp)
+
+No credentials or secrets are included in the result.
+
+Provider-specific scientific validation (NetCDF variable checks, coordinate
+ranges, SAR metadata, AIS record integrity) is implemented in A4.2–A4.5 as
+subclasses of `ScientificValidator`. A4.1 does not inspect file contents.
