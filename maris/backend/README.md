@@ -230,3 +230,35 @@ No credentials or secrets are included in the result.
 Provider-specific scientific validation (NetCDF variable checks, coordinate
 ranges, SAR metadata, AIS record integrity) is implemented in A4.2–A4.5 as
 subclasses of `ScientificValidator`. A4.1 does not inspect file contents.
+
+### A4.2 — Sentinel-1 Product Validation
+
+`Sentinel1Validator` (`app/validation/sentinel1.py`) validates a Sentinel-1
+ZIP/SAFE artifact acquired by the A3.2 provider. It uses stdlib `zipfile` and
+`xml.etree.ElementTree` only — no GDAL, rasterio, xarray, numpy, or SNAP.
+
+Checks performed:
+
+- ZIP can be opened and passes CRC integrity test
+- `manifest.safe` is present and is valid XML
+- Platform `familyName` is `SENTINEL-1`; instrument abbreviation is `SAR`
+- `productType` is a recognised Sentinel-1 type (`GRD`, `SLC`, `RAW`, `OCN`)
+- Sensor mode is extracted; `IW` is preferred, other valid modes produce a WARNING
+- Processing level `GRDH` is preferred; `GRDM` produces a WARNING
+- Polarisation channels are present (missing → WARNING)
+- Sensing start and stop times are parseable and start < stop
+- Spatial footprint coordinates are in valid WGS84 ranges (missing → WARNING)
+- Orbit number is present (missing → WARNING)
+
+Validation classification stored in `ValidationResult.metadata`:
+
+| Classification | Condition |
+|---|---|
+| `PREFERRED` | no ERRORs, no WARNINGs |
+| `USABLE_WITH_WARNINGS` | no ERRORs, at least one WARNING |
+| `INVALID` | at least one ERROR; `passed=False` |
+
+This validator does not perform SAR pixel analysis, oil-spill detection,
+drift modelling, or AOI intersection. It confirms that the product package
+is structurally intact and identifies as a Sentinel-1 SAR acquisition.
+Read-only: the source artifact is never modified.
