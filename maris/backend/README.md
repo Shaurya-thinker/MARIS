@@ -262,3 +262,51 @@ This validator does not perform SAR pixel analysis, oil-spill detection,
 drift modelling, or AOI intersection. It confirms that the product package
 is structurally intact and identifies as a Sentinel-1 SAR acquisition.
 Read-only: the source artifact is never modified.
+
+### A4.3 — ERA5 Wind NetCDF Validation
+
+`Era5Validator` (`app/validation/era5.py`) validates an ERA5 10 m wind NetCDF
+artifact acquired by the A3.3 provider. It uses `xarray` with the `netcdf4`
+engine. No GDAL, rasterio, SNAP, or drift libraries are used.
+
+Wind variables inspected (as produced by CDS `reanalysis-era5-single-levels`):
+
+- `u10` — 10 m eastward wind component
+- `v10` — 10 m northward wind component
+
+Checks performed:
+
+- NetCDF can be opened (not corrupt or unreadable)
+- `u10` and `v10` are present
+- `time`, `latitude`, `longitude` coordinates are present and non-empty
+- Latitude values are finite and within \[-90, 90\]; ascending and descending both accepted
+- Longitude values are finite and within \[-180, 180\]; ascending and descending both accepted
+- Non-monotonic latitude or longitude → WARNING
+- Time is monotonically ordered (WARNING if not)
+- Wind variable `units` attribute is an accepted m s⁻¹ representation (`m s**-1` or `m/s`)
+- Missing `units` attribute → WARNING
+- Unexpected units → ERROR
+- ERA5 `_FillValue` is transparently exposed as NaN by xarray; all-NaN variable → ERROR
+- Partial NaN/missing values → WARNING
+- ±inf values → WARNING
+
+Metadata recorded in `ValidationResult.metadata`:
+
+- `identified_u_component`, `identified_v_component`
+- `latitude_min`, `latitude_max`, `longitude_min`, `longitude_max`
+- `time_start`, `time_end`
+- `u_units`, `v_units`
+- `u_missing_count`, `v_missing_count`, `u_nonfinite_count`, `v_nonfinite_count`
+- `validation_classification`
+
+Validation classification:
+
+| Classification | Condition |
+|---|---|
+| `PREFERRED` | no ERRORs, no WARNINGs |
+| `USABLE_WITH_WARNINGS` | no ERRORs, at least one WARNING |
+| `INVALID` | at least one ERROR; `passed=False` |
+
+A4.3 does **not** perform drift modelling, interpolation, resampling, or AOI
+intersection. It validates that the ERA5 wind field is structurally sound and
+scientifically interpretable. Read-only: the source NetCDF is never modified.

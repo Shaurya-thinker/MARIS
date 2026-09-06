@@ -2,3 +2,5 @@ fastapi
 uvicorn
 cdsapi>=0.7.7
 copernicusmarine>=2.0.0
+xarray>=2024.1.0
+netCDF4>=1.6.0
