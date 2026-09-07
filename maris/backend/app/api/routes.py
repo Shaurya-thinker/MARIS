@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -16,7 +17,13 @@ from app.models.common import (
     Provenance,
     TimeWindow,
 )
+from app.models.drift import DriftResult
 from app.models.satellite import SatelliteScene, SpillDetection
+from app.services.drift_modelling import (
+    DriftModellingError,
+    compute_drift_for_spill,
+    extract_centroid,
+)
 from app.services.sentinel1_ingestion import Sentinel1IngestionError, ingest_sentinel1_artifact
 from app.services.spill_detection import (
     AdaptiveThresholdSpillDetector,
@@ -324,3 +331,121 @@ def acquire_environment(
         failed_providers=summary.failed_providers,
         items=items_response,
     )
+
+
+class DriftModellingRequest(BaseModel):
+    wind_asset_id: str
+    current_asset_id: str
+    drift_hours: float | None = None
+    step_hours: float | None = None
+    leeway_fraction: float | None = None
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/drift",
+    response_model=DriftResult,
+)
+def run_forward_drift_endpoint(
+    investigation_id: str,
+    spill_id: str,
+    payload: DriftModellingRequest,
+) -> DriftResult:
+    # 1. Resolve spill asset
+    spill_asset: Asset | None = None
+    try:
+        candidate = default_asset_registry.get(spill_id)
+        if candidate.investigation_id == investigation_id:
+            spill_asset = candidate
+    except KeyError:
+        pass
+
+    if spill_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == spill_id
+                or asset.provenance.product_id == spill_id
+                or asset.metadata.get("detection_id") == spill_id
+                or asset.metadata.get("parent_scene_id") == spill_id
+                or asset.provenance.extra.get("detection_id") == spill_id
+            ):
+                spill_asset = asset
+                break
+
+    if spill_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill asset or detection '{spill_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # 2. Extract centroid and validate positive detection
+    centroid_dict = spill_asset.metadata.get("centroid")
+    detected = spill_asset.metadata.get("detected")
+    if detected is None:
+        detected = bool(centroid_dict is not None and spill_asset.metadata.get("spill_count", 1) > 0)
+
+    spill_detection = SpillDetection(
+        id=spill_asset.provenance.product_id or spill_id,
+        investigation_id=investigation_id,
+        asset_id=spill_asset.id,
+        scene_id=spill_asset.provenance.extra.get("parent_scene_id") or spill_asset.metadata.get("parent_scene_id") or "unknown-scene",
+        detected=detected,
+        confidence=spill_asset.metadata.get("confidence", 1.0 if detected else 0.0),
+        geometry=spill_asset.metadata.get("geometry", {}),
+        metadata=spill_asset.metadata,
+    )
+
+    try:
+        origin_lon, origin_lat = extract_centroid(spill_detection)
+    except DriftModellingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # 3. Resolve wind and current assets
+    try:
+        wind_asset = default_asset_registry.get(payload.wind_asset_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Wind asset '{payload.wind_asset_id}' not found in registry",
+        )
+
+    try:
+        current_asset = default_asset_registry.get(payload.current_asset_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Current asset '{payload.current_asset_id}' not found in registry",
+        )
+
+    # 4. Compute drift
+    drift_kwargs: dict[str, Any] = {}
+    if payload.drift_hours is not None:
+        drift_kwargs["drift_hours"] = payload.drift_hours
+    if payload.step_hours is not None:
+        drift_kwargs["step_hours"] = payload.step_hours
+    if payload.leeway_fraction is not None:
+        drift_kwargs["leeway_fraction"] = payload.leeway_fraction
+
+    obs_time = (
+        spill_asset.acquisition_time
+        or spill_asset.provenance.retrieved_at
+        or datetime.now(timezone.utc)
+    )
+
+    try:
+        drift_result, _ = compute_drift_for_spill(
+            investigation_id=investigation_id,
+            spill_detection_id=spill_detection.id,
+            origin_lon=origin_lon,
+            origin_lat=origin_lat,
+            observation_time=obs_time,
+            wind_asset=wind_asset,
+            current_asset=current_asset,
+            **drift_kwargs,
+        )
+        return drift_result
+    except DriftModellingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Drift modelling failed: {exc}")

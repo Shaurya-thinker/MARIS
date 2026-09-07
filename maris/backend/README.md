@@ -735,6 +735,70 @@ Response:
 - **Framing Defaults**: A 24-hour lookback and 6-hour forward window are acquisition buffers, not simulation drift physics.
 - **Stage Boundary**: C1 does NOT perform spatial/temporal interpolation, grid resampling, particle tracking, backward/forward drift trajectories, or AIS fusion (strictly reserved for Stages D, E, and F).
 
+---
+
+## Stage D1 — Forward Drift Modelling
+
+### Overview
+Stage D1 implements deterministic Leeway-Euler forward drift modelling for observed oil spill candidates. It consumes the spill centroid and acquisition time from Stage B3 (`SpillDetection`) along with the validated environmental forcing fields from Stage C1 (`ENVIRONMENT_WIND` via ERA5 and `ENVIRONMENT_CURRENT` via CMEMS), integrates the surface displacement forward in time, and registers a derived `DRIFT_PRODUCT` GeoJSON LineString in the `AssetRegistry`.
+
+```
+Observed SAR Spill (Stage B3) + Validated Metocean Assets (Stage C1)
+       │                              │
+       ├──────────────────────────────┘
+       ▼
+Deterministic Leeway-Euler Forward Integration
+  v_drift(t) = v_current(lon, lat, t) + α · v_wind(lon, lat, t)
+       │
+       ▼
+GeoJSON LineString Artifact (`drift_trajectory.geojson`)
+       │
+       ▼
+AssetRegistry Registration (`AssetType.DRIFT_PRODUCT`) & `DriftResult`
+```
+
+### Governing Equations & Numerical Scheme
+1. **Drift Velocity**:
+   $$\vec{v}_{\text{drift}}(t) = \vec{v}_{\text{current}}(\text{lon}, \text{lat}, t) + \alpha \cdot \vec{v}_{\text{wind}}(\text{lon}, \text{lat}, t)$$
+   where:
+   - $\vec{v}_{\text{current}} = (u_o, v_o)$ from CMEMS near-surface layer ($\approx 0.5$ m depth)
+   - $\vec{v}_{\text{wind}} = (u_{10}, v_{10})$ from ERA5 10 m reanalysis
+   - $\alpha = 0.035$ (default leeway fraction: 3.5% of 10 m wind speed)
+
+2. **Euler Forward Stepping**:
+   $$\Delta t = \min(\text{step\_hours}, \text{remaining\_hours})$$
+   $$\text{lon}_{\text{new}} = \text{lon} + \frac{u_{\text{drift}} \cdot \Delta t \cdot 3600}{\cos(\text{lat} \cdot \frac{\pi}{180}) \cdot 111320}$$
+   $$\text{lat}_{\text{new}} = \text{lat} + \frac{v_{\text{drift}} \cdot \Delta t \cdot 3600}{111320}$$
+
+3. **Spatial & Temporal Interpolation**:
+   - Spatial interpolation: bilinear 2D interpolation using `scipy.interpolate.RegularGridInterpolator` pre-built and cached per variable/time-slice.
+   - Temporal selection: nearest available temporal slice (ERA5: hourly; CMEMS: daily P1D).
+
+### API Route
+- **Endpoint**: `POST /api/v1/investigations/{investigation_id}/spills/{spill_id}/drift`
+- **Request Body**:
+  ```json
+  {
+    "wind_asset_id": "asset-era5-id",
+    "current_asset_id": "asset-cmems-id",
+    "drift_hours": 24.0,
+    "step_hours": 1.0,
+    "leeway_fraction": 0.035
+  }
+  ```
+- **Response**: `DriftResult` object containing origin, steps with component velocities and cumulative distance, endpoint coordinates, and provenance metadata.
+
+### Scientific Limitations & Assumptions
+- **Deterministic Baseline**: Stage D1 is a deterministic baseline model, **not** an operational oil-spill forecast or source-attribution model.
+- **Constant Leeway Fraction ($\alpha = 0.035$)**: 3.5% is an operational empirical baseline derived from ITOPF, NOAA GNOME, and Breivik et al. (2011). It is **not calibrated or tuned** for this project, specific oil types, slick thickness, or weathering/emulsification state.
+- **Wind Forcing at 10 m**: ERA5 $10$ m wind is used as a proxy for surface atmospheric drag; wave-dependent surface roughness and wave-induced Stokes drift are not explicitly modelled.
+- **CMEMS Near-Surface Proxy**: CMEMS GLORYS12V1 top level ($\approx 0.5$ m depth) represents bulk layer velocity; Langmuir circulation, sub-mesoscale turbulence, and wave-current interactions are excluded.
+- **Temporal Resolution**: CMEMS data is daily (P1D); sub-daily current variability (e.g., tidal currents, inertial oscillations) is unresolved.
+- **First-Order Integration**: Euler forward integration with flat-Earth projection is applied; suitable for regional trajectories (< ~500 km). Runge-Kutta 4th-order and geodesic stepping are reserved for Stage D2+.
+- **No Stochastic Uncertainty**: Trajectories are purely deterministic; ensemble spread and spatial uncertainty (`endpoint_uncertainty_km = None`) are reserved for Stage D2.
+- **No Backward Drift or Attribution**: Stage D1 models forward dispersion only; backward tracking and vessel attribution belong strictly to Stage D3, Stage E, and Stage F.
+
+
 
 
 
