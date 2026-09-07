@@ -496,4 +496,40 @@ Response:
 
 Stage B1 ingests **existing local Sentinel-1 ZIP artifacts**. It does **not** perform automatic CDSE provider acquisition (Stage C), SAR image preprocessing, AI/ML detection, or spill geometry extraction.
 
+## Stage B2 — SAR Preprocessing & Scene Preparation
+
+Stage B2 converts raw Sentinel-1 GRD ZIP artifacts into analysis-ready calibrated SAR GeoTIFF rasters ($\sigma^0$ in dB):
+
+```text
+Raw Sentinel-1 GRD (ZIP)
+      ↓
+Measurement raster reading (rasterio / zipfile)
+      ↓
+Radiometric LUT calibration (annotation/calibration/calibration-*.xml)
+      ↓
+sigma0 linear → sigma0 dB (10 * log10(sigma0))
+      ↓
+Invalid / zero-padding pixel masking (NaN / nodata)
+      ↓
+Geospatial GeoTIFF export (preserving CRS, transform, bounds)
+      ↓
+Derived Asset Registration (AssetRegistry)
+```
+
+Service implementation: `app/services/sentinel1_preprocessing.py`
+Preprocessing entry point: `preprocess_sentinel1_scene()`
+
+Processes:
+1. Opens source Sentinel-1 ZIP in read-only mode (source file remains 100% byte-for-byte unchanged).
+2. Reads 16-bit measurement GeoTIFF rasters and parses ESA Sentinel-1 calibration XML annotation LUTs (`<calibrationVector>`).
+3. Applies radiometric calibration: $\sigma^0 = \frac{DN^2}{A_{\sigma}^2}$ and converts to decibels ($\sigma^0_{\text{dB}} = 10 \log_{10}(\sigma^0)$).
+4. Handles invalid, zero, or non-finite pixels by masking them to `NaN` with `nodata=-9999.0`.
+5. Preserves available polarizations (`VV`, `VH`) as separate raster bands without arbitrary channel mixing.
+6. Preserves spatial georeferencing metadata (CRS, Affine transform, pixel resolution, image bounds).
+7. Exports derived GeoTIFF raster to `{MARIS_DATA_DIR}/derived/{investigation_id}/sar/{scene_id}/sentinel1_sigma0_db.tif`.
+8. Registers the derived raster in `AssetRegistry` as an `Asset` (`AssetType.IMAGERY_PREVIEW`).
+
+*Real-data status note*: Stage B2 logic has been verified completely offline using controlled synthetic Sentinel-1 GRD test fixtures (`tests/test_sentinel1_preprocessing.py`). No real Sentinel-1 ZIP artifact has yet been processed locally. Stage B2 does **not** perform model-specific ML normalization, AI spill segmentation (Stage B3), drift modeling, or frontend integration.
+
+
 
