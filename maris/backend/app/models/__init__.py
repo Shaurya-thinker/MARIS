@@ -16,12 +16,15 @@ from app.models.environment import CurrentField, Environment, WindField
 from app.models.evidence import Evidence
 from app.models.investigation import Investigation
 from app.models.satellite import SatelliteScene, SpillDetection
+from app.models.source_estimation import BackwardDriftStep, SourceEstimateResult
 from app.models.vessel import VesselPosition, VesselTrack
 
 __all__ = [
     "AreaOfInterest",
+    "BackwardDriftStep",
     "DriftResult",
     "DriftStep",
+    "SourceEstimateResult",
     "Asset",
     "AssetType",
     "BBoxAreaOfInterest",

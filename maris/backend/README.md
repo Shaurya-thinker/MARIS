@@ -798,6 +798,80 @@ AssetRegistry Registration (`AssetType.DRIFT_PRODUCT`) & `DriftResult`
 - **No Stochastic Uncertainty**: Trajectories are purely deterministic; ensemble spread and spatial uncertainty (`endpoint_uncertainty_km = None`) are reserved for Stage D2.
 - **No Backward Drift or Attribution**: Stage D1 models forward dispersion only; backward tracking and vessel attribution belong strictly to Stage D3, Stage E, and Stage F.
 
+---
+
+## Stage D3 — Backward Drift & Source Candidate Zone Estimation
+
+### Overview
+Stage D3 estimates a physically plausible historical source candidate zone for an observed oil spill candidate by integrating metocean forcing backward in time from the spill centroid and observation timestamp.
+
+> [!IMPORTANT]
+> **Scientific Scope and Disclaimer**:
+> Stage D3 estimates a physically plausible historical **source candidate zone** from oceanographic and meteorological forcing. It **does NOT identify a vessel** and **does NOT establish legal culpability or responsibility**. AIS correlation and polluter attribution belong strictly to downstream Stages E and F.
+
+```
+Observed Spill Detection (Stage B3) + Validated Historical Metocean (Stage C1)
+       │                                     │
+       ├─────────────────────────────────────┘
+       ▼
+Time-Reversed Deterministic Leeway-Euler Stepping
+  v_drift(t) = v_current(lon, lat, t) + α · v_wind(lon, lat, t)
+  x_prev = x - v_drift · Δt,   t_prev = t - Δt
+       │
+       ▼
+Analytical Search Envelope Expansion
+  R(τ) = R0 + c_growth · τ  (32-vertex regular Polygon)
+       │
+       ▼
+GeoJSON FeatureCollection Artifact (`source_candidate_zone.geojson`)
+  Feature 1: Backward Centerline LineString
+  Feature 2: Source Candidate Zone Polygon
+       │
+       ▼
+AssetRegistry Registration (`AssetType.DRIFT_PRODUCT`) & `SourceEstimateResult`
+```
+
+### Governing Equations & Numerical Scheme
+1. **Time-Reversed Advection**:
+   $$\vec{v}_{\text{drift}}(t) = \vec{v}_{\text{current}}(\text{lon}, \text{lat}, t) + \alpha \cdot \vec{v}_{\text{wind}}(\text{lon}, \text{lat}, t)$$
+   $$\Delta t = \min(\text{step\_hours}, \text{remaining\_lookback})$$
+   $$\text{lon}_{\text{prev}} = \text{lon} - \frac{u_{\text{drift}} \cdot \Delta t \cdot 3600}{\cos(\text{lat} \cdot \frac{\pi}{180}) \cdot 111320}$$
+   $$\text{lat}_{\text{prev}} = \text{lat} - \frac{v_{\text{drift}} \cdot \Delta t \cdot 3600}{111320}$$
+   $$t_{\text{prev}} = t - \Delta t$$
+
+2. **Analytical Uncertainty Envelope & Source Candidate Zone**:
+   $$R_0 = \max\left(\sqrt{\frac{\text{spill\_area}}{\pi}}, 500\text{ m}\right)$$
+   $$R(\tau) = R_0 + c_{\text{growth}} \cdot \tau$$
+   where:
+   - $\tau = t_{\text{obs}} - t$ is the elapsed lookback time in hours
+   - $c_{\text{growth}} = 500$ m/hour (operational search radius expansion rate)
+   - The estimated source zone at $t_{\text{source}}$ is parameterized as a 32-vertex regular polygon in WGS84 coordinates centered at $(lon_{\text{source}}, lat_{\text{source}})$ with radius $R(\tau_{\text{lookback}})$.
+
+### API Route
+- **Endpoint**: `POST /api/v1/investigations/{investigation_id}/spills/{spill_id}/source-estimate`
+- **Request Body**:
+  ```json
+  {
+    "wind_asset_id": "asset-era5-id",
+    "current_asset_id": "asset-cmems-id",
+    "lookback_hours": 12.0,
+    "step_hours": 1.0,
+    "leeway_fraction": 0.035,
+    "uncertainty_growth_rate_m_per_h": 500.0
+  }
+  ```
+- **Response**: `SourceEstimateResult` object containing origin, historical steps, source release point, estimated release time, source uncertainty radius, and the source candidate zone Polygon.
+
+### Scientific Assumptions & Operational Limitations
+- **Source Candidate Zone vs Attribution**: D3 estimates where a surface slick may have originated based on reverse metocean advection. It does **not** identify a vessel, claim vessel responsibility, or infer human culpability.
+- **Heuristic Search Envelope**: The source-zone expansion radius is a heuristic analytical search and uncertainty envelope assumption. It **MUST NOT** be described as a 95% confidence region, probability distribution, or statistically calibrated uncertainty.
+- **Reverse Advection Assumptions**: Pure advective time reversal neglects irreversibility in sub-grid turbulent mixing and dispersion; this irreversibility is bounded by the expanding analytical candidate zone radius $R(\tau)$.
+- **Constant Leeway Fraction ($\alpha = 0.035$)**: 3.5% is an operational empirical baseline, not calibrated or tuned for specific oil types or weathering states.
+- **ERA5 10 m Wind & CMEMS Near-Surface Currents**: ERA5 10 m wind and CMEMS shallowest layer ($\approx 0.5$ m depth) serve as environmental forcing proxies. CMEMS daily temporal resolution leaves sub-daily tidal and inertial oscillations unresolved.
+- **No Oil Weathering Model**: Physical evaporation, emulsification, dissolution, and slick breakup are not modelled. Slicks older than 12–24 hours are increasingly unconstrained in the marine environment.
+- **Stage Boundary**: Stage D3 does **not** include AIS vessel tracks, vessel candidate generation, trajectory cross-matching, or evidence attribution (strictly reserved for Stages E and F).
+
+
 
 
 
