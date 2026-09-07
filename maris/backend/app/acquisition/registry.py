@@ -114,3 +114,7 @@ class InMemoryAssetRegistry(AssetRegistry):
             for asset_id in self._order
             if self._assets[asset_id].investigation_id == investigation_id
         ]
+
+
+default_asset_registry = InMemoryAssetRegistry()
+

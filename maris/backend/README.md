@@ -449,3 +449,51 @@ It does **not** perform AIS intelligence, vessel attribution, suspicious behavio
 detection, trajectory reconstruction, position interpolation, drift modelling, or
 frontend integration.
 
+## Stage B1 — Real Sentinel-1 Scene Ingestion
+
+Stage B1 orchestrates local Sentinel-1 artifact ingestion:
+
+```text
+Sentinel-1 ZIP
+      ↓
+A4.2 Sentinel-1 validation
+      ↓
+Asset registration (AssetRegistry)
+      ↓
+SatelliteScene creation
+      ↓
+API response
+```
+
+Service implementation: `app/services/sentinel1_ingestion.py`
+Ingestion entry point: `ingest_sentinel1_artifact()`
+
+Processes:
+1. Validates the local Sentinel-1 ZIP file using `Sentinel1Validator` (A4.2).
+2. Fails closed if validation fails (`passed=False`), preventing scene creation and asset registration.
+3. On validation success, registers the artifact in `AssetRegistry` (`Asset`).
+4. Converts A4.2 extracted GML footprint coordinates into a GeoJSON-style `PolygonAreaOfInterest` (`[longitude, latitude]` order).
+5. Assembles and returns a `SatelliteScene` domain model along with the `ValidationResult`.
+
+API Endpoint:
+
+`POST /api/v1/investigations/{investigation_id}/scenes/sentinel1/ingest`
+
+Payload:
+```json
+{
+  "artifact_path": "/path/to/S1A_IW_GRDH_...zip"
+}
+```
+
+Response:
+```json
+{
+  "scene": { ... },
+  "validation": { ... }
+}
+```
+
+Stage B1 ingests **existing local Sentinel-1 ZIP artifacts**. It does **not** perform automatic CDSE provider acquisition (Stage C), SAR image preprocessing, AI/ML detection, or spill geometry extraction.
+
+
