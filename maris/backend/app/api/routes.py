@@ -8,7 +8,14 @@ from app.acquisition.registry import default_asset_registry
 from app.acquisition.schemas import AcquiredArtifact
 from app.core.config import settings
 from app.models.asset import Asset
-from app.models.common import AssetType, BBoxAreaOfInterest, BoundingBox, Provenance
+from app.models.common import (
+    AreaOfInterest,
+    AssetType,
+    BBoxAreaOfInterest,
+    BoundingBox,
+    Provenance,
+    TimeWindow,
+)
 from app.models.satellite import SatelliteScene, SpillDetection
 from app.services.sentinel1_ingestion import Sentinel1IngestionError, ingest_sentinel1_artifact
 from app.services.spill_detection import (
@@ -182,3 +189,138 @@ def detect_spill_scene(
             status_code=500,
             detail=f"Spill detection failed due to an internal error: {exc}",
         )
+
+
+class EnvironmentalAcquireRequest(BaseModel):
+    scene_id: str | None = None
+    area_of_interest: AreaOfInterest | None = None
+    time_window: TimeWindow | None = None
+    providers: list[str] = ["era5", "cmems"]
+    spatial_buffer_degrees: float = 0.25
+    lookback_hours: float = 24.0
+    forward_hours: float = 6.0
+
+
+class EnvironmentalProviderItemResponse(BaseModel):
+    provider_id: str
+    status: str
+    asset_id: str | None = None
+    environment_id: str | None = None
+    error: str | None = None
+    validation_classification: str | None = None
+
+
+class EnvironmentalAcquireResponse(BaseModel):
+    investigation_id: str
+    scene_id: str | None = None
+    succeeded_providers: list[str]
+    failed_providers: list[str]
+    items: dict[str, EnvironmentalProviderItemResponse]
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/environment/acquire",
+    response_model=EnvironmentalAcquireResponse,
+)
+def acquire_environment(
+    investigation_id: str,
+    payload: EnvironmentalAcquireRequest,
+) -> EnvironmentalAcquireResponse:
+    from app.services.environmental_acquisition import (
+        EnvironmentalAcquisitionError,
+        acquire_environmental_data_for_investigation,
+        acquire_environmental_data_for_scene,
+    )
+
+    # 1. Resolve spatial and temporal context
+    aoi = payload.area_of_interest
+    window = payload.time_window
+
+    if aoi is None or window is None:
+        if not payload.scene_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Either scene_id or both area_of_interest and time_window must be provided",
+            )
+        # Search registered assets for scene
+        matched_asset = None
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.metadata.get("parent_scene_id") == payload.scene_id
+                or asset.provenance.extra.get("parent_scene_id") == payload.scene_id
+                or asset.provenance.product_id == payload.scene_id
+            ):
+                matched_asset = asset
+                break
+
+        if matched_asset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Scene '{payload.scene_id}' not found for investigation '{investigation_id}'",
+            )
+
+        acq_time = matched_asset.acquisition_time or matched_asset.provenance.retrieved_at or datetime.now(timezone.utc)
+        scene = SatelliteScene(
+            id=payload.scene_id,
+            investigation_id=investigation_id,
+            asset_id=matched_asset.id,
+            provider="sentinel1",
+            sensor="SENTINEL-1 SAR",
+            acquisition_time=acq_time,
+            footprint=BBoxAreaOfInterest(
+                kind="bbox",
+                bbox=BoundingBox(west=-180.0, south=-90.0, east=180.0, north=90.0),
+            ),
+        )
+
+        try:
+            summary = acquire_environmental_data_for_scene(
+                scene=scene,
+                investigation_id=investigation_id,
+                providers=payload.providers,
+                spatial_buffer_degrees=payload.spatial_buffer_degrees,
+                lookback_hours=payload.lookback_hours,
+                forward_hours=payload.forward_hours,
+            )
+        except EnvironmentalAcquisitionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Environmental acquisition failed: {exc}")
+    else:
+        try:
+            summary = acquire_environmental_data_for_investigation(
+                investigation_id=investigation_id,
+                area_of_interest=aoi,
+                time_window=window,
+                scene_id=payload.scene_id,
+                providers=payload.providers,
+                spatial_buffer_degrees=payload.spatial_buffer_degrees,
+                lookback_hours=payload.lookback_hours,
+                forward_hours=payload.forward_hours,
+                apply_framing=True,
+            )
+        except EnvironmentalAcquisitionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Environmental acquisition failed: {exc}")
+
+    # Build response items
+    items_response: dict[str, EnvironmentalProviderItemResponse] = {}
+    for pid, item in summary.items.items():
+        val_class = item.validation.metadata.get("validation_classification") if item.validation else None
+        items_response[pid] = EnvironmentalProviderItemResponse(
+            provider_id=pid,
+            status=item.status.value,
+            asset_id=item.asset.id if item.asset else None,
+            environment_id=item.environment.id if item.environment else None,
+            error=item.error,
+            validation_classification=val_class,
+        )
+
+    return EnvironmentalAcquireResponse(
+        investigation_id=investigation_id,
+        scene_id=payload.scene_id,
+        succeeded_providers=summary.succeeded_providers,
+        failed_providers=summary.failed_providers,
+        items=items_response,
+    )
