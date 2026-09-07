@@ -531,5 +531,86 @@ Processes:
 
 *Real-data status note*: Stage B2 logic has been verified completely offline using controlled synthetic Sentinel-1 GRD test fixtures (`tests/test_sentinel1_preprocessing.py`). No real Sentinel-1 ZIP artifact has yet been processed locally. Stage B2 does **not** perform model-specific ML normalization, AI spill segmentation (Stage B3), drift modeling, or frontend integration.
 
+## Stage B3 — Spill Detection & Geometry
+
+Stage B3 performs automated detection of oil spill candidates and extraction of geospatial vector geometries from analysis-ready calibrated SAR GeoTIFF rasters ($\sigma^0$ in dB) produced in Stage B2:
+
+```text
+B2 sigma0 dB GeoTIFF
+        ↓
+Modular Spill Detector (BaseSpillDetector)
+        ↓
+Adaptive Local Background Thresholding (CFAR)
+        ↓
+spill probability / candidate mask
+        ↓
+noise / artefact-aware morphological cleanup
+        ↓
+connected spill regions & size filtering
+        ↓
+vector polygon extraction (rasterio.features.shapes)
+        ↓
+SpillDetection domain object
+        ↓
+derived artifacts + AssetRegistry + provenance
+```
+
+Service implementation: `app/services/spill_detection/service.py`
+Detection entry point: `detect_spills_from_sar_scene()`
+
+### Architecture & Modular Detector Interface
+- `BaseSpillDetector`: Abstract base class defining the detection interface `detect(raster, valid_mask, polarization, pixel_size_m) -> DetectorResult`.
+- `AdaptiveThresholdSpillDetector`: Deterministic baseline detector implementing CFAR-inspired adaptive local background thresholding.
+- Model-agnostic design: Allows future deep-learning segmentation models (e.g. U-Net, DeepLabV3+, SAM) to be plugged in as drop-in replacements without modifying upstream SAR ingestion or downstream polygonization, asset registration, or provenance.
+
+### Scientific Basis & Polarization Strategy
+- **Wave Damping Mechanism**: Mineral oil films damp capillary and short gravity ocean waves (Bragg scattering), causing specular reflection away from the radar antenna and producing distinct dark patches (radar backscatter $\sigma^0$ typically $3.0$ to $10+$ dB below clean sea clutter).
+- **Polarization Handling**: VV (Vertical-Vertical) polarization is prioritized as the primary channel due to its significantly higher ocean signal-to-clutter ratio (SCR) compared to cross-polarization (VH). VH cross-polarization is dominated by volume scattering and instrument noise floor (NESZ). VV and VH channels are kept strictly separate and never arbitrarily averaged or combined. Callers can explicitly select the polarization channel.
+- **Adaptive Clutter Sampling**: Excludes deep dark formations from contaminating ambient sea statistics (avoiding slick self-suppression). Uses 2D running summed-area integral tables to compute local background mean $\mu_{bg}$ and standard deviation $\sigma_{bg}$.
+- **Dual Criteria**: Detects candidate pixels where damping contrast $\Delta \sigma^0 = \mu_{bg} - \sigma^0 \ge \text{damping\_threshold\_db}$ (default: 3.5 dB) and statistical anomaly $\sigma^0 \le \mu_{bg} - k \cdot \sigma_{bg}$ (default: $k=2.0$).
+- **Morphological Cleanup**: Applies 3x3 binary opening to suppress single-pixel speckle noise and enforces border margins away from nodata edges.
+- **Connected-Region Extraction**: Groups contiguous candidate pixels, filters out sub-resolution speckle features below `min_area_m2` (default: 25,000 $\text{m}^2$) or `min_pixels`, and extracts closed GeoJSON vector polygons using `rasterio.features.shapes`.
+
+### Output Artifacts & Domain Integration
+Deterministic output paths under `{MARIS_DATA_DIR}/derived/{investigation_id}/sar/{scene_id}/`:
+1. `spill_mask.tif` — Multi-band GeoTIFF:
+   - Band 1: Binary candidate detection mask (uint8)
+   - Band 2: Continuous damping confidence/probability in $[0.0, 1.0]$ (float32)
+2. `spill_geometry.geojson` — GeoJSON FeatureCollection with per-region properties (area in $\text{m}^2/\text{km}^2$, damping contrast, bounding box, centroid, confidence).
+3. `SpillDetection` domain object (`app.models.satellite.SpillDetection`):
+   - `detected`: boolean
+   - `confidence`: float $[0.0, 1.0]$
+   - `area`: total area in $\text{m}^2$
+   - `geometry`: GeoJSON Polygon / MultiPolygon (or empty GeometryCollection if not detected)
+   - `metadata`: bounding box, centroid, raster statistics, detector parameters, region breakdown
+4. `Asset` registration (`app.models.asset.Asset`):
+   - Type: `AssetType.SPILL_GEOMETRY`
+   - Provenance explicitly links back to parent B2 asset ID and Sentinel-1 scene ID.
+
+### API Endpoint
+`POST /api/v1/investigations/{investigation_id}/scenes/{scene_id}/spill-detect`
+
+Payload:
+```json
+{
+  "sar_asset_path": "/path/to/sentinel1_sigma0_db.tif",
+  "damping_threshold_db": 3.5,
+  "k_sigma": 2.0,
+  "min_area_m2": 25000.0
+}
+```
+
+### Scientific Limitations
+- **Baseline Detector**: The adaptive threshold detector is an automated anomaly baseline, NOT a validated oil-spill classifier.
+- **Look-alikes**: In SAR oceanography, low-backscatter dark spots are also formed by natural look-alikes:
+  - Low-wind calm ocean zones ($< 2-3$ m/s)
+  - Natural biogenic slicks (algal blooms, fish oils)
+  - Atmospheric wind shadows, gravity waves, and rain cells
+  - Oceanographic internal waves and upwelling
+- **Attribution**: Stage B3 does NOT claim legal certainty or vessel attribution.
+
+*Real-data status note*: Stage B3 logic has been verified offline using controlled synthetic Sentinel-1 calibrated GeoTIFF test fixtures (`tests/test_spill_detection.py`). No real Sentinel-1 GeoTIFF has yet been processed locally. Stage B3 does **not** implement drift modeling, AIS correlation, or frontend changes.
+
+
 
 
