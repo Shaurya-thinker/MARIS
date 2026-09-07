@@ -385,3 +385,67 @@ Validation classification:
 A4.4 validates CMEMS current data.
 It does **not** perform drift modelling, current interpolation, resampling,
 spill detection, or attribution.
+
+### A4.5 — AIS Position JSON Validation
+
+`AisValidator` (`app/validation/ais.py`) validates a normalized historical AIS
+position JSON artifact acquired by the A3.5 provider (`maris.ais.positions.v1`).
+It uses Python standard library only (`json`, `datetime`, `math`, `pathlib`).
+No external AIS API, database, queue, or drift libraries are used. Read-only:
+the source artifact is never modified.
+
+Required position fields:
+
+- `timestamp` — parseable ISO datetime
+- `lat` — numeric and finite, within \[-90, +90\]
+- `lon` — numeric and finite, within \[-180, +180\] (signed WGS-84)
+
+Optional identity and navigation fields:
+
+- `mmsi` — when present, must be 9 numeric digits (missing → WARNING; invalid → ERROR)
+- `imo` — when present, must be 7 numeric digits (missing → WARNING; invalid → ERROR)
+- `vessel_name` — when present, must be non-empty string (missing/empty → WARNING)
+- `sog` / `speed_over_ground` — when present, must be finite and non-negative (>= 0)
+- `cog` / `course_over_ground` — when present, must be finite and within \[0, 360\)
+- `heading` — when present, must be finite and within \[0, 360\)
+
+Checks performed:
+
+- JSON artifact exists, is accessible, and non-empty
+- JSON structure is valid object with expected schema identifier if present
+- Position records collection exists and is a non-empty list of objects
+- Required position fields (timestamp, lat, lon) exist and are valid on every record
+- Lat/lon are within WGS-84 valid ranges; signed longitude convention
+- Timestamps parseable; chronological order checked (WARNING if non-monotonic)
+- Duplicate complete position records detected (WARNING if found)
+- Duplicate timestamps detected (WARNING if found)
+- MMSI (9 digits), IMO (7 digits), vessel name validation when present
+- Motion fields (SOG, COG, heading) range validation when present
+- Partial invalid records → ERROR (`AIS_PARTIAL_INVALID_RECORDS`)
+- Empty or all-invalid records → ERROR (`AIS_ALL_RECORDS_INVALID` / `AIS_POSITIONS_EMPTY`)
+
+Metadata recorded in `ValidationResult.metadata`:
+
+- `artifact_schema`
+- `position_count`, `valid_position_count`, `invalid_position_count`
+- `latitude_min`, `latitude_max`, `longitude_min`, `longitude_max`
+- `time_start`, `time_end`, `time_count`, `temporal_order`, `temporal_span_seconds`
+- `duplicate_position_count`, `duplicate_timestamp_count`
+- `records_with_mmsi`, `records_with_imo`, `records_with_vessel_name`
+- `records_with_sog`, `records_with_cog`, `records_with_heading`
+- `sog_min`, `sog_max`, `cog_min`, `cog_max`, `heading_min`, `heading_max`
+- `validation_classification`
+
+Validation classification:
+
+| Classification | Condition |
+|---|---|
+| `PREFERRED` | no ERRORs, no WARNINGs |
+| `USABLE_WITH_WARNINGS` | no ERRORs, at least one WARNING |
+| `INVALID` | at least one ERROR; `passed=False` |
+
+A4.5 validates normalized AIS observation data.
+It does **not** perform AIS intelligence, vessel attribution, suspicious behavior
+detection, trajectory reconstruction, position interpolation, drift modelling, or
+frontend integration.
+
