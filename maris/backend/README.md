@@ -988,6 +988,71 @@ Candidate Vessels (Stage E1) + D3 Source Estimate (Origin, Backward Drift, Zone)
 - **No Behavioral Inference**: Low speed or course variations are reported as physical kinematic numbers; they are **not** labelled as "loitering" or "suspicious" in E2 (deferred to E3).
 - **No Culpability or Attribution**: Cross-track proximity to the backward drift trajectory does **not** imply responsibility; evidence weighting and ranking belong strictly to Stage F.
 
+---
+
+## Stage E3 — Behavioural Intelligence
+
+### Overview
+Stage E3 performs deterministic behavioural and operational anomaly intelligence for candidate vessels identified in Stage E1 and analyzed in Stage E2, relative to the Stage D3 source candidate zone.
+
+> [!IMPORTANT]
+> **Mandatory Scientific Constraints & Invariants**:
+> 1. **Observable Transmission Gaps**: AIS gaps are reported strictly as observable transmission gaps between received messages. They are **NEVER** labelled as intentional "dark vessel" events and transponder disabling is **NEVER** inferred.
+> 2. **Loitering Definition**: `LOITERING_OBSERVED` describes strictly an observed low-speed, multi-course-change kinematic pattern in genuine historical AIS observations. Operational intent, suspiciousness, discharge activity, or culpability are **NEVER** inferred.
+> 3. **Anchor Swing Positional Envelope**: Anchor-swing analysis describes strictly the observed positional envelope and centroid from genuine AIS pings. An exact physical anchor drop position or exact swing circle is **NEVER** claimed when sparse observations cannot support that precision.
+> 4. **Zero-Fabrication Invariant**: Never interpolates, dead-reckons, reconstructs, or infers missing AIS positions.
+> 5. **Stage F Exclusion**: No polluter attribution, multi-criteria evidence weighting, responsibility assignment, or vessel culpability ranking.
+> 6. **Auditability & Determinism (No ML)**: Uses transparent, deterministic, rule-based kinematic anomaly indicators.
+
+```
+Candidate Vessels (Stage E1) + D3 Source Estimate + Kinematics (Stage E2)
+       │                                                      │
+       ├──────────────────────────────────────────────────────┘
+       ▼
+1. Observable AIS Transmission Gaps (Fact-based gaps: start/end times, Δt, Δs, zone span)
+2. Speed Anomalies (In-zone speed drop, speed surge upon departure, SOG discrepancy)
+3. Course Alterations (Observed turns Δθ ≥ 45° inside or near candidate zone)
+4. Observed Loitering (Kinematic low-speed cluster with course changes ≥ 30°)
+5. Nav Status & Anchor Swing (Status vs speed consistency, positional envelope & centroid)
+       │
+       ▼
+6. GeoJSON FeatureCollection Artifact (`candidate_behavioral_intelligence.geojson`)
+   - Anomaly point features (kind="behavioral_anomaly")
+   - Transmission gap chords (kind="transmission_gap", zero_fabrication=True)
+       │
+       ▼
+7. AssetRegistry Registration (`AssetType.DOCUMENT`, metadata `asset_type="behavioral_intelligence"`)
+```
+
+### API Route
+- **Endpoint**: `POST /api/v1/investigations/{investigation_id}/spills/{spill_id}/behavioral-intelligence`
+- **Request Body**:
+  ```json
+  {
+    "source_estimate_id": "source-estimate-asset-or-entity-id",
+    "candidate_generation_id": "candidate-generation-asset-or-entity-id",
+    "trajectory_analysis_id": "optional-trajectory-analysis-asset-id",
+    "speed_drop_threshold_knots": 5.0,
+    "loitering_speed_threshold_knots": 3.0,
+    "course_alteration_threshold_deg": 45.0,
+    "transmission_gap_threshold_seconds": 1800.0
+  }
+  ```
+- **Response**: `BehavioralIntelligenceResult` containing:
+  - `status`: `completed`
+  - `analyzed_vessel_count`: Total candidate vessels analyzed
+  - `profiles`: List of `VesselBehavioralProfile` objects with anomalies, transmission gaps, loitering metrics, navigation status consistency, and anchor swing profiles
+  - `total_anomalies_detected`, `total_transmission_gaps_detected`
+  - `derived_asset_id`: Registered DOCUMENT asset ID
+  - `metadata`: Execution parameters and `zero_fabrication: true`
+
+### Scientific Assumptions & Operational Limitations
+- **Observation Gaps vs Intentional Disabling**: Terrestrial and satellite AIS reception gaps frequently occur due to constellation orbital gaps, radio shadow, message collision, or landmass occlusion. Gaps are quantified as observation intervals only, without presuming transponder tampering or illicit activity.
+- **Observational Anchor Envelope vs Physical Anchor Position**: GPS errors, tide, and vessel length contribute to scatter in anchor observations. The calculated centroid and envelope radius represent empirical observation boundaries, not physical seabed hook points.
+- **Kinematic Loitering vs Legitimate Maritime Operations**: Slow steaming, drifting awaiting pilot/berth, or waiting out weather can produce low-speed maneuvering patterns identical to searching or discharge. E3 detects the kinematic pattern without attributing maritime motive.
+- **Absence of Culpability**: Detection of a behavioral anomaly does **NOT** indicate polluter responsibility. Culpability assessment requires multi-source evidence fusion in Stage F.
+
+
 
 
 

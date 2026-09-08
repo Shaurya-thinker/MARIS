@@ -17,11 +17,19 @@ from app.models.common import (
     Provenance,
     TimeWindow,
 )
+from app.models.behavioral_intelligence import (
+    BehavioralIntelligenceRequest,
+    BehavioralIntelligenceResult,
+)
 from app.models.drift import DriftResult
 from app.models.satellite import SatelliteScene, SpillDetection
 from app.models.source_estimation import SourceEstimateResult
 from app.models.trajectory_analysis import TrajectoryAnalysisResult
 from app.models.vessel import CandidateVesselGenerationResult
+from app.services.behavioral_intelligence import (
+    BehavioralIntelligenceError,
+    analyze_candidate_behavior,
+)
 from app.services.candidate_vessels import (
     AisValidationFailureError,
     CandidateVesselError,
@@ -863,4 +871,151 @@ def trajectory_analysis_endpoint(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Trajectory analysis failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Trajectory analysis failed: {exc}")
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/behavioral-intelligence",
+    response_model=BehavioralIntelligenceResult,
+)
+def behavioral_intelligence_endpoint(
+    investigation_id: str,
+    spill_id: str,
+    payload: BehavioralIntelligenceRequest,
+) -> BehavioralIntelligenceResult:
+    # 1. Resolve spill asset
+    spill_asset: Asset | None = None
+    try:
+        candidate = default_asset_registry.get(spill_id)
+        if candidate.investigation_id == investigation_id:
+            spill_asset = candidate
+    except KeyError:
+        pass
+
+    if spill_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == spill_id
+                or asset.provenance.product_id == spill_id
+                or asset.metadata.get("detection_id") == spill_id
+                or asset.metadata.get("parent_scene_id") == spill_id
+                or asset.provenance.extra.get("detection_id") == spill_id
+            ):
+                spill_asset = asset
+                break
+
+    if spill_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill asset or detection '{spill_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # 2. Resolve source estimate asset
+    source_asset: Asset | None = None
+    try:
+        candidate_source = default_asset_registry.get(payload.source_estimate_id)
+        if candidate_source.investigation_id == investigation_id:
+            source_asset = candidate_source
+    except KeyError:
+        pass
+
+    if source_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == payload.source_estimate_id
+                or asset.provenance.product_id == payload.source_estimate_id
+                or asset.provenance.extra.get("source_estimate_id") == payload.source_estimate_id
+                or asset.provenance.extra.get("source_id") == payload.source_estimate_id
+                or asset.metadata.get("source_estimate_id") == payload.source_estimate_id
+                or (
+                    asset.type == AssetType.DRIFT_PRODUCT
+                    and payload.source_estimate_id in str(asset.location)
+                )
+            ):
+                source_asset = asset
+                break
+
+    if source_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source estimate '{payload.source_estimate_id}' not found for investigation '{investigation_id}'",
+        )
+
+    try:
+        source_estimate = load_source_estimate_from_asset(source_asset)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # 3. Resolve candidate generation asset
+    candidate_asset: Asset | None = None
+    if payload.candidate_generation_id:
+        try:
+            cand = default_asset_registry.get(payload.candidate_generation_id)
+            if cand.investigation_id == investigation_id:
+                candidate_asset = cand
+        except KeyError:
+            pass
+
+        if candidate_asset is None:
+            for asset in default_asset_registry.list_for_investigation(investigation_id):
+                if (
+                    asset.id == payload.candidate_generation_id
+                    or asset.provenance.product_id == payload.candidate_generation_id
+                    or asset.provenance.extra.get("candidate_generation_id") == payload.candidate_generation_id
+                    or asset.metadata.get("candidate_generation_id") == payload.candidate_generation_id
+                    or (
+                        asset.type == AssetType.DOCUMENT
+                        and payload.candidate_generation_id in str(asset.location)
+                    )
+                ):
+                    candidate_asset = asset
+                    break
+
+        if candidate_asset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Candidate generation asset '{payload.candidate_generation_id}' not found for investigation '{investigation_id}'",
+            )
+    else:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            extra = asset.provenance.extra or {}
+            if (
+                asset.type == AssetType.DOCUMENT
+                and (extra.get("asset_type") == "candidate_vessels" or asset.metadata.get("asset_type") == "candidate_vessels")
+                and (extra.get("spill_detection_id") == spill_id or asset.metadata.get("spill_id") == spill_id)
+            ):
+                candidate_asset = asset
+                break
+
+        if candidate_asset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Candidate vessel generation result not found for investigation '{investigation_id}' and spill '{spill_id}'",
+            )
+
+    try:
+        candidate_result = load_candidate_result_from_asset(candidate_asset, default_asset_registry)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # 4. Invoke behavioural intelligence service
+    try:
+        result, _ = analyze_candidate_behavior(
+            investigation_id=investigation_id,
+            spill_id=spill_id,
+            source_estimate=source_estimate,
+            candidate_result=candidate_result,
+            trajectory_analysis_id=payload.trajectory_analysis_id,
+            speed_drop_threshold_knots=payload.speed_drop_threshold_knots,
+            loitering_speed_threshold_knots=payload.loitering_speed_threshold_knots,
+            course_alteration_threshold_deg=payload.course_alteration_threshold_deg,
+            transmission_gap_threshold_seconds=payload.transmission_gap_threshold_seconds,
+        )
+        return result
+    except BehavioralIntelligenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Behavioral intelligence analysis failed: {exc}")
+

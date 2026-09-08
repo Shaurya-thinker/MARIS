@@ -1,4 +1,13 @@
-from app.models.asset import Asset
+from app.models.behavioral_intelligence import (
+    AnchorSwingProfile,
+    AnomalySeverity,
+    BehavioralAnomaly,
+    BehavioralAnomalyType,
+    BehavioralIntelligenceRequest,
+    BehavioralIntelligenceResult,
+    TransmissionGap,
+    VesselBehavioralProfile,
+)
 from app.models.common import (
     AreaOfInterest,
     AssetType,
@@ -33,8 +42,14 @@ from app.models.vessel import (
 )
 
 __all__ = [
+    "AnchorSwingProfile",
+    "AnomalySeverity",
     "AreaOfInterest",
     "BackwardDriftStep",
+    "BehavioralAnomaly",
+    "BehavioralAnomalyType",
+    "BehavioralIntelligenceRequest",
+    "BehavioralIntelligenceResult",
     "CandidateGenerationStatus",
     "CandidateVessel",
     "CandidateVesselGenerationResult",
@@ -60,6 +75,8 @@ __all__ = [
     "TimeWindow",
     "TrajectoryAnalysisResult",
     "TrajectorySegment",
+    "TransmissionGap",
+    "VesselBehavioralProfile",
     "VesselPosition",
     "VesselTrack",
     "VesselTrajectoryAnalysis",
