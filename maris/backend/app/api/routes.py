@@ -20,11 +20,19 @@ from app.models.common import (
 from app.models.drift import DriftResult
 from app.models.satellite import SatelliteScene, SpillDetection
 from app.models.source_estimation import SourceEstimateResult
+from app.models.vessel import CandidateVesselGenerationResult
+from app.services.candidate_vessels import (
+    AisValidationFailureError,
+    CandidateVesselError,
+    generate_candidate_vessels_for_spill,
+    load_source_estimate_from_asset,
+)
 from app.services.drift_modelling import (
     DriftModellingError,
     compute_drift_for_spill,
     extract_centroid,
 )
+
 from app.services.source_estimation import (
     SourceEstimationError,
     compute_source_estimate_for_spill,
@@ -583,3 +591,123 @@ def run_source_estimate_endpoint(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Source estimation failed: {exc}")
+
+
+class CandidateVesselRequest(BaseModel):
+    source_estimate_id: str
+    ais_asset_id: str | None = None
+    temporal_window_hours: float | None = None
+    spatial_buffer_km: float | None = None
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/candidates",
+    response_model=CandidateVesselGenerationResult,
+)
+def generate_candidates_endpoint(
+    investigation_id: str,
+    spill_id: str,
+    payload: CandidateVesselRequest,
+) -> CandidateVesselGenerationResult:
+    # 1. Resolve spill asset
+    spill_asset: Asset | None = None
+    try:
+        candidate = default_asset_registry.get(spill_id)
+        if candidate.investigation_id == investigation_id:
+            spill_asset = candidate
+    except KeyError:
+        pass
+
+    if spill_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == spill_id
+                or asset.provenance.product_id == spill_id
+                or asset.metadata.get("detection_id") == spill_id
+                or asset.metadata.get("parent_scene_id") == spill_id
+                or asset.provenance.extra.get("detection_id") == spill_id
+            ):
+                spill_asset = asset
+                break
+
+    if spill_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill asset or detection '{spill_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # 2. Resolve source estimate asset
+    source_asset: Asset | None = None
+    try:
+        candidate_source = default_asset_registry.get(payload.source_estimate_id)
+        if candidate_source.investigation_id == investigation_id:
+            source_asset = candidate_source
+    except KeyError:
+        pass
+
+    if source_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == payload.source_estimate_id
+                or asset.provenance.product_id == payload.source_estimate_id
+                or asset.provenance.extra.get("source_estimate_id") == payload.source_estimate_id
+                or asset.provenance.extra.get("source_id") == payload.source_estimate_id
+                or asset.metadata.get("source_estimate_id") == payload.source_estimate_id
+                or (
+                    asset.type == AssetType.DRIFT_PRODUCT
+                    and payload.source_estimate_id in str(asset.location)
+                )
+            ):
+                source_asset = asset
+                break
+
+    if source_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source estimate '{payload.source_estimate_id}' not found for investigation '{investigation_id}'",
+        )
+
+    try:
+        source_estimate = load_source_estimate_from_asset(source_asset)
+    except CandidateVesselError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # 3. Check explicit ais_asset_id if provided
+    if payload.ais_asset_id:
+        try:
+            ais_asset = default_asset_registry.get(payload.ais_asset_id)
+            if ais_asset.investigation_id != investigation_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"AIS asset '{payload.ais_asset_id}' does not belong to investigation '{investigation_id}'",
+                )
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"AIS asset '{payload.ais_asset_id}' not found in registry",
+            )
+
+    # 4. Invoke candidate generation service
+    cand_kwargs: dict[str, Any] = {}
+    if payload.temporal_window_hours is not None:
+        cand_kwargs["temporal_window_hours"] = payload.temporal_window_hours
+    if payload.spatial_buffer_km is not None:
+        cand_kwargs["spatial_buffer_km"] = payload.spatial_buffer_km
+
+    try:
+        result, _ = generate_candidate_vessels_for_spill(
+            investigation_id=investigation_id,
+            spill_id=spill_id,
+            source_estimate=source_estimate,
+            ais_asset_id=payload.ais_asset_id,
+            **cand_kwargs,
+        )
+        return result
+    except AisValidationFailureError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except CandidateVesselError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Candidate vessel generation failed: {exc}")

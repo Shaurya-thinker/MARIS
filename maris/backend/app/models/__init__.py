@@ -17,11 +17,20 @@ from app.models.evidence import Evidence
 from app.models.investigation import Investigation
 from app.models.satellite import SatelliteScene, SpillDetection
 from app.models.source_estimation import BackwardDriftStep, SourceEstimateResult
-from app.models.vessel import VesselPosition, VesselTrack
+from app.models.vessel import (
+    CandidateGenerationStatus,
+    CandidateVessel,
+    CandidateVesselGenerationResult,
+    VesselPosition,
+    VesselTrack,
+)
 
 __all__ = [
     "AreaOfInterest",
     "BackwardDriftStep",
+    "CandidateGenerationStatus",
+    "CandidateVessel",
+    "CandidateVesselGenerationResult",
     "DriftResult",
     "DriftStep",
     "SourceEstimateResult",
@@ -45,3 +54,4 @@ __all__ = [
     "VesselTrack",
     "WindField",
 ]
+

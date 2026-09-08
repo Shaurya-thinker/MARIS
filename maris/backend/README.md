@@ -871,6 +871,60 @@ AssetRegistry Registration (`AssetType.DRIFT_PRODUCT`) & `SourceEstimateResult`
 - **No Oil Weathering Model**: Physical evaporation, emulsification, dissolution, and slick breakup are not modelled. Slicks older than 12–24 hours are increasingly unconstrained in the marine environment.
 - **Stage Boundary**: Stage D3 does **not** include AIS vessel tracks, vessel candidate generation, trajectory cross-matching, or evidence attribution (strictly reserved for Stages E and F).
 
+---
+
+## Stage E1 — Candidate Vessel Generation
+
+### Overview
+Stage E1 generates deterministic candidate vessels from genuine historical AIS observations that are spatially and temporally relevant to the D3 source candidate zone.
+
+> [!IMPORTANT]
+> **Zero-Fabrication Invariant**:
+> Stage E1 strictly operates on genuine, actual historical AIS observations. It **NEVER** interpolates, dead-reckons, reconstructs, infers, or fabricates an AIS position. Zone crossings are never inferred across data gaps. A vessel qualifies as an E1 candidate solely if an actual observed AIS record falls inside the D3 candidate zone or within the configured spatial buffer around it.
+
+```
+D3 Source Candidate Zone (origin, source_time, radius, polygon) + Validated Historical AIS
+       │                                                                │
+       ├────────────────────────────────────────────────────────────────┘
+       ▼
+Spatio-Temporal Candidate Filtering
+  - Temporal Window: [source_time - Δt, min(source_time + Δt, observation_time)]
+  - Spatial Enclosure: Inside 32-vertex Polygon OR Haversine dist <= R_uncertainty + buffer
+       │
+       ▼
+Vessel Grouping & Closest Point of Approach (CPA)
+  - Group by identity priority: MMSI -> IMO -> Vessel Name
+  - Identify CPA from actual observed ping (minimum distance to source center)
+  - Preserve all raw observed pings (no synthetic connecting points)
+       │
+       ▼
+GeoJSON FeatureCollection Artifact (`candidate_vessels.geojson`)
+  - Features 1..N: Candidate CPA Point features with properties
+  - Features N+1..2N: Observed track features connecting ONLY genuine observations
+       │
+       ▼
+AssetRegistry Registration (`AssetType.DOCUMENT`, metadata `asset_type="candidate_vessels"`)
+```
+
+### API Route
+- **Endpoint**: `POST /api/v1/investigations/{investigation_id}/spills/{spill_id}/candidates`
+- **Request Body**:
+  ```json
+  {
+    "source_estimate_id": "source-spill-id",
+    "ais_asset_id": "optional-ais-asset-id",
+    "temporal_window_hours": 2.0,
+    "spatial_buffer_km": 0.0
+  }
+  ```
+- **Response**: `CandidateVesselGenerationResult` object with `status` (`completed`, `no_candidates_found`, `ais_data_unavailable`), candidate list with CPA coordinates, distances, kinematics, and raw observations.
+
+### Scientific Assumptions & Operational Limitations
+- **Candidate Filtering vs Attribution**: E1 generates spatio-temporally relevant candidates. It does **not** evaluate vessel behaviour, anomaly scores, loitering, trajectory reconstruction, multi-criteria evidence fusion, attribution likelihood, or legal culpability (strictly reserved for Stages E2 and F).
+- **Zero Fabrication**: If historical AIS data is unavailable or unconfigured, the system reports `ais_data_unavailable` rather than inventing candidate tracks.
+- **Original AIS Data vs Derived Analysis**: Original historical AIS data remains registered as `AssetType.VESSEL_TRACK`; the derived candidate analysis artifact is registered as `AssetType.DOCUMENT` with metadata `asset_type = "candidate_vessels"`.
+
+
 
 
 
