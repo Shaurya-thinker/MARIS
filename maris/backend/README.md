@@ -924,7 +924,69 @@ AssetRegistry Registration (`AssetType.DOCUMENT`, metadata `asset_type="candidat
 - **Zero Fabrication**: If historical AIS data is unavailable or unconfigured, the system reports `ais_data_unavailable` rather than inventing candidate tracks.
 - **Original AIS Data vs Derived Analysis**: Original historical AIS data remains registered as `AssetType.VESSEL_TRACK`; the derived candidate analysis artifact is registered as `AssetType.DOCUMENT` with metadata `asset_type = "candidate_vessels"`.
 
+---
 
+## Stage E2 — AIS Trajectory & Spatial/Temporal Analysis
+
+### Overview
+Stage E2 computes deterministic physical trajectory and spatio-temporal transit profiles for candidate vessels identified in Stage E1 relative to the Stage D3 backward drift trajectory and source candidate zone.
+
+> [!IMPORTANT]
+> **Zero-Fabrication and Pure Physical Analysis Invariant**:
+> Stage E2 strictly processes genuine, observed historical AIS positions. It **NEVER** interpolates, dead-reckons, reconstructs, infers, or fabricates positions between AIS observations.
+> Furthermore, Stage E2 is **strictly physical and kinematic**: it reports quantitative metrics (speeds, transit durations, cross-track distances, angular deltas) and **DOES NOT** perform behavioural classification ("loitering", "evasive maneuvers", "suspicious", which belong strictly to E3) or polluter attribution/evidence fusion (strictly Stage F).
+
+```
+Candidate Vessels (Stage E1) + D3 Source Estimate (Origin, Backward Drift, Zone)
+       │                                     │
+       ├─────────────────────────────────────┘
+       ▼
+1. Observed Trajectory Kinematic Profiles
+   - Sequential pairwise segments (Δt, Δs, derived speed v_calc)
+   - Kinematic consistency check (|SOG_rep - v_calc|)
+   - Track summary statistics (durations, distances, min/max/mean speeds)
+       │
+       ▼
+2. Source Candidate Zone Transit Profiles
+   - Exact observed in-zone window [t_first_in, t_last_in]
+   - Observed in-zone duration and ping density
+   - CPA distance to source center & distance to candidate zone boundary
+   - Time offset relative to estimated release time (t_CPA - t_source)
+       │
+       ▼
+3. Backward Drift Centerline Correlation
+   - Cross-track proximity (minimum distance from track to drift steps)
+   - Raw COG vs backward drift direction angular comparison (|COG - θ_drift|)
+       │
+       ▼
+4. GeoJSON FeatureCollection Artifact (`candidate_trajectory_analysis.geojson`)
+   - Features: Segment LineStrings with kinematic properties & Point features
+       │
+       ▼
+5. AssetRegistry Registration (`AssetType.DOCUMENT`, metadata `asset_type="trajectory_analysis"`)
+```
+
+### API Route
+- **Endpoint**: `POST /api/v1/investigations/{investigation_id}/spills/{spill_id}/trajectory-analysis`
+- **Request Body**:
+  ```json
+  {
+    "source_estimate_id": "source-estimate-asset-or-entity-id",
+    "candidate_generation_id": "candidate-generation-asset-or-entity-id",
+    "spatial_buffer_km": 0.0
+  }
+  ```
+- **Response**: `TrajectoryAnalysisResult` containing:
+  - `status`: `completed`, `no_candidates`, or `error`
+  - `analyses`: List of `VesselTrajectoryAnalysis` objects with full kinematic, transit, and centerline profiles
+  - `geojson_artifact_path`: Path to registered `candidate_trajectory_analysis.geojson`
+  - `provenance`: Provenance record including execution timestamp and parameters
+
+### Scientific Assumptions & Operational Limitations
+- **Straight-Line Segment Assumption**: Derived speeds between consecutive observations assume great-circle straight-line transit. Complex maneuvers, curving courses, or throttling changes occurring within unobserved intervals between sparse pings are not resolved.
+- **Observed In-Zone Duration vs True Duration**: In the absence of continuous 1 Hz AIS reception, the observed duration ($t_{\text{last\_in}} - t_{\text{first\_in}}$) represents a lower bound on presence inside the zone. MARIS does **not** extrapolate or infer earlier entry or later exit times across AIS gaps.
+- **No Behavioral Inference**: Low speed or course variations are reported as physical kinematic numbers; they are **not** labelled as "loitering" or "suspicious" in E2 (deferred to E3).
+- **No Culpability or Attribution**: Cross-track proximity to the backward drift trajectory does **not** imply responsibility; evidence weighting and ranking belong strictly to Stage F.
 
 
 

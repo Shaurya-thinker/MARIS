@@ -17,6 +17,13 @@ from app.models.evidence import Evidence
 from app.models.investigation import Investigation
 from app.models.satellite import SatelliteScene, SpillDetection
 from app.models.source_estimation import BackwardDriftStep, SourceEstimateResult
+from app.models.trajectory_analysis import (
+    CenterlineProximityProfile,
+    TrajectoryAnalysisResult,
+    TrajectorySegment,
+    VesselTrajectoryAnalysis,
+    ZoneTransitProfile,
+)
 from app.models.vessel import (
     CandidateGenerationStatus,
     CandidateVessel,
@@ -31,6 +38,7 @@ __all__ = [
     "CandidateGenerationStatus",
     "CandidateVessel",
     "CandidateVesselGenerationResult",
+    "CenterlineProximityProfile",
     "DriftResult",
     "DriftStep",
     "SourceEstimateResult",
@@ -50,8 +58,12 @@ __all__ = [
     "SatelliteScene",
     "SpillDetection",
     "TimeWindow",
+    "TrajectoryAnalysisResult",
+    "TrajectorySegment",
     "VesselPosition",
     "VesselTrack",
+    "VesselTrajectoryAnalysis",
     "WindField",
+    "ZoneTransitProfile",
 ]
 
