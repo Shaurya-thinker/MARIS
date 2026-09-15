@@ -59,6 +59,12 @@ from app.services.spill_detection import (
 )
 from app.models.evidence_fusion import EvidenceFusionRequest, EvidenceFusionResult
 from app.services.evidence_fusion import EvidenceFusionError, fuse_evidence
+from app.models.candidate_ranking import CandidateRanking, CandidateRankingRequest
+from app.services.candidate_ranking import (
+    CandidateRankingError,
+    load_evidence_fusion_from_asset,
+    rank_candidates,
+)
 from app.validation.schemas import ValidationResult
 
 router = APIRouter()
@@ -1262,4 +1268,128 @@ def evidence_fusion_endpoint(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Evidence fusion failed: {exc}")
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/candidate-ranking",
+    response_model=CandidateRanking,
+)
+def candidate_ranking_endpoint(
+    investigation_id: str,
+    spill_id: str,
+    payload: CandidateRankingRequest | None = None,
+) -> CandidateRanking:
+    """Stage F2 — Candidate Scoring & Ranking.
+
+    Consumes Stage F1 Evidence Fusion output and produces a deterministic comparative
+    ranking of candidate vessels based on physical evidence consistency.
+
+    Invariants:
+    - Primary score uses spatial (0.50), temporal (0.25), trajectory (0.25) channels only.
+    - Missing channels are excluded from the denominator (never treated as zero).
+    - E3 behavioral anomalies contribute exactly 0.00 to the score.
+    - D1 forward drift contributes exactly 0.00 to the score.
+    - Deterministic tie-breaking:
+      1. Higher evidence availability ratio
+      2. Smaller spatial discrepancy
+      3. Smaller temporal discrepancy
+      4. Stable vessel identifier
+    - Score is a physical compatibility index in [0, 1], NOT a probability of guilt.
+    """
+    req_payload = payload or CandidateRankingRequest()
+
+    # 1. Validate investigation and spill context
+    spill_asset: Asset | None = None
+    try:
+        s_candidate = default_asset_registry.get(spill_id)
+        if s_candidate.investigation_id == investigation_id:
+            spill_asset = s_candidate
+    except KeyError:
+        pass
+
+    if spill_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == spill_id
+                or asset.provenance.product_id == spill_id
+                or asset.metadata.get("detection_id") == spill_id
+                or asset.metadata.get("spill_id") == spill_id
+                or asset.provenance.extra.get("spill_detection_id") == spill_id
+            ):
+                spill_asset = asset
+                break
+
+    if spill_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill asset or detection '{spill_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # 2. Resolve Stage F1 evidence fusion asset
+    fusion_asset: Asset | None = None
+    if req_payload.evidence_fusion_id:
+        try:
+            f_candidate = default_asset_registry.get(req_payload.evidence_fusion_id)
+            if f_candidate.investigation_id == investigation_id:
+                fusion_asset = f_candidate
+        except KeyError:
+            pass
+
+        if fusion_asset is None:
+            for asset in default_asset_registry.list_for_investigation(investigation_id):
+                extra = asset.provenance.extra or {}
+                if (
+                    asset.id == req_payload.evidence_fusion_id
+                    or asset.provenance.product_id == req_payload.evidence_fusion_id
+                    or extra.get("evidence_fusion_id") == req_payload.evidence_fusion_id
+                    or asset.metadata.get("evidence_fusion_id") == req_payload.evidence_fusion_id
+                    or (asset.type == AssetType.DOCUMENT and req_payload.evidence_fusion_id in str(asset.location))
+                ):
+                    fusion_asset = asset
+                    break
+
+        if fusion_asset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Evidence fusion asset '{req_payload.evidence_fusion_id}' not found for investigation '{investigation_id}'",
+            )
+    else:
+        # Auto-discover latest evidence fusion asset
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            extra = asset.provenance.extra or {}
+            if (
+                asset.type == AssetType.DOCUMENT
+                and (extra.get("asset_type") == "evidence_fusion" or asset.metadata.get("asset_type") == "evidence_fusion")
+                and (extra.get("spill_detection_id") == spill_id or asset.metadata.get("spill_id") == spill_id)
+            ):
+                fusion_asset = asset
+                break
+
+        if fusion_asset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Evidence fusion asset not found for investigation '{investigation_id}' and spill '{spill_id}'",
+            )
+
+    # 3. Load evidence fusion result
+    try:
+        evidence_fusion = load_evidence_fusion_from_asset(fusion_asset, default_asset_registry)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to load evidence fusion result: {exc}")
+
+    # 4. Execute candidate scoring and ranking
+    try:
+        ranking, _ = rank_candidates(
+            evidence_fusion=evidence_fusion,
+            investigation_id=investigation_id,
+            spill_id=spill_id,
+        )
+        return ranking
+    except CandidateRankingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Candidate ranking failed: {exc}")
+
 

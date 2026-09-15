@@ -8,6 +8,11 @@ from app.models.behavioral_intelligence import (
     TransmissionGap,
     VesselBehavioralProfile,
 )
+from app.models.candidate_ranking import (
+    CandidateRanking,
+    CandidateRankingRequest,
+    RankedCandidate,
+)
 from app.models.common import (
     AreaOfInterest,
     AssetType,
@@ -60,6 +65,8 @@ __all__ = [
     "BehavioralIntelligenceRequest",
     "BehavioralIntelligenceResult",
     "CandidateGenerationStatus",
+    "CandidateRanking",
+    "CandidateRankingRequest",
     "CandidateVessel",
     "CandidateVesselGenerationResult",
     "CenterlineProximityProfile",
@@ -86,6 +93,7 @@ __all__ = [
     "InvestigationStatus",
     "PolygonAreaOfInterest",
     "Provenance",
+    "RankedCandidate",
     "SatelliteScene",
     "SpillDetection",
     "TimeWindow",
