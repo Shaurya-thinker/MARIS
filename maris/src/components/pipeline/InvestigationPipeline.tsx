@@ -1,6 +1,119 @@
-import { Check, Circle, CircleDot } from 'lucide-react'
+import { Check, Circle, CircleDot, ShieldAlert } from 'lucide-react'
 import type { PipelineStage } from '../../types/maris'
+import type { InvestigationStatus } from '../../types/investigationApi'
 
-export function InvestigationPipeline({ stages }: { stages: PipelineStage[] }) {
-  return <section className="pipeline" aria-label="Investigation pipeline"><div className="pipeline-header"><span className="section-kicker">Investigation workflow</span><span className="pipeline-note">HISTORICAL CASE</span></div><div className="pipeline-track">{stages.map((stage, index) => <div className="pipeline-stage" key={stage.label}><div className={`pipeline-node pipeline-node--${stage.status}`}>{stage.status === 'completed' ? <Check size={13} /> : stage.status === 'current' ? <CircleDot size={14} /> : <Circle size={9} />}</div><span>{stage.label}</span>{index < stages.length - 1 && <div className={`pipeline-connector${stage.status === 'completed' ? ' is-complete' : ''}`} />}</div>)}</div></section>
+const G1_PIPELINE_STAGES: Array<{ id: string; label: string; shortLabel: string }> = [
+  { id: 'B1', label: 'SAR Ingestion', shortLabel: 'B1 Ingest' },
+  { id: 'B2', label: 'SAR Calibration', shortLabel: 'B2 Calibrate' },
+  { id: 'B3', label: 'Spill Detection', shortLabel: 'B3 Spill' },
+  { id: 'C1', label: 'Metocean Data', shortLabel: 'C1 Metocean' },
+  { id: 'D1', label: 'Forward Drift', shortLabel: 'D1 Fwd Drift' },
+  { id: 'D3', label: 'Source Estimation', shortLabel: 'D3 Origin' },
+  { id: 'E1', label: 'Candidate Vessels', shortLabel: 'E1 AIS Query' },
+  { id: 'E2', label: 'Trajectory Analysis', shortLabel: 'E2 Trajectory' },
+  { id: 'E3', label: 'Behavioral Intel', shortLabel: 'E3 Behavior' },
+  { id: 'F1', label: 'Evidence Fusion', shortLabel: 'F1 Fusion' },
+  { id: 'F2', label: 'Candidate Ranking', shortLabel: 'F2 Ranking' },
+  { id: 'F3', label: 'Explainability', shortLabel: 'F3 Report' },
+]
+
+interface InvestigationPipelineProps {
+  isDemoMode: boolean
+  demoStages?: PipelineStage[]
+  completedStages?: string[]
+  currentStage?: string | null
+  workflowStatus?: InvestigationStatus
+}
+
+export function InvestigationPipeline({
+  isDemoMode,
+  demoStages = [],
+  completedStages = [],
+  currentStage,
+  workflowStatus,
+}: InvestigationPipelineProps) {
+  if (isDemoMode) {
+    return (
+      <section className="pipeline" aria-label="Investigation pipeline">
+        <div className="pipeline-header">
+          <span className="section-kicker">Investigation workflow</span>
+          <span className="pipeline-note">HISTORICAL DEMO CASE</span>
+        </div>
+        <div className="pipeline-track">
+          {demoStages.map((stage, index) => (
+            <div className="pipeline-stage" key={stage.label}>
+              <div className={`pipeline-node pipeline-node--${stage.status}`}>
+                {stage.status === 'completed' ? (
+                  <Check size={13} />
+                ) : stage.status === 'current' ? (
+                  <CircleDot size={14} />
+                ) : (
+                  <Circle size={9} />
+                )}
+              </div>
+              <span>{stage.label}</span>
+              {index < demoStages.length - 1 && (
+                <div
+                  className={`pipeline-connector${stage.status === 'completed' ? ' is-complete' : ''}`}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+  }
+
+  // Live G1 Investigation Pipeline
+  const isFailed = workflowStatus === 'FAILED'
+
+  return (
+    <section className="pipeline" aria-label="Investigation pipeline">
+      <div className="pipeline-header">
+        <span className="section-kicker">Scientific Pipeline</span>
+        <span className="pipeline-note">
+          {workflowStatus === 'COMPLETED'
+            ? 'ALL STAGES COMPLETED (B1 → F3)'
+            : workflowStatus === 'PROCESSING'
+              ? `RUNNING: STAGE ${currentStage || 'B1'}`
+              : isFailed
+                ? `PIPELINE HALTED AT STAGE ${currentStage || 'UNKNOWN'}`
+                : 'READY FOR WORKFLOW EXECUTION'}
+        </span>
+      </div>
+
+      <div className="pipeline-track">
+        {G1_PIPELINE_STAGES.map((stage, index) => {
+          const isCompleted = completedStages.includes(stage.id)
+          const isCurrent = currentStage === stage.id && workflowStatus === 'PROCESSING'
+          const isStageFailed = isFailed && currentStage === stage.id
+
+          let nodeClass = 'pipeline-node--pending'
+          if (isCompleted) nodeClass = 'pipeline-node--completed'
+          else if (isStageFailed) nodeClass = 'pipeline-node--failed'
+          else if (isCurrent) nodeClass = 'pipeline-node--current'
+
+          return (
+            <div className="pipeline-stage" key={stage.id} title={stage.label}>
+              <div className={`pipeline-node ${nodeClass}`}>
+                {isCompleted ? (
+                  <Check size={13} />
+                ) : isStageFailed ? (
+                  <ShieldAlert size={13} />
+                ) : isCurrent ? (
+                  <CircleDot size={14} />
+                ) : (
+                  <Circle size={9} />
+                )}
+              </div>
+              <span>{stage.shortLabel}</span>
+              {index < G1_PIPELINE_STAGES.length - 1 && (
+                <div className={`pipeline-connector${isCompleted ? ' is-complete' : ''}`} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
 }
