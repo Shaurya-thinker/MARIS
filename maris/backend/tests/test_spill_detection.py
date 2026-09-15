@@ -19,6 +19,7 @@ from rasterio.crs import CRS
 from rasterio.transform import from_origin
 
 from app.acquisition.registry import InMemoryAssetRegistry
+from app.core.config import settings
 from app.main import app
 from app.models.asset import Asset
 from app.models.common import AssetType, BBoxAreaOfInterest, BoundingBox, PolygonAreaOfInterest, Provenance
@@ -554,7 +555,7 @@ class SpillDetectApiEndpointTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def test_api_detect_endpoint_success(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(dir=str(settings.data_dir)) as tmp:
             tmp_path = Path(tmp)
             tif_file = tmp_path / "api_test.tif"
             _make_synthetic_b2_geotiff(path=tif_file, spill_coords=(20, 35, 20, 35))

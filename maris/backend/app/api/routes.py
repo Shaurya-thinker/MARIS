@@ -114,11 +114,40 @@ class SpillDetectResponse(BaseModel):
     asset_id: str
 
 
+def validate_safe_data_path(target_path_str: str, data_dir: Path) -> Path:
+    """Validate that target_path resolves strictly within data_dir.
+
+    Resolves symlinks/relative segments and validates containment using
+    Path.is_relative_to(). Fails closed with HTTP 400 if outside.
+    """
+    try:
+        candidate = Path(target_path_str)
+        allowed_root = data_dir.resolve()
+        if not candidate.is_absolute():
+            resolved = (allowed_root / candidate).resolve()
+        else:
+            resolved = candidate.resolve()
+        if not resolved.is_relative_to(allowed_root):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Path '{target_path_str}' is outside the allowed data directory.",
+            )
+        return resolved
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid path '{target_path_str}': {exc}",
+        )
+
+
 @router.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "service": settings.service_name,
+        "store_investigation_count": len(default_investigation_store.list()),
     }
 
 
@@ -170,8 +199,8 @@ def detect_spill_scene(
                 detail=f"SAR asset '{payload.sar_asset_id}' not found in registry",
             )
     elif payload.sar_asset_path:
-        path = Path(payload.sar_asset_path)
-        if not path.exists():
+        safe_path = validate_safe_data_path(payload.sar_asset_path, settings.data_dir)
+        if not safe_path.exists():
             raise HTTPException(
                 status_code=404,
                 detail=f"SAR asset path '{payload.sar_asset_path}' does not exist",
@@ -182,7 +211,7 @@ def detect_spill_scene(
             type=AssetType.IMAGERY_PREVIEW,
             provider="sentinel1",
             source="filesystem",
-            location=str(path.resolve()),
+            location=str(safe_path),
             provenance=Provenance(product_id=scene_id),
         )
     else:
@@ -1643,6 +1672,8 @@ def run_investigation_workflow_endpoint(
             detail="Investigation already completed. Create a new investigation to re-run the pipeline.",
         )
     req_payload = payload or InvestigationRunRequest()
+    if req_payload.sentinel1_artifact_path:
+        validate_safe_data_path(req_payload.sentinel1_artifact_path, settings.data_dir)
     try:
         return run_investigation_workflow(
             investigation_id=investigation_id,
@@ -1673,4 +1704,4 @@ def list_investigation_artifacts_endpoint(
     return list_investigation_artifacts(investigation_id, registry=default_asset_registry)
 
 
-
+

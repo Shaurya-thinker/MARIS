@@ -3,6 +3,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { Header } from './components/layout/Header'
 import { InvestigationWorkspace } from './components/layout/InvestigationWorkspace'
 import { MainLayout } from './components/layout/MainLayout'
+import { WorkspaceErrorBoundary } from './components/layout/WorkspaceErrorBoundary'
 import { listInvestigations } from './api/investigationApi'
 import type { InvestigationListItem } from './types/investigationApi'
 
@@ -78,17 +79,19 @@ export function App() {
         </div>
       )}
 
-      <InvestigationWorkspace
-        activeId={activeInvestigationId}
-        isDemoMode={isDemoMode}
-        investigations={investigations}
-        onSelectInvestigation={setActiveInvestigationId}
-        isCreateModalOpen={isCreateModalOpen}
-        onCloseCreateModal={() => setIsCreateModalOpen(false)}
-        onOpenCreateModal={() => setIsCreateModalOpen(true)}
-        onInvestigationCreated={loadInvestigationsList}
-        backendError={initError}
-      />
+      <WorkspaceErrorBoundary onReset={loadInvestigationsList}>
+        <InvestigationWorkspace
+          activeId={activeInvestigationId}
+          isDemoMode={isDemoMode}
+          investigations={investigations}
+          onSelectInvestigation={setActiveInvestigationId}
+          isCreateModalOpen={isCreateModalOpen}
+          onCloseCreateModal={() => setIsCreateModalOpen(false)}
+          onOpenCreateModal={() => setIsCreateModalOpen(true)}
+          onInvestigationCreated={loadInvestigationsList}
+          backendError={initError}
+        />
+      </WorkspaceErrorBoundary>
     </MainLayout>
   )
 }

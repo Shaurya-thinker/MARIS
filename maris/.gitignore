@@ -38,3 +38,5 @@ backend/.venv/
 
 # Acquired scientific data (Sentinel-1 products, ERA5 NetCDF, etc.)
 backend/data/acquisitions/
+!**/.env.example
+!**/.env.example

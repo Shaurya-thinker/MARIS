@@ -7,11 +7,13 @@ provenance discoverability, error handling, and scientific safety invariants.
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+# pyrefly: ignore [missing-import]
 import pytest
 from fastapi.testclient import TestClient
 
 from app.acquisition.registry import default_asset_registry
 from app.acquisition.schemas import AcquiredArtifact
+from app.core.config import settings
 from app.main import app
 from app.models.asset import Asset
 from app.models.candidate_ranking import CandidateRanking, RankedCandidate
@@ -523,7 +525,7 @@ def test_08_workflow_execution(
     default_asset_registry._assets[objs["current_asset"].id] = objs["current_asset"]
 
     run_payload = {
-        "sentinel1_artifact_path": "/path/to/S1A_IW_GRDH.zip",
+        "sentinel1_artifact_path": str(settings.data_dir / "S1A_IW_GRDH.zip"),
         "wind_asset_id": objs["wind_asset"].id,
         "current_asset_id": objs["current_asset"].id,
     }
@@ -1072,7 +1074,7 @@ def test_27_failed_investigation_can_be_rerun(client, sample_investigation_paylo
         second_run = client.post(
             f"/api/v1/investigations/{inv_id}/run",
             json={
-                "sentinel1_artifact_path": "/tmp/mock.zip",
+                "sentinel1_artifact_path": str(settings.data_dir / "mock.zip"),
                 "wind_asset_id": objs["wind_asset"].id,
                 "current_asset_id": objs["current_asset"].id,
             },

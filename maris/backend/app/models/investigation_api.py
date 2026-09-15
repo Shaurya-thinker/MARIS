@@ -25,10 +25,10 @@ class StageError(BaseModel):
 class InvestigationCreateRequest(BaseModel):
     """Payload to initialize a new spill investigation."""
 
-    name: str = Field(..., min_length=1, description="Investigation title or name")
+    name: str = Field(..., min_length=1, max_length=500, description="Investigation title or name")
     area_of_interest: AreaOfInterest = Field(..., description="Geographic bounding box or GeoJSON polygon")
     time_window: TimeWindow = Field(..., description="Investigation temporal bounds")
-    description: str | None = Field(default=None, description="Optional narrative context or notes")
+    description: str | None = Field(default=None, max_length=5000, description="Optional narrative context or notes")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Arbitrary domain metadata")
 
 

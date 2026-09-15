@@ -46,7 +46,13 @@ export function getApiBaseUrl(): string {
   return (envUrl && envUrl.trim().length > 0) ? envUrl.replace(/\/+$/, '') : 'http://localhost:8000'
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+export const DEFAULT_REQUEST_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
+export interface RequestOptions extends RequestInit {
+  timeoutMs?: number
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const baseUrl = getApiBaseUrl()
   const url = `${baseUrl}${path}`
 
@@ -58,10 +64,34 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.set('Content-Type', 'application/json')
   }
 
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+  const controller = new AbortController()
+  let isTimedOut = false
+
+  const timer = setTimeout(() => {
+    isTimedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  if (options.signal) {
+    options.signal.addEventListener('abort', () => controller.abort())
+  }
+
+  const { timeoutMs: _ignored, ...fetchOptions } = options
+
   let response: Response
   try {
-    response = await fetch(url, { ...options, headers })
-  } catch (networkErr) {
+    response = await fetch(url, { ...fetchOptions, headers, signal: controller.signal })
+  } catch (networkErr: unknown) {
+    if (isTimedOut || (networkErr instanceof Error && networkErr.name === 'AbortError' && isTimedOut)) {
+      throw new ApiError(
+        0,
+        `Request to ${url} timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+        undefined,
+        'NETWORK_TIMEOUT',
+        networkErr
+      )
+    }
     const errorMsg = networkErr instanceof Error ? networkErr.message : String(networkErr)
     throw new ApiError(
       0,
@@ -70,6 +100,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       'NETWORK_FAILURE',
       networkErr
     )
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!response.ok) {

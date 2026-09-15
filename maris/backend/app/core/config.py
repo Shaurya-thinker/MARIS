@@ -38,6 +38,20 @@ class Settings:
         self.cmems_username = _env("COPERNICUSMARINE_SERVICE_USERNAME") or _env("CMEMS_USERNAME")
         self.cmems_password = _env("COPERNICUSMARINE_SERVICE_PASSWORD") or _env("CMEMS_PASSWORD")
         self.ais_adapter_id = _env("MARIS_AIS_ADAPTER", "unconfigured")
+        raw_origins = _env("MARIS_ALLOWED_ORIGINS")
+        if raw_origins:
+            self.allowed_origins = [
+                origin.strip()
+                for origin in raw_origins.split(",")
+                if origin.strip() and origin.strip() != "*"
+            ]
+        else:
+            self.allowed_origins = [
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+            ]
         for key, value in overrides.items():
             setattr(self, key, value)
 
