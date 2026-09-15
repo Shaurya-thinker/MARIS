@@ -21,6 +21,15 @@ from app.models.common import (
     TimeWindow,
 )
 from app.models.drift import DriftResult, DriftStep
+from app.models.evidence_fusion import (
+    BehavioralContextSummary,
+    EvidenceFusionRequest,
+    EvidenceFusionResult,
+    EvidenceSignal,
+    ForwardDriftCrossCheck,
+    SignalStatus,
+    VesselFusedEvidence,
+)
 from app.models.environment import CurrentField, Environment, WindField
 from app.models.evidence import Evidence
 from app.models.investigation import Investigation
@@ -54,8 +63,15 @@ __all__ = [
     "CandidateVessel",
     "CandidateVesselGenerationResult",
     "CenterlineProximityProfile",
+    "BehavioralContextSummary",
     "DriftResult",
     "DriftStep",
+    "EvidenceFusionRequest",
+    "EvidenceFusionResult",
+    "EvidenceSignal",
+    "ForwardDriftCrossCheck",
+    "SignalStatus",
+    "VesselFusedEvidence",
     "SourceEstimateResult",
     "Asset",
     "AssetType",

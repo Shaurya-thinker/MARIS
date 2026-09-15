@@ -57,6 +57,8 @@ from app.services.spill_detection import (
     SpillDetectionError,
     detect_spills_from_sar_scene,
 )
+from app.models.evidence_fusion import EvidenceFusionRequest, EvidenceFusionResult
+from app.services.evidence_fusion import EvidenceFusionError, fuse_evidence
 from app.validation.schemas import ValidationResult
 
 router = APIRouter()
@@ -1018,4 +1020,246 @@ def behavioral_intelligence_endpoint(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Behavioral intelligence analysis failed: {exc}")
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/evidence-fusion",
+    response_model=EvidenceFusionResult,
+)
+def evidence_fusion_endpoint(
+    investigation_id: str,
+    spill_id: str,
+    payload: EvidenceFusionRequest,
+) -> EvidenceFusionResult:
+    """Stage F1 — Multi-Source Spatio-Temporal Evidence Fusion.
+
+    Fuses physical evidence from B3/D3/E1/E2 with contextual intelligence from E3
+    into a deterministic composite concordance score per candidate vessel.
+
+    Invariants:
+    - E3 behavioural anomalies contribute exactly 0.00 to the primary concordance score.
+    - Optional D1 forward drift is an excluded cross-check; omitting it does not change the score.
+    - Candidate order from E1 is strictly preserved (no ranking in F1).
+    - Concordance score is NOT a probability, guilt score, or legal evidence.
+    """
+    # 1. Resolve spill asset
+    spill_asset: Asset | None = None
+    try:
+        s_candidate = default_asset_registry.get(spill_id)
+        if s_candidate.investigation_id == investigation_id:
+            spill_asset = s_candidate
+    except KeyError:
+        pass
+
+    if spill_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == spill_id
+                or asset.provenance.product_id == spill_id
+                or asset.metadata.get("detection_id") == spill_id
+                or asset.metadata.get("parent_scene_id") == spill_id
+                or asset.provenance.extra.get("detection_id") == spill_id
+            ):
+                spill_asset = asset
+                break
+
+    if spill_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill asset or detection '{spill_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # 2. Resolve source estimate asset
+    source_asset: Asset | None = None
+    try:
+        se_candidate = default_asset_registry.get(payload.source_estimate_id)
+        if se_candidate.investigation_id == investigation_id:
+            source_asset = se_candidate
+    except KeyError:
+        pass
+
+    if source_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == payload.source_estimate_id
+                or asset.provenance.product_id == payload.source_estimate_id
+                or asset.provenance.extra.get("source_estimate_id") == payload.source_estimate_id
+                or asset.metadata.get("source_estimate_id") == payload.source_estimate_id
+                or (
+                    asset.type == AssetType.DRIFT_PRODUCT
+                    and payload.source_estimate_id in str(asset.location)
+                )
+            ):
+                source_asset = asset
+                break
+
+    if source_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source estimate '{payload.source_estimate_id}' not found for investigation '{investigation_id}'",
+        )
+
+    try:
+        source_estimate = load_source_estimate_from_asset(source_asset)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # 3. Resolve candidate generation asset
+    candidate_asset: Asset | None = None
+    try:
+        cg_candidate = default_asset_registry.get(payload.candidate_generation_id)
+        if cg_candidate.investigation_id == investigation_id:
+            candidate_asset = cg_candidate
+    except KeyError:
+        pass
+
+    if candidate_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            extra = asset.provenance.extra or {}
+            if (
+                asset.id == payload.candidate_generation_id
+                or asset.provenance.product_id == payload.candidate_generation_id
+                or extra.get("candidate_generation_id") == payload.candidate_generation_id
+                or asset.metadata.get("candidate_generation_id") == payload.candidate_generation_id
+                or (asset.type == AssetType.DOCUMENT and payload.candidate_generation_id in str(asset.location))
+            ):
+                candidate_asset = asset
+                break
+
+    if candidate_asset is None:
+        # Auto-discover by asset_type tag
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            extra = asset.provenance.extra or {}
+            if (
+                asset.type == AssetType.DOCUMENT
+                and (extra.get("asset_type") == "candidate_vessels" or asset.metadata.get("asset_type") == "candidate_vessels")
+                and (extra.get("spill_detection_id") == spill_id or asset.metadata.get("spill_id") == spill_id)
+            ):
+                candidate_asset = asset
+                break
+
+    if candidate_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Candidate generation asset '{payload.candidate_generation_id}' not found for investigation '{investigation_id}'",
+        )
+
+    try:
+        candidate_result = load_candidate_result_from_asset(candidate_asset, default_asset_registry)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # 4. Resolve trajectory analysis asset
+    trajectory_asset: Asset | None = None
+    try:
+        ta_candidate = default_asset_registry.get(payload.trajectory_analysis_id)
+        if ta_candidate.investigation_id == investigation_id:
+            trajectory_asset = ta_candidate
+    except KeyError:
+        pass
+
+    if trajectory_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            extra = asset.provenance.extra or {}
+            if (
+                asset.id == payload.trajectory_analysis_id
+                or asset.provenance.product_id == payload.trajectory_analysis_id
+                or (
+                    extra.get("asset_type") == "trajectory_analysis"
+                    and (extra.get("spill_detection_id") == spill_id or asset.metadata.get("spill_id") == spill_id)
+                )
+            ):
+                trajectory_asset = asset
+                break
+
+    if trajectory_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Trajectory analysis asset '{payload.trajectory_analysis_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # Build TrajectoryAnalysisResult from registered asset metadata
+    try:
+        from app.models.trajectory_analysis import TrajectoryAnalysisResult as _TAR
+        t_extra = trajectory_asset.provenance.extra or {}
+        trajectory_result = _TAR(
+            id=trajectory_asset.provenance.product_id or trajectory_asset.id,
+            investigation_id=investigation_id,
+            spill_detection_id=t_extra.get("spill_detection_id", spill_id),
+            source_estimate_id=t_extra.get("source_estimate_id", source_estimate.id),
+            candidate_generation_id=t_extra.get("candidate_generation_id", candidate_result.id),
+            derived_asset_id=trajectory_asset.id,
+            analyzed_vessel_count=int(t_extra.get("analyzed_vessel_count", 0)),
+            analyses=[],
+            metadata={},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to load trajectory analysis: {exc}")
+
+    # 5. Resolve behavioral intelligence asset
+    behavioral_asset: Asset | None = None
+    try:
+        bi_candidate = default_asset_registry.get(payload.behavioral_intelligence_id)
+        if bi_candidate.investigation_id == investigation_id:
+            behavioral_asset = bi_candidate
+    except KeyError:
+        pass
+
+    if behavioral_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            extra = asset.provenance.extra or {}
+            if (
+                asset.id == payload.behavioral_intelligence_id
+                or asset.provenance.product_id == payload.behavioral_intelligence_id
+                or (
+                    extra.get("asset_type") == "behavioral_intelligence"
+                    and (extra.get("spill_detection_id") == spill_id or asset.metadata.get("spill_id") == spill_id)
+                )
+            ):
+                behavioral_asset = asset
+                break
+
+    if behavioral_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Behavioral intelligence asset '{payload.behavioral_intelligence_id}' not found for investigation '{investigation_id}'",
+        )
+
+    try:
+        from app.models.behavioral_intelligence import BehavioralIntelligenceResult as _BIR
+        b_extra = behavioral_asset.provenance.extra or {}
+        behavioral_result = _BIR(
+            id=behavioral_asset.provenance.product_id or behavioral_asset.id,
+            investigation_id=investigation_id,
+            spill_detection_id=b_extra.get("spill_detection_id", spill_id),
+            source_estimate_id=b_extra.get("source_estimate_id", source_estimate.id),
+            candidate_generation_id=b_extra.get("candidate_generation_id", candidate_result.id),
+            trajectory_analysis_id=b_extra.get("trajectory_analysis_id"),
+            derived_asset_id=behavioral_asset.id,
+            analyzed_vessel_count=int(b_extra.get("analyzed_vessel_count", 0)),
+            profiles=[],
+            total_anomalies_detected=int(b_extra.get("total_anomalies_detected", 0)),
+            total_transmission_gaps_detected=int(b_extra.get("total_transmission_gaps_detected", 0)),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to load behavioral intelligence: {exc}")
+
+    # 6. Execute fusion (no forward drift in API route — D1 cross-check is excluded from score anyway)
+    try:
+        result, _ = fuse_evidence(
+            investigation_id=investigation_id,
+            spill_id=spill_id,
+            source_estimate=source_estimate,
+            candidate_result=candidate_result,
+            trajectory_result=trajectory_result,
+            behavioral_result=behavioral_result,
+            drift_result=None,
+        )
+        return result
+    except EvidenceFusionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Evidence fusion failed: {exc}")
 
