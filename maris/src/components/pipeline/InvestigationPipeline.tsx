@@ -23,6 +23,7 @@ interface InvestigationPipelineProps {
   completedStages?: string[]
   currentStage?: string | null
   workflowStatus?: InvestigationStatus
+  isExecuting?: boolean
 }
 
 export function InvestigationPipeline({
@@ -31,6 +32,7 @@ export function InvestigationPipeline({
   completedStages = [],
   currentStage,
   workflowStatus,
+  isExecuting = false,
 }: InvestigationPipelineProps) {
   if (isDemoMode) {
     return (
@@ -66,6 +68,7 @@ export function InvestigationPipeline({
 
   // Live G1 Investigation Pipeline
   const isFailed = workflowStatus === 'FAILED'
+  const isRunning = isExecuting || workflowStatus === 'PROCESSING'
 
   return (
     <section className="pipeline" aria-label="Investigation pipeline">
@@ -74,8 +77,8 @@ export function InvestigationPipeline({
         <span className="pipeline-note">
           {workflowStatus === 'COMPLETED'
             ? 'ALL STAGES COMPLETED (B1 → F3)'
-            : workflowStatus === 'PROCESSING'
-              ? `RUNNING: STAGE ${currentStage || 'B1'}`
+            : isRunning
+              ? 'PROCESSING (SYNCHRONOUS RUN IN PROGRESS B1 → F3)'
               : isFailed
                 ? `PIPELINE HALTED AT STAGE ${currentStage || 'UNKNOWN'}`
                 : 'READY FOR WORKFLOW EXECUTION'}
@@ -85,13 +88,13 @@ export function InvestigationPipeline({
       <div className="pipeline-track">
         {G1_PIPELINE_STAGES.map((stage, index) => {
           const isCompleted = completedStages.includes(stage.id)
-          const isCurrent = currentStage === stage.id && workflowStatus === 'PROCESSING'
           const isStageFailed = isFailed && currentStage === stage.id
+          const isNodeProcessing = isRunning && !isCompleted && !isStageFailed
 
           let nodeClass = 'pipeline-node--pending'
           if (isCompleted) nodeClass = 'pipeline-node--completed'
           else if (isStageFailed) nodeClass = 'pipeline-node--failed'
-          else if (isCurrent) nodeClass = 'pipeline-node--current'
+          else if (isNodeProcessing) nodeClass = 'pipeline-node--in-progress'
 
           return (
             <div className="pipeline-stage" key={stage.id} title={stage.label}>
@@ -100,8 +103,8 @@ export function InvestigationPipeline({
                   <Check size={13} />
                 ) : isStageFailed ? (
                   <ShieldAlert size={13} />
-                ) : isCurrent ? (
-                  <CircleDot size={14} />
+                ) : isNodeProcessing ? (
+                  <CircleDot size={14} className="node-icon--pulse" />
                 ) : (
                   <Circle size={9} />
                 )}

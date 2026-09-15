@@ -14,6 +14,7 @@ from app.models.common import (
     AssetType,
     BBoxAreaOfInterest,
     BoundingBox,
+    InvestigationStatus,
     Provenance,
     TimeWindow,
 )
@@ -1635,6 +1636,11 @@ def run_investigation_workflow_endpoint(
         raise HTTPException(
             status_code=404,
             detail=f"Investigation '{investigation_id}' not found",
+        )
+    if inv.status == InvestigationStatus.COMPLETED:
+        raise HTTPException(
+            status_code=409,
+            detail="Investigation already completed. Create a new investigation to re-run the pipeline.",
         )
     req_payload = payload or InvestigationRunRequest()
     try:

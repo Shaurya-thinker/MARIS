@@ -39,7 +39,7 @@ import {
 } from '../api/investigationApi'
 import { AnalysisPanel } from '../components/analysis/AnalysisPanel'
 import { IncidentPanel } from '../components/incident/IncidentPanel'
-import { InvestigationWorkspace } from '../components/layout/InvestigationWorkspace'
+import { InvestigationWorkspace, resolveSpillId } from '../components/layout/InvestigationWorkspace'
 import type {
   ArtifactSummary,
   CandidateRanking,
@@ -835,7 +835,7 @@ describe('Stage G2 — UI & Invariant Tests (Criteria 6–20)', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText(/Backend Unavailable/i)).toBeDefined()
+      expect(screen.getAllByText(/Backend Unavailable/i).length).toBeGreaterThanOrEqual(1)
     })
 
     // Now mock backend recovery with 1 live investigation
@@ -871,6 +871,463 @@ describe('Stage G2 — UI & Invariant Tests (Criteria 6–20)', () => {
       expect(screen.queryByText(/Backend Unavailable/i)).toBeNull()
       // Recovered case must appear
       expect(screen.getByText(/Recovered Live Case/i)).toBeDefined()
+    })
+  })
+})
+
+describe('Stage G3 — End-to-End Investigation Workflow Tests', () => {
+  const baseLiveInvestigation: InvestigationResponse = {
+    id: 'inv-live-g3',
+    name: 'G3 Spill Test Case',
+    status: 'CREATED',
+    area_of_interest: { kind: 'bbox', bbox: { west: -90.5, south: 28.0, east: -89.5, north: 29.0 } },
+    time_window: { start: '2025-06-01T00:00:00Z', end: '2025-06-02T00:00:00Z' },
+    created_at: '2025-06-01T12:00:00Z',
+    description: 'Stage G3 testing case',
+    metadata: {},
+    asset_ids: [],
+    evidence_ids: [],
+  }
+
+  it('24. Run button is disabled with explanation when status is COMPLETED', () => {
+    const completedStatus: InvestigationStatusResponse = {
+      investigation_id: 'inv-live-g3',
+      status: 'COMPLETED',
+      current_stage: 'F3',
+      completed_stages: ['B1', 'B2', 'B3', 'C1', 'D1', 'D3', 'E1', 'E2', 'E3', 'F1', 'F2', 'F3'],
+      available_artifacts: [],
+      errors: [],
+    }
+
+    render(
+      <IncidentPanel
+        isDemoMode={false}
+        demoIncident={incidentData}
+        liveInvestigation={{ ...baseLiveInvestigation, status: 'COMPLETED' }}
+        statusResponse={completedStatus}
+        artifacts={[]}
+        layers={{ spill: true, drift: true, vessels: true }}
+        onToggleLayer={() => {}}
+        onRunWorkflow={() => {}}
+        isRunningWorkflow={false}
+        onOpenCreateModal={() => {}}
+      />
+    )
+
+    // Button must be disabled
+    const runBtn = screen.getByRole('button', { name: /Pipeline Completed/i })
+    expect((runBtn as HTMLButtonElement).disabled).toBe(true)
+
+    // Explanation must be present
+    expect(
+      screen.getByText(/Investigation already completed. Create a new investigation to re-run the pipeline./i)
+    ).toBeDefined()
+
+    // Create New Investigation action should be present
+    expect(screen.getByRole('button', { name: /Create New Investigation/i })).toBeDefined()
+  })
+
+  it('25. Run button is enabled for retry when status is FAILED', () => {
+    const failedStatus: InvestigationStatusResponse = {
+      investigation_id: 'inv-live-g3',
+      status: 'FAILED',
+      current_stage: 'B1',
+      completed_stages: [],
+      available_artifacts: [],
+      errors: [{ stage: 'B1', error: 'INSUFFICIENT_INPUT', message: 'No SAR artifact available' }],
+    }
+
+    const mockRun = vi.fn()
+
+    render(
+      <IncidentPanel
+        isDemoMode={false}
+        demoIncident={incidentData}
+        liveInvestigation={{ ...baseLiveInvestigation, status: 'FAILED' }}
+        statusResponse={failedStatus}
+        artifacts={[]}
+        layers={{ spill: true, drift: true, vessels: true }}
+        onToggleLayer={() => {}}
+        onRunWorkflow={mockRun}
+        isRunningWorkflow={false}
+      />
+    )
+
+    const retryBtn = screen.getByRole('button', { name: /Retry Pipeline \(B1 → F3\)/i })
+    expect((retryBtn as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.click(retryBtn)
+    expect(mockRun).toHaveBeenCalled()
+  })
+
+  it('26. resolveSpillId enforces documented priority: metadata.detection_id -> provenance.product_id -> asset.id', () => {
+    // 1. All 3 present: metadata.detection_id wins
+    const artifactsAll: ArtifactSummary[] = [
+      {
+        asset_id: 'asset-direct-id',
+        investigation_id: 'inv-1',
+        asset_type: 'spill_geometry',
+        provider: 'sentinel1',
+        source: 'spill_detection',
+        location: '/path/spill.geojson',
+        provenance: { product_id: 'prov-product-id' },
+        upstream_asset_ids: [],
+        metadata: { detection_id: 'meta-detection-id' },
+      },
+    ]
+    expect(resolveSpillId(artifactsAll)).toBe('meta-detection-id')
+
+    // 2. metadata.detection_id absent: provenance.product_id wins
+    const artifactsProv: ArtifactSummary[] = [
+      {
+        asset_id: 'asset-direct-id',
+        investigation_id: 'inv-1',
+        asset_type: 'spill_geometry',
+        provider: 'sentinel1',
+        source: 'spill_detection',
+        location: '/path/spill.geojson',
+        provenance: { product_id: 'prov-product-id' },
+        upstream_asset_ids: [],
+        metadata: {},
+      },
+    ]
+    expect(resolveSpillId(artifactsProv)).toBe('prov-product-id')
+
+    // 3. Both metadata and provenance absent: asset.asset_id or id wins
+    const artifactsAsset: ArtifactSummary[] = [
+      {
+        asset_id: 'asset-direct-id',
+        investigation_id: 'inv-1',
+        asset_type: 'spill_geometry',
+        provider: 'sentinel1',
+        source: 'spill_detection',
+        location: '/path/spill.geojson',
+        provenance: {},
+        upstream_asset_ids: [],
+        metadata: {},
+      },
+    ]
+    expect(resolveSpillId(artifactsAsset)).toBe('asset-direct-id')
+
+    // 4. No spill geometry asset: returns null
+    expect(resolveSpillId([])).toBeNull()
+  })
+
+  it('27. Run config renders server-side SAR path input and tuning fields with clear label', () => {
+    render(
+      <IncidentPanel
+        isDemoMode={false}
+        demoIncident={incidentData}
+        liveInvestigation={baseLiveInvestigation}
+        statusResponse={null}
+        artifacts={[]}
+        layers={{ spill: true, drift: true, vessels: true }}
+        onToggleLayer={() => {}}
+        onRunWorkflow={() => {}}
+        isRunningWorkflow={false}
+      />
+    )
+
+    // Open advanced configuration
+    const toggleBtn = screen.getByRole('button', { name: /Run Configuration \(Advanced\)/i })
+    fireEvent.click(toggleBtn)
+
+    // Verify SAR path input and explicit server-side notice
+    const sarInput = screen.getByLabelText(/Sentinel-1 Artifact Path \(Server-side\)/i)
+    expect(sarInput).toBeDefined()
+    expect(screen.getByText(/Server-side filesystem path only. Browser upload deferred to G4./i)).toBeDefined()
+
+    // Verify optional drift and lookback inputs
+    expect(screen.getByLabelText(/Forward Drift \(hours\)/i)).toBeDefined()
+    expect(screen.getByLabelText(/Lookback \(hours\)/i)).toBeDefined()
+  })
+
+  it('28. Run configuration forwards user payload to run workflow and omits empty fields', () => {
+    const mockRun = vi.fn()
+
+    render(
+      <IncidentPanel
+        isDemoMode={false}
+        demoIncident={incidentData}
+        liveInvestigation={baseLiveInvestigation}
+        statusResponse={null}
+        artifacts={[]}
+        layers={{ spill: true, drift: true, vessels: true }}
+        onToggleLayer={() => {}}
+        onRunWorkflow={mockRun}
+        isRunningWorkflow={false}
+      />
+    )
+
+    // Open advanced config
+    const toggleBtn = screen.getByRole('button', { name: /Run Configuration \(Advanced\)/i })
+    fireEvent.click(toggleBtn)
+
+    // Type SAR path and forward drift
+    const sarInput = screen.getByLabelText(/Sentinel-1 Artifact Path \(Server-side\)/i)
+    fireEvent.change(sarInput, { target: { value: '/data/sar/S1A_IW_GRDH_test.zip' } })
+
+    const driftInput = screen.getByLabelText(/Forward Drift \(hours\)/i)
+    fireEvent.change(driftInput, { target: { value: '18' } })
+
+    // Leave lookback empty
+
+    // Click run button
+    const runBtn = screen.getByRole('button', { name: /Run Investigation \(B1 → F3\)/i })
+    fireEvent.click(runBtn)
+
+    expect(mockRun).toHaveBeenCalledWith({
+      sentinel1_artifact_path: '/data/sar/S1A_IW_GRDH_test.zip',
+      drift_hours: 18,
+    })
+    // Empty lookback field must be omitted
+    expect(mockRun.mock.calls[0][0].lookback_hours).toBeUndefined()
+  })
+
+  it('29. Empty workspace renders explicit shell distinguishing backend unavailable from no investigation selected', () => {
+    // 1. No investigation selected (backend healthy)
+    const { unmount } = render(
+      <InvestigationWorkspace
+        activeId=""
+        isDemoMode={false}
+        investigations={[]}
+        onSelectInvestigation={() => {}}
+        isCreateModalOpen={false}
+        onCloseCreateModal={() => {}}
+        onOpenCreateModal={() => {}}
+      />
+    )
+
+    expect(screen.getByText(/No Investigation Selected/i)).toBeDefined()
+    expect(screen.getByRole('button', { name: /\+ New Investigation/i })).toBeDefined()
+    unmount()
+
+    // 2. Backend unavailable
+    render(
+      <InvestigationWorkspace
+        activeId=""
+        isDemoMode={false}
+        investigations={[]}
+        onSelectInvestigation={() => {}}
+        isCreateModalOpen={false}
+        onCloseCreateModal={() => {}}
+        onOpenCreateModal={() => {}}
+        backendError="Connection refused on port 8000"
+      />
+    )
+
+    expect(screen.getByText(/Backend Unavailable/i)).toBeDefined()
+    expect(screen.getByText(/Unable to connect to the MARIS backend service/i)).toBeDefined()
+    expect(screen.getByRole('button', { name: /\+ New Investigation/i })).toBeDefined()
+  })
+
+  it('30. HTTP 409 from run endpoint surfaces error message in workspace without fallback to demo', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/run')) {
+        return {
+          ok: false,
+          status: 409,
+          statusText: 'Conflict',
+          json: async () => ({
+            detail: 'Investigation already completed. Create a new investigation to re-run the pipeline.',
+          }),
+        }
+      }
+      if (url.includes('/status')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            investigation_id: 'inv-live-101',
+            status: 'COMPLETED',
+            current_stage: 'F3',
+            completed_stages: ['B1', 'B2', 'B3', 'C1', 'D1', 'D3', 'E1', 'E2', 'E3', 'F1', 'F2', 'F3'],
+            available_artifacts: [],
+            errors: [],
+          }),
+        }
+      }
+      if (url.includes('/artifacts')) {
+        return { ok: true, status: 200, json: async () => [] }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'inv-live-101',
+          name: 'Completed Case',
+          status: 'COMPLETED',
+          area_of_interest: { kind: 'bbox', bbox: { west: -90.5, south: 28.0, east: -89.5, north: 29.0 } },
+          time_window: { start: '2025-06-01T00:00:00Z', end: '2025-06-02T00:00:00Z' },
+          created_at: '2025-06-01T12:00:00Z',
+          description: 'Completed investigation',
+          metadata: {},
+          asset_ids: [],
+          evidence_ids: [],
+        }),
+      }
+    })
+
+    render(
+      <InvestigationWorkspace
+        activeId="inv-live-101"
+        isDemoMode={false}
+        investigations={[{ id: 'inv-live-101', name: 'Completed Case', status: 'COMPLETED', created_at: '2025-01-01', asset_count: 0 }]}
+        onSelectInvestigation={() => {}}
+        isCreateModalOpen={false}
+        onCloseCreateModal={() => {}}
+        onOpenCreateModal={() => {}}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Completed Case/i)).toBeDefined()
+    })
+
+    // Now attempt runInvestigation directly to verify 409 handling
+    await expect(runInvestigation('inv-live-101')).rejects.toThrow(
+      /Investigation already completed. Create a new investigation to re-run the pipeline./
+    )
+
+    // Corsica demo must not be activated
+    expect(screen.queryByText(/HISTORICAL DEMO CASE — Corsica 2018 Reconstruction/i)).toBeNull()
+  })
+
+  it('31. PROCESSING recovery performs exactly one deferred check and renders Refresh Status action', async () => {
+    vi.useFakeTimers()
+
+    const processingStatus: InvestigationStatusResponse = {
+      investigation_id: 'inv-proc-1',
+      status: 'PROCESSING',
+      current_stage: 'B2',
+      completed_stages: ['B1'],
+      available_artifacts: [],
+      errors: [],
+    }
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/status')) {
+        return { ok: true, status: 200, json: async () => processingStatus }
+      }
+      if (url.includes('/artifacts')) {
+        return { ok: true, status: 200, json: async () => [] }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'inv-proc-1',
+          name: 'Processing Case',
+          status: 'PROCESSING',
+          area_of_interest: { kind: 'bbox', bbox: { west: -90.5, south: 28.0, east: -89.5, north: 29.0 } },
+          time_window: { start: '2025-06-01T00:00:00Z', end: '2025-06-02T00:00:00Z' },
+          created_at: '2025-06-01T12:00:00Z',
+          metadata: {},
+          asset_ids: [],
+          evidence_ids: [],
+        }),
+      }
+    })
+    globalThis.fetch = mockFetch
+
+    render(
+      <InvestigationWorkspace
+        activeId="inv-proc-1"
+        isDemoMode={false}
+        investigations={[{ id: 'inv-proc-1', name: 'Processing Case', status: 'PROCESSING', created_at: '2025-01-01', asset_count: 0 }]}
+        onSelectInvestigation={() => {}}
+        isCreateModalOpen={false}
+        onCloseCreateModal={() => {}}
+        onOpenCreateModal={() => {}}
+      />
+    )
+
+    // Fast-forward 5000ms for the deferred check
+    await vi.advanceTimersByTimeAsync(5000)
+
+    // The status endpoint should have been checked
+    expect(mockFetch).toHaveBeenCalledWith(expect.stringContaining('/status'), expect.anything())
+
+    // "Refresh Status" button should be visible in UI
+    expect(screen.getByRole('button', { name: /Refresh Status/i })).toBeDefined()
+
+    vi.useRealTimers()
+  })
+
+  it('32. Creating an investigation refreshes the investigation list so it appears in the Header selector', async () => {
+    const listInvestigationsMock = vi.fn()
+      // Initial list
+      .mockResolvedValueOnce([])
+      // Post-create list
+      .mockResolvedValueOnce([
+        {
+          id: 'inv-new-999',
+          name: 'Brand New Spill Case',
+          status: 'CREATED',
+          created_at: '2025-06-01T12:00:00Z',
+          asset_count: 0,
+        },
+      ])
+
+    const createMock = vi.fn().mockResolvedValue({
+      id: 'inv-new-999',
+      name: 'Brand New Spill Case',
+      status: 'CREATED',
+      area_of_interest: { kind: 'bbox', bbox: { west: -90.5, south: 28.0, east: -89.5, north: 29.0 } },
+      time_window: { start: '2025-06-01T00:00:00Z', end: '2025-06-02T00:00:00Z' },
+      created_at: '2025-06-01T12:00:00Z',
+      metadata: {},
+      asset_ids: [],
+      evidence_ids: [],
+    })
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, opts?: RequestInit) => {
+      if (url.endsWith('/api/v1/investigations') && opts?.method === 'POST') {
+        const body = JSON.parse(opts.body as string)
+        return { ok: true, status: 201, json: async () => createMock(body) }
+      }
+      if (url.endsWith('/api/v1/investigations')) {
+        const list = await listInvestigationsMock()
+        return { ok: true, status: 200, json: async () => list }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'inv-new-999',
+          name: 'Brand New Spill Case',
+          status: 'CREATED',
+          area_of_interest: { kind: 'bbox', bbox: { west: -90.5, south: 28.0, east: -89.5, north: 29.0 } },
+          time_window: { start: '2025-06-01T00:00:00Z', end: '2025-06-02T00:00:00Z' },
+          created_at: '2025-06-01T12:00:00Z',
+          metadata: {},
+          asset_ids: [],
+          evidence_ids: [],
+        }),
+      }
+    })
+
+    render(<App />)
+
+    // Wait for initial render
+    await waitFor(() => {
+      expect(screen.getByText(/No Investigations/i)).toBeDefined()
+    })
+
+    // Click "+ New Investigation"
+    const newInvBtn = screen.getByRole('button', { name: /\+ New Investigation/i })
+    fireEvent.click(newInvBtn)
+
+    // Fill form and submit
+    const nameInput = screen.getByLabelText(/Investigation Title/i)
+    fireEvent.change(nameInput, { target: { value: 'Brand New Spill Case' } })
+
+    const submitBtn = screen.getByRole('button', { name: /Create Investigation/i })
+    fireEvent.click(submitBtn)
+
+    // After creation, list should refresh and new investigation appears in header
+    await waitFor(() => {
+      expect(screen.getByText(/Brand New Spill Case/i)).toBeDefined()
     })
   })
 })

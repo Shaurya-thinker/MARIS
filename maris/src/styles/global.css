@@ -442,3 +442,190 @@ a:focus-visible {
   color: var(--color-text-subtle);
   border-radius: var(--radius-sm);
 }
+
+/* Stage G3: Run Configuration (Server-side SAR path & optional tuning) */
+.run-config-box {
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+}
+.run-config-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  background: transparent;
+  border: none;
+  color: var(--color-text-subtle);
+  font-size: 0.68rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.run-config-toggle:hover {
+  color: var(--color-text);
+}
+.run-config-toggle span {
+  flex: 1;
+}
+.run-config-content {
+  padding: 0.65rem;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.config-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.config-form-group label {
+  font-size: 0.62rem;
+  font-weight: 500;
+  color: var(--color-text-subtle);
+}
+.config-text-input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: 0.68rem;
+  font-family: var(--mono);
+}
+.config-text-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.config-text-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.config-hint-text {
+  margin: 0;
+  font-size: 0.58rem;
+  color: var(--color-text-muted);
+  line-height: 1.35;
+}
+.config-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+/* Stage G3: Run Button & Action States */
+.run-actions-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+.completed-state-box {
+  margin-bottom: 0.75rem;
+  padding: 0.65rem;
+  background: rgb(8 23 27 / 70%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.completed-state-message {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.65rem;
+  color: var(--color-text-subtle);
+  line-height: 1.4;
+}
+.completed-btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.create-new-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.45rem;
+  font-size: 0.68rem;
+}
+.refresh-status-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.4rem;
+  font-size: 0.65rem;
+}
+
+/* Stage G3: Processing Animation */
+.pipeline-node--in-progress {
+  border-color: var(--color-processing);
+  color: var(--color-processing);
+  animation: pulse-node 1.5s ease-in-out infinite;
+}
+.node-icon--pulse {
+  animation: pulse-opacity 1.5s ease-in-out infinite;
+}
+@keyframes pulse-node {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(77, 171, 247, 0.4);
+    border-color: var(--color-processing);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(77, 171, 247, 0);
+    border-color: rgba(77, 171, 247, 0.7);
+  }
+}
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Stage G3: Workspace Empty Shell */
+.workspace--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 8rem);
+  padding: 2rem;
+}
+.empty-workspace-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 440px;
+  padding: 2.5rem 2rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.3);
+}
+.empty-workspace-icon {
+  color: var(--color-accent);
+  margin-bottom: 1rem;
+}
+.empty-workspace-icon.error-icon {
+  color: var(--color-error);
+}
+.empty-workspace-card h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.empty-workspace-description {
+  margin: 0 0 1.5rem 0;
+  font-size: 0.78rem;
+  color: var(--color-text-subtle);
+  line-height: 1.5;
+}
+.empty-workspace-actions {
+  display: flex;
+  gap: 0.75rem;
+}

@@ -1012,3 +1012,71 @@ def test_25_no_fabrication_invariant():
             # Verify no B2 artifact was registered in registry
             assets = default_asset_registry.list_for_investigation(inv.id)
             assert not any(a.type == AssetType.IMAGERY_PREVIEW for a in assets)
+
+
+def test_26_completed_investigation_run_returns_409(client, sample_investigation_payload):
+    """26. Stage G3 — POST /run on COMPLETED investigation returns HTTP 409 Conflict."""
+    create_res = client.post("/api/v1/investigations", json=sample_investigation_payload)
+    assert create_res.status_code == 201
+    inv_id = create_res.json()["id"]
+
+    # Mark investigation status as COMPLETED
+    default_investigation_store.update_status(
+        investigation_id=inv_id,
+        status=InvestigationStatus.COMPLETED,
+        current_stage="F3",
+        completed_stages=["B1", "B2", "B3", "C1", "D1", "D3", "E1", "E2", "E3", "F1", "F2", "F3"],
+    )
+
+    # Calling /run on COMPLETED investigation must return 409 Conflict
+    run_res = client.post(f"/api/v1/investigations/{inv_id}/run", json={})
+    assert run_res.status_code == 409
+    data = run_res.json()
+    assert "detail" in data
+    assert data["detail"] == "Investigation already completed. Create a new investigation to re-run the pipeline."
+
+
+def test_27_failed_investigation_can_be_rerun(client, sample_investigation_payload):
+    """27. Stage G3 — POST /run on FAILED investigation remains re-runnable."""
+    create_res = client.post("/api/v1/investigations", json=sample_investigation_payload)
+    assert create_res.status_code == 201
+    inv_id = create_res.json()["id"]
+
+    # First run without SAR input -> fails at B1 with INSUFFICIENT_INPUT
+    first_run = client.post(f"/api/v1/investigations/{inv_id}/run", json={})
+    assert first_run.status_code == 200
+    assert first_run.json()["status"] == "FAILED"
+    assert first_run.json()["current_stage"] == "B1"
+
+    inv_after_fail = default_investigation_store.get(inv_id)
+    assert inv_after_fail.status == InvestigationStatus.FAILED
+
+    # Second run is allowed and does NOT return 409
+    objs = _create_mock_pipeline_objects(inv_id)
+    default_asset_registry._assets[objs["wind_asset"].id] = objs["wind_asset"]
+    default_asset_registry._assets[objs["current_asset"].id] = objs["current_asset"]
+
+    with (
+        patch("app.services.investigation_workflow.ingest_sentinel1_artifact", return_value=(objs["scene"], objs["val_result"], objs["b1_asset"])),
+        patch("app.services.investigation_workflow.preprocess_sentinel1_scene", return_value=(objs["b2_asset"], {})),
+        patch("app.services.investigation_workflow.detect_spills_from_sar_scene", return_value=(objs["spill_detection"], objs["spill_asset"])),
+        patch("app.services.investigation_workflow.compute_drift_for_spill", return_value=(objs["drift_result"], objs["drift_asset"])),
+        patch("app.services.investigation_workflow.compute_source_estimate_for_spill", return_value=(objs["source_result"], objs["source_asset"])),
+        patch("app.services.investigation_workflow.generate_candidate_vessels_for_spill", return_value=(objs["candidate_result"], objs["candidate_asset"])),
+        patch("app.services.investigation_workflow.analyze_candidate_trajectories", return_value=(objs["trajectory_result"], objs["trajectory_asset"])),
+        patch("app.services.investigation_workflow.analyze_candidate_behavior", return_value=(objs["behavioral_result"], objs["behavioral_asset"])),
+        patch("app.services.investigation_workflow.fuse_evidence", return_value=(objs["fusion_result"], objs["fusion_asset"])),
+        patch("app.services.investigation_workflow.rank_candidates", return_value=(objs["ranking_result"], objs["ranking_asset"])),
+        patch("app.services.investigation_workflow.generate_explainability_report", return_value=(objs["report"], objs["report_asset"])),
+    ):
+        second_run = client.post(
+            f"/api/v1/investigations/{inv_id}/run",
+            json={
+                "sentinel1_artifact_path": "/tmp/mock.zip",
+                "wind_asset_id": objs["wind_asset"].id,
+                "current_asset_id": objs["current_asset"].id,
+            },
+        )
+        assert second_run.status_code == 200
+        assert second_run.json()["status"] == "COMPLETED"
+

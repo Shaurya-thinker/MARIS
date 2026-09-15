@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
+import { Activity, AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import { candidateVessels as demoCandidateVessels, incidentData as demoIncidentData, pipelineStages as demoPipelineStages } from '../../data/demoData'
 import { AnalysisPanel } from '../analysis/AnalysisPanel'
 import { CreateInvestigationModal } from '../incident/CreateInvestigationModal'
@@ -15,7 +15,6 @@ import {
   getInvestigation,
   getInvestigationArtifacts,
   getInvestigationStatus,
-  listInvestigations,
   runInvestigation,
 } from '../../api/investigationApi'
 import type {
@@ -25,8 +24,46 @@ import type {
   InvestigationCreateRequest,
   InvestigationListItem,
   InvestigationResponse,
+  InvestigationRunRequest,
   InvestigationStatusResponse,
 } from '../../types/investigationApi'
+
+/**
+ * Resolves the authoritative spill identifier from registered artifacts.
+ *
+ * Priority order:
+ * 1. metadata.detection_id — Detection UUID assigned during Stage B3 spill detection.
+ * 2. provenance.product_id — Product/asset provenance identifier when available.
+ * 3. asset.id / asset.asset_id — Unique registered asset identifier in the AssetRegistry.
+ *
+ * No arithmetic or scientific computation is performed.
+ */
+export function resolveSpillId(artifacts: ArtifactSummary[]): string | null {
+  const spillAsset = artifacts.find(
+    (a) => a.asset_type === 'spill_geometry' || a.source === 'spill_detection'
+  )
+  if (!spillAsset) return null
+
+  // Priority 1: metadata.detection_id
+  const detectionId = spillAsset.metadata?.detection_id
+  if (typeof detectionId === 'string' && detectionId.trim().length > 0) {
+    return detectionId.trim()
+  }
+
+  // Priority 2: provenance.product_id
+  const productId = spillAsset.provenance?.product_id
+  if (typeof productId === 'string' && productId.trim().length > 0) {
+    return productId.trim()
+  }
+
+  // Priority 3: asset.id / asset.asset_id
+  const directId = spillAsset.asset_id || (spillAsset as unknown as { id?: string }).id
+  if (typeof directId === 'string' && directId.trim().length > 0) {
+    return directId.trim()
+  }
+
+  return null
+}
 
 export function InvestigationWorkspace({
   activeId,
@@ -36,6 +73,7 @@ export function InvestigationWorkspace({
   isCreateModalOpen,
   onCloseCreateModal,
   onOpenCreateModal,
+  onInvestigationCreated,
   backendError,
 }: {
   activeId: string
@@ -45,6 +83,7 @@ export function InvestigationWorkspace({
   isCreateModalOpen: boolean
   onCloseCreateModal: () => void
   onOpenCreateModal: () => void
+  onInvestigationCreated?: () => Promise<void> | void
   backendError?: string | null
 }) {
   const [layers, setLayers] = useState({ spill: true, drift: true, vessels: true })
@@ -71,6 +110,9 @@ export function InvestigationWorkspace({
   function toggleLayer(layer: 'spill' | 'drift' | 'vessels') {
     setLayers((current) => ({ ...current, [layer]: !current[layer] }))
   }
+
+  const processingTimerRef = useRef<number | null>(null)
+  const [hasDeferredChecked, setHasDeferredChecked] = useState(false)
 
   // Load investigation details when activeId changes
   useEffect(() => {
@@ -106,25 +148,59 @@ export function InvestigationWorkspace({
         setStatusResponse(st)
         setArtifacts(artList)
 
-        // Find spill asset or detection ID to load ranking & explainability if available
-        const spillAsset = artList.find(
-          (a) => a.asset_type === 'spill_geometry' || a.source === 'spill_detection'
-        )
+        // Stage G3: PROCESSING recovery — perform exactly one deferred check after 5s
+        if (st.status === 'PROCESSING') {
+          setHasDeferredChecked(false)
+          if (processingTimerRef.current) {
+            window.clearTimeout(processingTimerRef.current)
+          }
+          processingTimerRef.current = window.setTimeout(async () => {
+            try {
+              const latestStatus = await getInvestigationStatus(activeId)
+              if (!isMounted) return
+              setStatusResponse(latestStatus)
+              setHasDeferredChecked(true)
+              if (latestStatus.status === 'COMPLETED' || latestStatus.status === 'FAILED') {
+                const [updatedInv, latestArtList] = await Promise.all([
+                  getInvestigation(activeId),
+                  getInvestigationArtifacts(activeId),
+                ])
+                if (!isMounted) return
+                setActiveInvestigation(updatedInv)
+                setArtifacts(latestArtList)
+                const resolvedSpill = resolveSpillId(latestArtList)
+                if (resolvedSpill && latestStatus.completed_stages.includes('F2')) {
+                  try {
+                    const ranking = await getCandidateRanking(activeId, resolvedSpill)
+                    setRankingResult(ranking)
+                    if (latestStatus.completed_stages.includes('F3')) {
+                      const report = await getExplainabilityReport(activeId, resolvedSpill)
+                      setExplainabilityReport(report)
+                    }
+                  } catch {
+                    // downstream fetch non-fatal
+                  }
+                }
+              }
+            } catch (pollErr) {
+              console.warn('Deferred status check failed:', pollErr)
+              if (isMounted) setHasDeferredChecked(true)
+            }
+          }, 5000)
+        }
+
+        // Find spill asset using resolveSpillId()
+        const spillId = resolveSpillId(artList)
         const rankingAsset = artList.find(
           (a) => a.metadata?.asset_type === 'candidate_ranking' || a.provenance?.extra?.stage === 'F2'
         )
-
-        const spillId =
-          (spillAsset?.metadata?.detection_id as string | undefined) ||
-          spillAsset?.provenance?.product_id ||
-          spillAsset?.id
 
         if (spillId) {
           try {
             const ranking = await getCandidateRanking(
               activeId,
               spillId,
-              rankingAsset?.id
+              rankingAsset?.asset_id || (rankingAsset as unknown as { id?: string })?.id
             )
             if (isMounted) {
               setRankingResult(ranking)
@@ -137,7 +213,7 @@ export function InvestigationWorkspace({
               const report = await getExplainabilityReport(
                 activeId,
                 spillId,
-                rankingAsset?.id
+                rankingAsset?.asset_id || (rankingAsset as unknown as { id?: string })?.id
               )
               if (isMounted) setExplainabilityReport(report)
             } catch {
@@ -160,6 +236,9 @@ export function InvestigationWorkspace({
 
     return () => {
       isMounted = false
+      if (processingTimerRef.current) {
+        window.clearTimeout(processingTimerRef.current)
+      }
     }
   }, [activeId, isDemoMode])
 
@@ -178,8 +257,45 @@ export function InvestigationWorkspace({
     return () => window.clearInterval(timer)
   }, [playbackPlaying])
 
-  // Workflow run execution
-  async function handleRunWorkflow() {
+  // Manual status refresh for PROCESSING recovery
+  async function handleRefreshStatus() {
+    if (!activeId || isDemoMode) return
+    setIsLoading(true)
+    setLoadingMessage('Refreshing status...')
+    try {
+      const st = await getInvestigationStatus(activeId)
+      setStatusResponse(st)
+      if (st.status === 'COMPLETED' || st.status === 'FAILED') {
+        const [updatedInv, artList] = await Promise.all([
+          getInvestigation(activeId),
+          getInvestigationArtifacts(activeId),
+        ])
+        setActiveInvestigation(updatedInv)
+        setArtifacts(artList)
+        const spillId = resolveSpillId(artList)
+        if (spillId && st.completed_stages.includes('F2')) {
+          try {
+            const ranking = await getCandidateRanking(activeId, spillId)
+            setRankingResult(ranking)
+            if (st.completed_stages.includes('F3')) {
+              const report = await getExplainabilityReport(activeId, spillId)
+              setExplainabilityReport(report)
+            }
+          } catch {
+            // non-fatal
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setApiError(`Failed to refresh status: ${msg}`)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Workflow run execution with optional run configuration payload
+  async function handleRunWorkflow(payload?: InvestigationRunRequest) {
     if (isDemoMode || !activeId) return
 
     setIsRunningWorkflow(true)
@@ -187,7 +303,7 @@ export function InvestigationWorkspace({
     setApiError(null)
 
     try {
-      const runRes = await runInvestigation(activeId)
+      const runRes = await runInvestigation(activeId, payload)
       setStatusResponse({
         investigation_id: runRes.investigation_id,
         status: runRes.status,
@@ -205,8 +321,8 @@ export function InvestigationWorkspace({
       setActiveInvestigation(updatedInv)
       setArtifacts(artList)
 
-      // Resolve spill_id
-      const spillId = runRes.artifacts.B3 || artList.find((a) => a.asset_type === 'spill_geometry')?.id
+      // Resolve spill_id using resolveSpillId()
+      const spillId = resolveSpillId(artList) || runRes.artifacts.B3
       if (spillId && runRes.completed_stages.includes('F2')) {
         try {
           const ranking = await getCandidateRanking(activeId, spillId, runRes.artifacts.F2)
@@ -235,10 +351,14 @@ export function InvestigationWorkspace({
     }
   }
 
-  // Handle new investigation creation
+  // Handle new investigation creation and list refresh
   async function handleCreate(payload: InvestigationCreateRequest) {
     const created = await createInvestigation(payload)
+    if (onInvestigationCreated) {
+      await onInvestigationCreated()
+    }
     onSelectInvestigation(created.id)
+    onCloseCreateModal()
   }
 
   // Geographic assets extraction for live MapLibre rendering
@@ -269,6 +389,55 @@ export function InvestigationWorkspace({
   const visiblePipelineStages = isDemoMode && playbackActive
     ? getPrototypePipelineStages(playbackStage)
     : demoPipelineStages
+
+  if (!activeId && !isDemoMode) {
+    return (
+      <main className="workspace workspace--empty" aria-label="Investigation workspace">
+        <div className="empty-workspace-card">
+          {backendError ? (
+            <>
+              <AlertTriangle size={36} className="empty-workspace-icon error-icon" />
+              <h2>Backend Unavailable</h2>
+              <p className="empty-workspace-description">
+                Unable to connect to the MARIS backend service. Ensure the backend server is running and accessible.
+              </p>
+              <div className="empty-workspace-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={onOpenCreateModal}
+                >
+                  + New Investigation
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <Activity size={36} className="empty-workspace-icon" />
+              <h2>No Investigation Selected</h2>
+              <p className="empty-workspace-description">
+                There are currently no active investigations selected. Select an existing case from the header or initialize a new spill investigation.
+              </p>
+              <div className="empty-workspace-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={onOpenCreateModal}
+                >
+                  + New Investigation
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        <CreateInvestigationModal
+          isOpen={isCreateModalOpen}
+          onClose={onCloseCreateModal}
+          onSubmit={handleCreate}
+        />
+      </main>
+    )
+  }
 
   return (
     <main className="workspace">
@@ -336,6 +505,9 @@ export function InvestigationWorkspace({
           onRunWorkflow={handleRunWorkflow}
           isRunningWorkflow={isRunningWorkflow}
           error={apiError || backendError}
+          onOpenCreateModal={onOpenCreateModal}
+          onRefreshStatus={handleRefreshStatus}
+          hasDeferredChecked={hasDeferredChecked}
         />
 
         <MapView
@@ -367,6 +539,7 @@ export function InvestigationWorkspace({
         completedStages={statusResponse?.completed_stages}
         currentStage={statusResponse?.current_stage}
         workflowStatus={statusResponse?.status || activeInvestigation?.status}
+        isExecuting={isRunningWorkflow || statusResponse?.status === 'PROCESSING'}
       />
 
       <CreateInvestigationModal

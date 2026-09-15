@@ -1,8 +1,25 @@
-import { Activity, AlertTriangle, Eye, EyeOff, Loader2, Play, Satellite, Ship, Waves } from 'lucide-react'
+import { useState } from 'react'
+import {
+  Activity,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  Eye,
+  EyeOff,
+  Loader2,
+  Play,
+  PlusCircle,
+  RefreshCw,
+  Satellite,
+  Ship,
+  Sliders,
+  Waves,
+} from 'lucide-react'
 import type { IncidentData } from '../../types/maris'
 import type {
   ArtifactSummary,
   InvestigationResponse,
+  InvestigationRunRequest,
   InvestigationStatusResponse,
 } from '../../types/investigationApi'
 
@@ -14,9 +31,12 @@ interface IncidentPanelProps {
   artifacts: ArtifactSummary[]
   layers: { spill: boolean; drift: boolean; vessels: boolean }
   onToggleLayer: (layer: 'spill' | 'drift' | 'vessels') => void
-  onRunWorkflow: () => void
+  onRunWorkflow: (payload?: InvestigationRunRequest) => void
   isRunningWorkflow: boolean
   error?: string | null
+  onOpenCreateModal?: () => void
+  onRefreshStatus?: () => void
+  hasDeferredChecked?: boolean
 }
 
 function InfoRow({ label, value }: { label: string; value: string | React.ReactNode }) {
@@ -39,7 +59,14 @@ export function IncidentPanel({
   onRunWorkflow,
   isRunningWorkflow,
   error,
+  onOpenCreateModal,
+  onRefreshStatus,
+  hasDeferredChecked,
 }: IncidentPanelProps) {
+  const [sarPath, setSarPath] = useState('')
+  const [driftHours, setDriftHours] = useState('')
+  const [lookbackHours, setLookbackHours] = useState('')
+  const [showConfig, setShowConfig] = useState(false)
   // Demo mode: show the historical Corsica demo panel
   if (isDemoMode) {
     return (
@@ -136,9 +163,11 @@ export function IncidentPanel({
   // Live G1 Investigation View
   const aoi = liveInvestigation.area_of_interest
   const aoiDescription =
-    aoi.kind === 'bbox'
+    aoi?.kind === 'bbox'
       ? `[${aoi.bbox.west.toFixed(2)}°W, ${aoi.bbox.south.toFixed(2)}°S, ${aoi.bbox.east.toFixed(2)}°E, ${aoi.bbox.north.toFixed(2)}°N]`
-      : `GeoJSON Polygon (${aoi.polygon.coordinates[0]?.length || 0} pts)`
+      : aoi?.kind === 'polygon'
+      ? `GeoJSON Polygon (${aoi.polygon.coordinates[0]?.length || 0} pts)`
+      : 'Area of Interest: N/A'
 
   // Check for B3 spill artifact
   const spillArtifact = artifacts.find(
@@ -149,8 +178,28 @@ export function IncidentPanel({
   const spillAreaM2 = (spillMetadata.total_area_m2 || spillMetadata.area) as number | undefined
   const spillConfidence = spillMetadata.confidence as number | undefined
 
-  const activeStatus = statusResponse?.status || liveInvestigation.status
+  const activeStatus = statusResponse?.status || liveInvestigation.status || 'UNKNOWN'
   const errors = statusResponse?.errors || []
+
+  const isCompleted = !isRunningWorkflow && activeStatus === 'COMPLETED'
+  const isProcessing = isRunningWorkflow || activeStatus === 'PROCESSING'
+  const isFailed = activeStatus === 'FAILED'
+
+  const handleRunClick = () => {
+    const payload: InvestigationRunRequest = {}
+    if (sarPath.trim()) {
+      payload.sentinel1_artifact_path = sarPath.trim()
+    }
+    const dVal = parseFloat(driftHours)
+    if (driftHours.trim() && !Number.isNaN(dVal)) {
+      payload.drift_hours = dVal
+    }
+    const lVal = parseFloat(lookbackHours)
+    if (lookbackHours.trim() && !Number.isNaN(lVal)) {
+      payload.lookback_hours = lVal
+    }
+    onRunWorkflow(Object.keys(payload).length > 0 ? payload : undefined)
+  }
 
   return (
     <aside className="panel incident-panel" aria-label="Incident and map controls">
@@ -193,11 +242,15 @@ export function IncidentPanel({
           <InfoRow label="AOI" value={aoiDescription} />
           <InfoRow
             label="Time Window"
-            value={`${new Date(liveInvestigation.time_window.start).toLocaleDateString()} – ${new Date(liveInvestigation.time_window.end).toLocaleDateString()}`}
+            value={
+              liveInvestigation.time_window?.start
+                ? `${new Date(liveInvestigation.time_window.start).toLocaleDateString()} – ${new Date(liveInvestigation.time_window.end).toLocaleDateString()}`
+                : 'N/A'
+            }
           />
           <InfoRow
             label="Created"
-            value={new Date(liveInvestigation.created_at).toLocaleString()}
+            value={liveInvestigation.created_at ? new Date(liveInvestigation.created_at).toLocaleString() : 'N/A'}
           />
           {liveInvestigation.description && (
             <InfoRow label="Notes" value={liveInvestigation.description} />
@@ -245,22 +298,138 @@ export function IncidentPanel({
           <span className="badge-subtle">{artifacts.length} Artifacts</span>
         </div>
 
-        <button
-          className="primary-button run-button"
-          type="button"
-          onClick={onRunWorkflow}
-          disabled={isRunningWorkflow || activeStatus === 'PROCESSING'}
-        >
-          {isRunningWorkflow || activeStatus === 'PROCESSING' ? (
-            <>
-              <Loader2 size={15} className="spinner" /> Running pipeline (B1 → F3)...
-            </>
-          ) : (
-            <>
-              <Play size={15} fill="currentColor" /> Run Investigation (B1 → F3)
-            </>
+        {/* Stage G3: Run Configuration (Server-side SAR path & optional tuning parameters) */}
+        <div className="run-config-box">
+          <button
+            type="button"
+            className="run-config-toggle"
+            onClick={() => setShowConfig((prev) => !prev)}
+            aria-expanded={showConfig}
+          >
+            <Sliders size={13} />
+            <span>Run Configuration (Advanced)</span>
+            {showConfig ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+
+          {showConfig && (
+            <div className="run-config-content">
+              <div className="config-form-group">
+                <label htmlFor="sar-path-input">Sentinel-1 Artifact Path (Server-side)</label>
+                <input
+                  id="sar-path-input"
+                  type="text"
+                  className="config-text-input"
+                  placeholder="/server/path/to/S1A_...SAFE.zip"
+                  value={sarPath}
+                  onChange={(e) => setSarPath(e.target.value)}
+                  disabled={isProcessing || isCompleted}
+                />
+                <p className="config-hint-text">
+                  Server-side filesystem path only. Browser upload deferred to G4.
+                </p>
+              </div>
+
+              <div className="config-form-row">
+                <div className="config-form-group">
+                  <label htmlFor="drift-hours-input">Forward Drift (hours)</label>
+                  <input
+                    id="drift-hours-input"
+                    type="number"
+                    step="any"
+                    className="config-text-input"
+                    placeholder="Optional"
+                    value={driftHours}
+                    onChange={(e) => setDriftHours(e.target.value)}
+                    disabled={isProcessing || isCompleted}
+                  />
+                </div>
+                <div className="config-form-group">
+                  <label htmlFor="lookback-hours-input">Lookback (hours)</label>
+                  <input
+                    id="lookback-hours-input"
+                    type="number"
+                    step="any"
+                    className="config-text-input"
+                    placeholder="Optional"
+                    value={lookbackHours}
+                    onChange={(e) => setLookbackHours(e.target.value)}
+                    disabled={isProcessing || isCompleted}
+                  />
+                </div>
+              </div>
+            </div>
           )}
-        </button>
+        </div>
+
+        {/* Stage G3: Run Button & Action States */}
+        {isCompleted ? (
+          <div className="completed-state-box">
+            <p className="completed-state-message">
+              Investigation already completed. Create a new investigation to re-run the pipeline.
+            </p>
+            <div className="completed-btn-group">
+              <button
+                className="primary-button run-button"
+                type="button"
+                disabled={true}
+                title="Investigation already completed. Create a new investigation to re-run the pipeline."
+              >
+                Pipeline Completed (B1 → F3)
+              </button>
+              {onOpenCreateModal && (
+                <button
+                  className="secondary-button create-new-action-btn"
+                  type="button"
+                  onClick={onOpenCreateModal}
+                >
+                  <PlusCircle size={14} /> Create New Investigation
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="run-actions-group">
+            <button
+              className="primary-button run-button"
+              type="button"
+              onClick={handleRunClick}
+              disabled={isProcessing}
+              title={
+                isProcessing
+                  ? 'Pipeline is currently executing...'
+                  : isFailed
+                    ? 'Retry failed pipeline execution'
+                    : 'Run scientific pipeline B1 through F3'
+              }
+            >
+              {isProcessing ? (
+                <>
+                  <Loader2 size={15} className="spinner" /> Running pipeline (B1 → F3)...
+                </>
+              ) : isFailed ? (
+                <>
+                  <Play size={15} fill="currentColor" /> Retry Pipeline (B1 → F3)
+                </>
+              ) : (
+                <>
+                  <Play size={15} fill="currentColor" /> Run Investigation (B1 → F3)
+                </>
+              )}
+            </button>
+
+            {/* Stage G3: PROCESSING recovery manual action */}
+            {activeStatus === 'PROCESSING' && onRefreshStatus && (
+              <button
+                className="secondary-button refresh-status-button"
+                type="button"
+                onClick={onRefreshStatus}
+                title="Check latest investigation status from backend"
+              >
+                <RefreshCw size={13} /> Refresh Status
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="layer-controls">
           <LayerButton label="Spill overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />

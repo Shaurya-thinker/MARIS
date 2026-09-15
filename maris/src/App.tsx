@@ -86,6 +86,7 @@ export function App() {
         isCreateModalOpen={isCreateModalOpen}
         onCloseCreateModal={() => setIsCreateModalOpen(false)}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
+        onInvestigationCreated={loadInvestigationsList}
         backendError={initError}
       />
     </MainLayout>
