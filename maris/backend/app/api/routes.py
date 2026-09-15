@@ -71,6 +71,20 @@ from app.services.explainability import (
     generate_explainability_report,
     load_candidate_ranking_from_asset,
 )
+from app.models.investigation_api import (
+    ArtifactSummary,
+    InvestigationCreateRequest,
+    InvestigationListItem,
+    InvestigationResponse,
+    InvestigationRunRequest,
+    InvestigationRunResponse,
+    InvestigationStatusResponse,
+)
+from app.services.investigation_workflow import (
+    default_investigation_store,
+    list_investigation_artifacts,
+    run_investigation_workflow,
+)
 from app.validation.schemas import ValidationResult
 
 router = APIRouter()
@@ -1517,6 +1531,140 @@ def explainability_endpoint(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Explainability report generation failed: {exc}")
+
+
+# ===========================================================================
+# STAGE G1 — Investigation API
+# ===========================================================================
+
+@router.post(
+    "/api/v1/investigations",
+    response_model=InvestigationResponse,
+    status_code=201,
+)
+def create_investigation_endpoint(
+    payload: InvestigationCreateRequest,
+) -> InvestigationResponse:
+    """Stage G1 — Create an investigation from user-supplied context."""
+    inv = default_investigation_store.create(
+        name=payload.name,
+        area_of_interest=payload.area_of_interest,
+        time_window=payload.time_window,
+        description=payload.description,
+        metadata=payload.metadata,
+    )
+    return InvestigationResponse(
+        id=inv.id,
+        name=inv.name,
+        status=inv.status,
+        area_of_interest=inv.area_of_interest,
+        time_window=inv.time_window,
+        created_at=inv.created_at,
+        description=inv.description,
+        metadata=inv.metadata,
+        asset_ids=inv.asset_ids,
+        evidence_ids=inv.evidence_ids,
+    )
+
+
+@router.get(
+    "/api/v1/investigations",
+    response_model=list[InvestigationListItem],
+)
+def list_investigations_endpoint() -> list[InvestigationListItem]:
+    """Stage G1 — Return a deterministic list of investigations with basic metadata."""
+    return default_investigation_store.list()
+
+
+@router.get(
+    "/api/v1/investigations/{investigation_id}",
+    response_model=InvestigationResponse,
+)
+def get_investigation_endpoint(
+    investigation_id: str,
+) -> InvestigationResponse:
+    """Stage G1 — Get structured investigation details."""
+    inv = default_investigation_store.get(investigation_id)
+    if inv is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Investigation '{investigation_id}' not found",
+        )
+    return InvestigationResponse(
+        id=inv.id,
+        name=inv.name,
+        status=inv.status,
+        area_of_interest=inv.area_of_interest,
+        time_window=inv.time_window,
+        created_at=inv.created_at,
+        description=inv.description,
+        metadata=inv.metadata,
+        asset_ids=inv.asset_ids,
+        evidence_ids=inv.evidence_ids,
+    )
+
+
+@router.get(
+    "/api/v1/investigations/{investigation_id}/status",
+    response_model=InvestigationStatusResponse,
+)
+def get_investigation_status_endpoint(
+    investigation_id: str,
+) -> InvestigationStatusResponse:
+    """Stage G1 — Get structured processing state for an investigation."""
+    st = default_investigation_store.get_status(investigation_id)
+    if st is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Investigation '{investigation_id}' not found",
+        )
+    return st
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/run",
+    response_model=InvestigationRunResponse,
+)
+def run_investigation_workflow_endpoint(
+    investigation_id: str,
+    payload: InvestigationRunRequest | None = None,
+) -> InvestigationRunResponse:
+    """Stage G1 — Orchestrate scientific pipeline stages B1 through F3 sequentially."""
+    inv = default_investigation_store.get(investigation_id)
+    if inv is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Investigation '{investigation_id}' not found",
+        )
+    req_payload = payload or InvestigationRunRequest()
+    try:
+        return run_investigation_workflow(
+            investigation_id=investigation_id,
+            payload=req_payload,
+            store=default_investigation_store,
+            registry=default_asset_registry,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Workflow execution failed: {exc}")
+
+
+@router.get(
+    "/api/v1/investigations/{investigation_id}/artifacts",
+    response_model=list[ArtifactSummary],
+)
+def list_investigation_artifacts_endpoint(
+    investigation_id: str,
+) -> list[ArtifactSummary]:
+    """Stage G1 — List artifacts registered in AssetRegistry with provenance and metadata."""
+    inv = default_investigation_store.get(investigation_id)
+    if inv is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Investigation '{investigation_id}' not found",
+        )
+    return list_investigation_artifacts(investigation_id, registry=default_asset_registry)
 
 
 

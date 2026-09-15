@@ -6,11 +6,31 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class InvestigationStatus(str, Enum):
-    DRAFT = "draft"
-    OPEN = "open"
-    IN_REVIEW = "in_review"
-    COMPLETED = "completed"
-    ARCHIVED = "archived"
+    CREATED = "CREATED"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    DRAFT = "DRAFT"
+    OPEN = "OPEN"
+    IN_REVIEW = "IN_REVIEW"
+    ARCHIVED = "ARCHIVED"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            val_upper = value.upper()
+            for member in cls:
+                if member.value == val_upper or member.name == val_upper:
+                    return member
+        return None
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.value.upper() == other.upper()
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(self.value)
 
 
 class AssetType(str, Enum):
