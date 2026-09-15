@@ -65,6 +65,12 @@ from app.services.candidate_ranking import (
     load_evidence_fusion_from_asset,
     rank_candidates,
 )
+from app.models.explainability import ExplainabilityReport, ExplainabilityRequest
+from app.services.explainability import (
+    ExplainabilityError,
+    generate_explainability_report,
+    load_candidate_ranking_from_asset,
+)
 from app.validation.schemas import ValidationResult
 
 router = APIRouter()
@@ -1391,5 +1397,126 @@ def candidate_ranking_endpoint(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Candidate ranking failed: {exc}")
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/explainability",
+    response_model=ExplainabilityReport,
+)
+def explainability_endpoint(
+    investigation_id: str,
+    spill_id: str,
+    payload: ExplainabilityRequest | None = None,
+) -> ExplainabilityReport:
+    """Stage F3 — Explainability & Uncertainty.
+
+    Consumes Stage F2 CandidateRanking output and produces a deterministic,
+    investigator-readable ExplainabilityReport.
+
+    Invariants:
+    - F2 candidate ordering, ranks, and evidence_consistency_scores are strictly preserved.
+    - F3 does NOT recalculate or modify scores or ranking.
+    - Descriptive bands: HIGH (>=0.75), MODERATE (>=0.50), LOW (<0.50), INSUFFICIENT_DATA (None).
+    - Communicates uncertainty through evidence availability and explicit limitations.
+    - NO unsupported confidence percentages or intervals.
+    - Contextual signals (behavioral intelligence, forward drift) contribute 0.00 to score.
+    - Includes mandatory scientific disclaimer on attribution and legal boundaries.
+    """
+    req_payload = payload or ExplainabilityRequest()
+
+    # 1. Validate investigation and spill context
+    spill_asset: Asset | None = None
+    try:
+        s_candidate = default_asset_registry.get(spill_id)
+        if s_candidate.investigation_id == investigation_id:
+            spill_asset = s_candidate
+    except KeyError:
+        pass
+
+    if spill_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == spill_id
+                or asset.provenance.product_id == spill_id
+                or asset.metadata.get("detection_id") == spill_id
+                or asset.metadata.get("spill_id") == spill_id
+                or asset.provenance.extra.get("spill_detection_id") == spill_id
+            ):
+                spill_asset = asset
+                break
+
+    if spill_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill asset or detection '{spill_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # 2. Resolve Stage F2 candidate ranking asset
+    ranking_asset: Asset | None = None
+    if req_payload.candidate_ranking_id:
+        try:
+            r_candidate = default_asset_registry.get(req_payload.candidate_ranking_id)
+            if r_candidate.investigation_id == investigation_id:
+                ranking_asset = r_candidate
+        except KeyError:
+            pass
+
+        if ranking_asset is None:
+            for asset in default_asset_registry.list_for_investigation(investigation_id):
+                extra = asset.provenance.extra or {}
+                if (
+                    asset.id == req_payload.candidate_ranking_id
+                    or asset.provenance.product_id == req_payload.candidate_ranking_id
+                    or extra.get("candidate_ranking_id") == req_payload.candidate_ranking_id
+                    or asset.metadata.get("candidate_ranking_id") == req_payload.candidate_ranking_id
+                    or (asset.type == AssetType.DOCUMENT and req_payload.candidate_ranking_id in str(asset.location))
+                ):
+                    ranking_asset = asset
+                    break
+
+        if ranking_asset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Candidate ranking asset '{req_payload.candidate_ranking_id}' not found for investigation '{investigation_id}'",
+            )
+    else:
+        # Auto-discover latest candidate ranking asset
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            extra = asset.provenance.extra or {}
+            if (
+                asset.type == AssetType.DOCUMENT
+                and (extra.get("asset_type") == "candidate_ranking" or asset.metadata.get("asset_type") == "candidate_ranking")
+                and (extra.get("spill_detection_id") == spill_id or asset.metadata.get("spill_id") == spill_id)
+            ):
+                ranking_asset = asset
+                break
+
+        if ranking_asset is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Candidate ranking asset not found for investigation '{investigation_id}' and spill '{spill_id}'",
+            )
+
+    # 3. Load candidate ranking result
+    try:
+        candidate_ranking = load_candidate_ranking_from_asset(ranking_asset, default_asset_registry)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to load candidate ranking result: {exc}")
+
+    # 4. Generate explainability report
+    try:
+        report, _ = generate_explainability_report(
+            candidate_ranking=candidate_ranking,
+            investigation_id=investigation_id,
+            spill_id=spill_id,
+        )
+        return report
+    except ExplainabilityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Explainability report generation failed: {exc}")
+
 
 
