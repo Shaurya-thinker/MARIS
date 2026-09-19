@@ -23,7 +23,7 @@ export const scenarioDelta: SimulationScenario = {
   name: 'Gulf of Kutch — Scenario Delta',
   region: 'Gulf of Kutch',
   timestamp: '2025-08-18T06:20:00Z',
-  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  satelliteScene: '/satellite/sentinel_gulf_of_kutch_delta.jpg',
   spillGeometry: makePolygon(69.812, 22.764, 0.26, 0.18),
   spillAreaKm2: 16.8,
   sourceZone: makePolygon(69.94, 22.86, 0.18, 0.14),

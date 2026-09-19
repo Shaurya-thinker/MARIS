@@ -23,7 +23,7 @@ export const scenarioBeta: SimulationScenario = {
   name: 'Arabian Sea — Scenario Beta',
   region: 'Arabian Sea',
   timestamp: '2025-04-02T04:12:00Z',
-  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  satelliteScene: '/satellite/sentinel1_arabian_sea_beta.jpg',
   spillGeometry: makePolygon(68.835, 18.318, 0.34, 0.22),
   spillAreaKm2: 23.7,
   sourceZone: makePolygon(68.955, 18.416, 0.24, 0.18),

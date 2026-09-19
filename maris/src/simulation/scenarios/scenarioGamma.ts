@@ -23,7 +23,7 @@ export const scenarioGamma: SimulationScenario = {
   name: 'Bay of Bengal — Scenario Gamma',
   region: 'Bay of Bengal',
   timestamp: '2025-06-07T05:30:00Z',
-  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  satelliteScene: '/satellite/sentinel_bay_of_bengal_gamma.jpg',
   spillGeometry: makePolygon(89.162, 18.944, 0.28, 0.18),
   spillAreaKm2: 21.1,
   sourceZone: makePolygon(89.276, 19.026, 0.2, 0.16),

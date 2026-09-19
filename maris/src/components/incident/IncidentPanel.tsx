@@ -171,9 +171,9 @@ export function IncidentPanel({
             alt={simulationScenario.name}
           />
           <dl className="info-list">
-            <InfoRow label="Source" value="Synthetic SAR scene" />
+            <InfoRow label="Source" value="Reference SAR imagery" />
             <InfoRow label="Acquisition" value={simulationScenario.timestamp} />
-            <InfoRow label="Scene status" value="Simulation evidence loaded" />
+            <InfoRow label="Scene status" value="Reference imagery loaded; simulation overlays are synthetic" />
           </dl>
         </section>
 

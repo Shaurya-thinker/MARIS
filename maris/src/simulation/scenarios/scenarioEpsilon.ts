@@ -23,7 +23,7 @@ export const scenarioEpsilon: SimulationScenario = {
   name: 'Mediterranean — Scenario Epsilon',
   region: 'Mediterranean',
   timestamp: '2025-09-11T06:45:00Z',
-  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  satelliteScene: '/satellite/sentinel1_mediterranean_epsilon.jpg',
   spillGeometry: makePolygon(14.786, 35.926, 0.24, 0.18),
   spillAreaKm2: 19.5,
   sourceZone: makePolygon(14.922, 35.998, 0.2, 0.14),
