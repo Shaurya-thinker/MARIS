@@ -1,4 +1,5 @@
 import { Bell, CircleDot, Plus, Radio, ShieldAlert } from 'lucide-react'
+import type { SimulationScenario } from '../../simulation/simulationTypes'
 import type { InvestigationListItem, InvestigationStatus } from '../../types/investigationApi'
 
 interface HeaderProps {
@@ -6,7 +7,9 @@ interface HeaderProps {
   investigations: InvestigationListItem[]
   activeStatus?: InvestigationStatus
   isDemoMode: boolean
+  isSimulationMode: boolean
   isBackendUnavailable?: boolean
+  simulationScenarios: SimulationScenario[]
   onSelectInvestigation: (id: string) => void
   onOpenCreateModal: () => void
 }
@@ -16,11 +19,14 @@ export function Header({
   investigations,
   activeStatus,
   isDemoMode,
+  isSimulationMode,
   isBackendUnavailable,
+  simulationScenarios,
   onSelectInvestigation,
   onOpenCreateModal,
 }: HeaderProps) {
   function getStatusLabel() {
+    if (isSimulationMode) return 'Simulation Mode'
     if (isDemoMode) return 'Historical Demo'
     if (isBackendUnavailable) return 'Backend Offline'
     if (!activeStatus) return investigations.length === 0 ? 'No Investigations' : 'Connected'
@@ -28,6 +34,7 @@ export function Header({
   }
 
   function getStatusClass() {
+    if (isSimulationMode) return 'system-status--processing'
     if (isDemoMode) return 'system-status--demo'
     if (isBackendUnavailable) return 'system-status--failed'
     switch (activeStatus) {
@@ -76,6 +83,13 @@ export function Header({
                 {isBackendUnavailable ? '(Backend service unavailable)' : '(No live investigations registered)'}
               </option>
             )}
+          </optgroup>
+          <optgroup label="Simulation Investigations">
+            {simulationScenarios.map((scenario) => (
+              <option key={scenario.id} value={`simulation-${scenario.id}`}>
+                {scenario.name}
+              </option>
+            ))}
           </optgroup>
           <optgroup label="Explicit Historical / Demo Cases">
             <option value="corsica-2018-demo">Corsica 2018 Demo (Historical Reconstructed Case)</option>

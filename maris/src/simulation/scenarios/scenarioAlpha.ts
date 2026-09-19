@@ -1,0 +1,111 @@
+import type { SimulationScenario } from '../simulationTypes'
+
+const makePolygon = (centerLon: number, centerLat: number, width: number, height: number) => ({
+  type: 'Polygon' as const,
+  coordinates: [[
+    [centerLon - width, centerLat - height],
+    [centerLon + width, centerLat - height],
+    [centerLon + width, centerLat + height],
+    [centerLon - width, centerLat + height],
+    [centerLon - width, centerLat - height],
+  ]],
+})
+
+const makeTrack = (seedLon: number, seedLat: number, step: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    timestamp: `2025-03-15T${String(2 + index).padStart(2, '0')}:20:00Z`,
+    longitude: Number((seedLon + index * step).toFixed(4)),
+    latitude: Number((seedLat + index * (step / 4)).toFixed(4)),
+  }))
+
+export const scenarioAlpha: SimulationScenario = {
+  id: 'alpha',
+  name: 'Arabian Sea — Scenario Alpha',
+  region: 'Arabian Sea',
+  timestamp: '2025-03-15T05:42:00Z',
+  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  spillGeometry: makePolygon(66.198, 15.642, 0.3, 0.2),
+  spillAreaKm2: 18.4,
+  sourceZone: makePolygon(66.312, 15.726, 0.22, 0.18),
+  environmentalDrift: {
+    wind: 'NE 18 kn',
+    current: 'NE set 0.9 kn',
+    displacementKm: 22.3,
+    bearing: 'ENE',
+    sourceZone: 'Offshore cargo corridor',
+  },
+  vesselTracks: [
+    { id: 'vessel-alpha-1', label: 'Simulated Vessel Track', color: '#7dd3fc', route: makeTrack(66.08, 15.51, 0.04, 6) },
+    { id: 'vessel-alpha-2', label: 'Simulated Avoidance Path', color: '#fbbf24', route: makeTrack(66.42, 15.81, -0.025, 6) },
+    { id: 'vessel-alpha-3', label: 'Scenario Spill Zone', color: '#f97316', route: makeTrack(66.25, 15.68, 0.015, 5) },
+  ],
+  candidateVessels: [
+    {
+      id: 'alpha-candidate-1',
+      name: 'MV Saffron Tide',
+      mmsi: '473005400',
+      imo: '9635418',
+      vesselType: 'Bulk Carrier',
+      color: '#7dd3fc',
+      track: makeTrack(66.08, 15.51, 0.04, 6),
+      candidateScore: 0.87,
+      isCandidate: true,
+      spatialConsistency: 0.92,
+      temporalConsistency: 0.84,
+      trajectoryConsistency: 0.88,
+      note: 'Nearest consistent track to the spill origin and drift corridor.',
+    },
+    {
+      id: 'alpha-candidate-2',
+      name: 'MV Harbor Crest',
+      mmsi: '413440790',
+      imo: '9721142',
+      vesselType: 'Tanker',
+      color: '#fbbf24',
+      track: makeTrack(66.2, 15.75, 0.02, 5),
+      candidateScore: 0.71,
+      isCandidate: true,
+      spatialConsistency: 0.74,
+      temporalConsistency: 0.72,
+      trajectoryConsistency: 0.68,
+      note: 'Alternate vessel with partial trajectory alignment but stronger avoidance indications.',
+    },
+    {
+      id: 'alpha-candidate-3',
+      name: 'MV Blue Dune',
+      mmsi: '417910220',
+      imo: '9811084',
+      vesselType: 'Container',
+      color: '#86efac',
+      track: makeTrack(66.45, 15.82, -0.03, 6),
+      candidateScore: 0.48,
+      isCandidate: false,
+      spatialConsistency: 0.35,
+      temporalConsistency: 0.52,
+      trajectoryConsistency: 0.49,
+      note: 'Only weak alignment with the spill zone and drift path.',
+    },
+  ],
+  evidenceSummary: {
+    spatial: 0.88,
+    temporal: 0.81,
+    trajectory: 0.86,
+    availability: '4 / 5 channels',
+    primaryFinding: 'Strong proximity and directional alignment with the induced slick drift corridor.',
+  },
+  analysis: {
+    spill: 'A synthetic spill anomaly is identified as a compact dark patch along a crowded merchant route near the offshore corridor.',
+    drift: 'Wind and current alignment are consistent with a north-eastward drift of roughly 22 km over the observed window.',
+    vesselCorrelation: 'MV Saffron Tide demonstrates the strongest spatial and temporal match with the spill geometry and drift footprint.',
+    final: 'The simulation indicates a probable source near the offshore route with strong correlation to the vessel that tracks closest to the origin zone.',
+  },
+  finalExplanation: 'The demonstration scenario shows a compact slick at the offshore corridor, which drifts with the prevailing current and narrows the most likely vessel to one operating close to the source zone during the spill window. This outcome is a synthetic review only and is not a real-world attribution.',
+  databaseSummary: {
+    region: 'Arabian Sea',
+    timeWindow: '2025-03-15 02:00Z – 06:00Z',
+    searchRadiusKm: 45,
+    simulatedRecordsFound: 47,
+    spatiallyRelevant: 12,
+    candidateVessels: 5,
+  },
+}

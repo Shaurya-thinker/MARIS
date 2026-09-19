@@ -5,6 +5,7 @@ import { InvestigationWorkspace } from './components/layout/InvestigationWorkspa
 import { MainLayout } from './components/layout/MainLayout'
 import { WorkspaceErrorBoundary } from './components/layout/WorkspaceErrorBoundary'
 import { listInvestigations } from './api/investigationApi'
+import { getSimulationScenarioById, simulationScenarios } from './simulation/simulationEngine'
 import type { InvestigationListItem } from './types/investigationApi'
 
 export function App() {
@@ -45,7 +46,11 @@ export function App() {
   }, [loadInvestigationsList])
 
   const isDemoMode = activeInvestigationId === 'corsica-2018-demo'
+  const isSimulationMode = activeInvestigationId.startsWith('simulation-')
   const activeListItem = investigations.find((i) => i.id === activeInvestigationId)
+  const activeSimulationScenario = isSimulationMode
+    ? getSimulationScenarioById(activeInvestigationId.replace('simulation-', '')) ?? null
+    : null
 
   return (
     <MainLayout>
@@ -54,7 +59,9 @@ export function App() {
         investigations={investigations}
         activeStatus={activeListItem?.status}
         isDemoMode={isDemoMode}
+        isSimulationMode={isSimulationMode}
         isBackendUnavailable={Boolean(initError)}
+        simulationScenarios={simulationScenarios}
         onSelectInvestigation={setActiveInvestigationId}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
       />
@@ -83,6 +90,8 @@ export function App() {
         <InvestigationWorkspace
           activeId={activeInvestigationId}
           isDemoMode={isDemoMode}
+          isSimulationMode={isSimulationMode}
+          simulationScenario={activeSimulationScenario}
           investigations={investigations}
           onSelectInvestigation={setActiveInvestigationId}
           isCreateModalOpen={isCreateModalOpen}

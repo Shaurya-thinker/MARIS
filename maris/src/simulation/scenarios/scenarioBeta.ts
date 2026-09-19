@@ -1,0 +1,111 @@
+import type { SimulationScenario } from '../simulationTypes'
+
+const makePolygon = (centerLon: number, centerLat: number, width: number, height: number) => ({
+  type: 'Polygon' as const,
+  coordinates: [[
+    [centerLon - width, centerLat - height],
+    [centerLon + width, centerLat - height],
+    [centerLon + width, centerLat + height],
+    [centerLon - width, centerLat + height],
+    [centerLon - width, centerLat - height],
+  ]],
+})
+
+const makeTrack = (seedLon: number, seedLat: number, step: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    timestamp: `2025-04-02T${String(1 + index).padStart(2, '0')}:50:00Z`,
+    longitude: Number((seedLon + index * step).toFixed(4)),
+    latitude: Number((seedLat + index * (step / 3.2)).toFixed(4)),
+  }))
+
+export const scenarioBeta: SimulationScenario = {
+  id: 'beta',
+  name: 'Arabian Sea — Scenario Beta',
+  region: 'Arabian Sea',
+  timestamp: '2025-04-02T04:12:00Z',
+  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  spillGeometry: makePolygon(68.835, 18.318, 0.34, 0.22),
+  spillAreaKm2: 23.7,
+  sourceZone: makePolygon(68.955, 18.416, 0.24, 0.18),
+  environmentalDrift: {
+    wind: 'ESE 14 kn',
+    current: 'SE set 0.7 kn',
+    displacementKm: 17.8,
+    bearing: 'SE',
+    sourceZone: 'Port approach lane',
+  },
+  vesselTracks: [
+    { id: 'vessel-beta-1', label: 'Simulated Vessel Track', color: '#a5f3fc', route: makeTrack(68.68, 18.14, 0.028, 7) },
+    { id: 'vessel-beta-2', label: 'Simulated Avoidance Path', color: '#f59e0b', route: makeTrack(69.05, 18.45, -0.02, 6) },
+    { id: 'vessel-beta-3', label: 'Scenario Spill Zone', color: '#fb7185', route: makeTrack(68.91, 18.36, 0.018, 5) },
+  ],
+  candidateVessels: [
+    {
+      id: 'beta-candidate-1',
+      name: 'MV Mariner Pearl',
+      mmsi: '456221140',
+      imo: '9781249',
+      vesselType: 'Product Tanker',
+      color: '#a5f3fc',
+      track: makeTrack(68.68, 18.14, 0.028, 7),
+      candidateScore: 0.9,
+      isCandidate: true,
+      spatialConsistency: 0.93,
+      temporalConsistency: 0.87,
+      trajectoryConsistency: 0.9,
+      note: 'Strong match to source-zone timing and drift trajectory.',
+    },
+    {
+      id: 'beta-candidate-2',
+      name: 'MV Delta Arrow',
+      mmsi: '248991100',
+      imo: '9640083',
+      vesselType: 'General Cargo',
+      color: '#f59e0b',
+      track: makeTrack(68.81, 18.27, 0.012, 6),
+      candidateScore: 0.76,
+      isCandidate: true,
+      spatialConsistency: 0.68,
+      temporalConsistency: 0.8,
+      trajectoryConsistency: 0.79,
+      note: 'Moderate alignment but offset from the strongest drift lane.',
+    },
+    {
+      id: 'beta-candidate-3',
+      name: 'MV Rayan Reach',
+      mmsi: '232804700',
+      imo: '9728841',
+      vesselType: 'Container',
+      color: '#4ade80',
+      track: makeTrack(69.1, 18.52, -0.025, 6),
+      candidateScore: 0.46,
+      isCandidate: false,
+      spatialConsistency: 0.38,
+      temporalConsistency: 0.44,
+      trajectoryConsistency: 0.5,
+      note: 'Broad diversion path and weak spatial alignment.',
+    },
+  ],
+  evidenceSummary: {
+    spatial: 0.9,
+    temporal: 0.83,
+    trajectory: 0.88,
+    availability: '5 / 5 channels',
+    primaryFinding: 'The candidate lane sits squarely within the drift window and source-zone transit path.',
+  },
+  analysis: {
+    spill: 'The slick appears near an established export route with a compact footprint and a clear drift vector to the south-east.',
+    drift: 'The environmental forcing points to a sustained movement consistent with an off-port spill response and a trapped slick corridor.',
+    vesselCorrelation: 'MV Mariner Pearl remains the closest match in both track position and timing relative to the drift corridor.',
+    final: 'The scenario supports a narrow assignment to the tanker transiting the source corridor and aligning with the expected drift path.',
+  },
+  finalExplanation: 'This synthetic review follows the same pattern as a live case, using a source-zone estimate and vessel-track correlation to isolate the most likely vessel from a short list. It remains an evaluation demo and not a real-world legal attribution.',
+  databaseSummary: {
+    region: 'Arabian Sea',
+    timeWindow: '2025-04-02 01:30Z – 05:30Z',
+    searchRadiusKm: 52,
+    simulatedRecordsFound: 52,
+    spatiallyRelevant: 14,
+    candidateVessels: 5,
+  },
+}

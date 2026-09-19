@@ -1,0 +1,111 @@
+import type { SimulationScenario } from '../simulationTypes'
+
+const makePolygon = (centerLon: number, centerLat: number, width: number, height: number) => ({
+  type: 'Polygon' as const,
+  coordinates: [[
+    [centerLon - width, centerLat - height],
+    [centerLon + width, centerLat - height],
+    [centerLon + width, centerLat + height],
+    [centerLon - width, centerLat + height],
+    [centerLon - width, centerLat - height],
+  ]],
+})
+
+const makeTrack = (seedLon: number, seedLat: number, step: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    timestamp: `2025-08-18T${String(4 + index).padStart(2, '0')}:10:00Z`,
+    longitude: Number((seedLon + index * step).toFixed(4)),
+    latitude: Number((seedLat + index * (step / 4.2)).toFixed(4)),
+  }))
+
+export const scenarioDelta: SimulationScenario = {
+  id: 'delta',
+  name: 'Gulf of Kutch — Scenario Delta',
+  region: 'Gulf of Kutch',
+  timestamp: '2025-08-18T06:20:00Z',
+  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  spillGeometry: makePolygon(69.812, 22.764, 0.26, 0.18),
+  spillAreaKm2: 16.8,
+  sourceZone: makePolygon(69.94, 22.86, 0.18, 0.14),
+  environmentalDrift: {
+    wind: 'WNW 12 kn',
+    current: 'NW set 0.6 kn',
+    displacementKm: 15.1,
+    bearing: 'NW',
+    sourceZone: 'Shallow tanker entry lane',
+  },
+  vesselTracks: [
+    { id: 'vessel-delta-1', label: 'Simulated Vessel Track', color: '#93c5fd', route: makeTrack(69.68, 22.52, 0.031, 7) },
+    { id: 'vessel-delta-2', label: 'Simulated Avoidance Path', color: '#f59e0b', route: makeTrack(70.02, 22.98, -0.022, 6) },
+    { id: 'vessel-delta-3', label: 'Scenario Spill Zone', color: '#fb7185', route: makeTrack(69.84, 22.74, 0.013, 5) },
+  ],
+  candidateVessels: [
+    {
+      id: 'delta-candidate-1',
+      name: 'MV Kutch Horizon',
+      mmsi: '514990430',
+      imo: '9762215',
+      vesselType: 'Cargo',
+      color: '#93c5fd',
+      track: makeTrack(69.68, 22.52, 0.031, 7),
+      candidateScore: 0.85,
+      isCandidate: true,
+      spatialConsistency: 0.88,
+      temporalConsistency: 0.84,
+      trajectoryConsistency: 0.82,
+      note: 'Closest alignment with the expected slick movement and entry lane.',
+    },
+    {
+      id: 'delta-candidate-2',
+      name: 'MV Pearl Drift',
+      mmsi: '465330440',
+      imo: '9714424',
+      vesselType: 'Tanker',
+      color: '#f59e0b',
+      track: makeTrack(69.92, 22.72, 0.012, 6),
+      candidateScore: 0.73,
+      isCandidate: true,
+      spatialConsistency: 0.66,
+      temporalConsistency: 0.79,
+      trajectoryConsistency: 0.73,
+      note: 'Moderately consistent but more offset from the source corridor.',
+    },
+    {
+      id: 'delta-candidate-3',
+      name: 'MV Northern Current',
+      mmsi: '210004500',
+      imo: '9806098',
+      vesselType: 'Barge',
+      color: '#34d399',
+      track: makeTrack(70.15, 23.12, -0.024, 5),
+      candidateScore: 0.39,
+      isCandidate: false,
+      spatialConsistency: 0.27,
+      temporalConsistency: 0.41,
+      trajectoryConsistency: 0.4,
+      note: 'Weak overlap; route sits outside the source zone and drift envelope.',
+    },
+  ],
+  evidenceSummary: {
+    spatial: 0.84,
+    temporal: 0.77,
+    trajectory: 0.8,
+    availability: '4 / 5 channels',
+    primaryFinding: 'The leading candidate aligns with the source entry lane and the north-west drift corridor after detection.',
+  },
+  analysis: {
+    spill: 'A narrow slick is reconstructed in a shallow coastal approach where vessel traffic and local drift are both active.',
+    drift: 'North-west drift and local current conditions steer the spill away from the corridor while preserving a consistent source window.',
+    vesselCorrelation: 'MV Kutch Horizon matches the observed drift footprint and the narrow source window more closely than nearby traffic.',
+    final: 'The scenario favors the cargo vessel nearest the source-zone transit lane, while still keeping the demo disclaimer clearly in place.',
+  },
+  finalExplanation: 'This evidence-fusion exercise shows how a source-zone estimate and vessel-track correlation can isolate the best-fitting candidate before a final explanatory summary. It is a deterministic demo, not a real-world operational attribution.',
+  databaseSummary: {
+    region: 'Gulf of Kutch',
+    timeWindow: '2025-08-18 02:30Z – 06:30Z',
+    searchRadiusKm: 40,
+    simulatedRecordsFound: 38,
+    spatiallyRelevant: 10,
+    candidateVessels: 5,
+  },
+}

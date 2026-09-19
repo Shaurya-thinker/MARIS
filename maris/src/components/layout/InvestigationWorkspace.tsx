@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import { candidateVessels as demoCandidateVessels, incidentData as demoIncidentData, pipelineStages as demoPipelineStages } from '../../data/demoData'
+import { createSimulationInvestigation, SIMULATION_STAGE_SEQUENCE } from '../../simulation/simulationEngine'
+import type { SimulationScenario } from '../../simulation/simulationTypes'
 import { AnalysisPanel } from '../analysis/AnalysisPanel'
 import { CreateInvestigationModal } from '../incident/CreateInvestigationModal'
 import { IncidentPanel } from '../incident/IncidentPanel'
@@ -78,6 +80,8 @@ export function InvestigationWorkspace({
 }: {
   activeId: string
   isDemoMode: boolean
+  isSimulationMode: boolean
+  simulationScenario: SimulationScenario | null
   investigations: InvestigationListItem[]
   onSelectInvestigation: (id: string) => void
   isCreateModalOpen: boolean
@@ -106,6 +110,7 @@ export function InvestigationWorkspace({
   const [playbackActive, setPlaybackActive] = useState(false)
   const [playbackPlaying, setPlaybackPlaying] = useState(false)
   const [playbackStage, setPlaybackStage] = useState(0)
+  const [simulationTimeline, setSimulationTimeline] = useState(SIMULATION_STAGE_SEQUENCE)
 
   function toggleLayer(layer: 'spill' | 'drift' | 'vessels') {
     setLayers((current) => ({ ...current, [layer]: !current[layer] }))
@@ -116,7 +121,7 @@ export function InvestigationWorkspace({
 
   // Load investigation details when activeId changes
   useEffect(() => {
-    if (isDemoMode) {
+    if (isDemoMode || isSimulationMode) {
       setActiveInvestigation(null)
       setStatusResponse(null)
       setArtifacts([])
@@ -124,6 +129,9 @@ export function InvestigationWorkspace({
       setExplainabilityReport(null)
       setSelectedCandidate(demoCandidateVessels[0].id)
       setApiError(null)
+      if (simulationScenario) {
+        setSimulationTimeline(createSimulationInvestigation('Simulation Investigation', simulationScenario.id, simulationScenario).stageSequence)
+      }
       return
     }
 
@@ -352,7 +360,21 @@ export function InvestigationWorkspace({
   }
 
   // Handle new investigation creation and list refresh
-  async function handleCreate(payload: InvestigationCreateRequest) {
+  async function handleCreate(payload: InvestigationCreateRequest | { mode: 'SIMULATION'; scenarioId: string; name: string; region: string; timestamp: string; scenario: SimulationScenario }) {
+    if ('mode' in payload && payload.mode === 'SIMULATION') {
+      const created = createSimulationInvestigation(payload.name, payload.scenarioId, payload.scenario)
+      setSimulationTimeline(created.stageSequence)
+      setPlaybackActive(true)
+      setPlaybackPlaying(true)
+      setPlaybackStage(0)
+      if (onInvestigationCreated) {
+        await onInvestigationCreated()
+      }
+      onSelectInvestigation(created.id)
+      onCloseCreateModal()
+      return
+    }
+
     const created = await createInvestigation(payload)
     if (onInvestigationCreated) {
       await onInvestigationCreated()
@@ -378,7 +400,7 @@ export function InvestigationWorkspace({
   )
   const liveSourceZoneGeometry = (sourceZoneArtifact?.metadata?.geometry as Record<string, unknown> | undefined) || null
 
-  const visibleLayers = isDemoMode && playbackActive
+  const visibleLayers = (isDemoMode || isSimulationMode) && playbackActive
     ? {
         spill: layers.spill && playbackStage >= 1,
         drift: layers.drift && playbackStage >= 2,
@@ -386,7 +408,7 @@ export function InvestigationWorkspace({
       }
     : layers
 
-  const visiblePipelineStages = isDemoMode && playbackActive
+  const visiblePipelineStages = (isDemoMode || isSimulationMode) && playbackActive
     ? getPrototypePipelineStages(playbackStage)
     : demoPipelineStages
 

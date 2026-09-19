@@ -1,0 +1,111 @@
+import type { SimulationScenario } from '../simulationTypes'
+
+const makePolygon = (centerLon: number, centerLat: number, width: number, height: number) => ({
+  type: 'Polygon' as const,
+  coordinates: [[
+    [centerLon - width, centerLat - height],
+    [centerLon + width, centerLat - height],
+    [centerLon + width, centerLat + height],
+    [centerLon - width, centerLat + height],
+    [centerLon - width, centerLat - height],
+  ]],
+})
+
+const makeTrack = (seedLon: number, seedLat: number, step: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    timestamp: `2025-09-11T${String(3 + index).padStart(2, '0')}:18:00Z`,
+    longitude: Number((seedLon + index * step).toFixed(4)),
+    latitude: Number((seedLat + index * (step / 4.6)).toFixed(4)),
+  }))
+
+export const scenarioEpsilon: SimulationScenario = {
+  id: 'epsilon',
+  name: 'Mediterranean — Scenario Epsilon',
+  region: 'Mediterranean',
+  timestamp: '2025-09-11T06:45:00Z',
+  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  spillGeometry: makePolygon(14.786, 35.926, 0.24, 0.18),
+  spillAreaKm2: 19.5,
+  sourceZone: makePolygon(14.922, 35.998, 0.2, 0.14),
+  environmentalDrift: {
+    wind: 'ENE 16 kn',
+    current: 'NE set 1.0 kn',
+    displacementKm: 25.2,
+    bearing: 'NE',
+    sourceZone: 'Northern transit corridor',
+  },
+  vesselTracks: [
+    { id: 'vessel-epsilon-1', label: 'Simulated Vessel Track', color: '#a7f3d0', route: makeTrack(14.62, 35.78, 0.035, 7) },
+    { id: 'vessel-epsilon-2', label: 'Simulated Avoidance Path', color: '#fbbf24', route: makeTrack(15.12, 36.1, -0.02, 6) },
+    { id: 'vessel-epsilon-3', label: 'Scenario Spill Zone', color: '#f97316', route: makeTrack(14.8, 35.92, 0.014, 5) },
+  ],
+  candidateVessels: [
+    {
+      id: 'epsilon-candidate-1',
+      name: 'MV Asterion',
+      mmsi: '255704000',
+      imo: '9780408',
+      vesselType: 'Container',
+      color: '#a7f3d0',
+      track: makeTrack(14.62, 35.78, 0.035, 7),
+      candidateScore: 0.91,
+      isCandidate: true,
+      spatialConsistency: 0.92,
+      temporalConsistency: 0.88,
+      trajectoryConsistency: 0.91,
+      note: 'Nearly perfect alignment with the source corridor and drift direction.',
+    },
+    {
+      id: 'epsilon-candidate-2',
+      name: 'MV Libeccio',
+      mmsi: '246202900',
+      imo: '9758811',
+      vesselType: 'Bulk Carrier',
+      color: '#fbbf24',
+      track: makeTrack(14.76, 35.92, 0.013, 6),
+      candidateScore: 0.74,
+      isCandidate: true,
+      spatialConsistency: 0.71,
+      temporalConsistency: 0.73,
+      trajectoryConsistency: 0.76,
+      note: 'Secondary vessel with moderate correlation and a larger offset from the source zone.',
+    },
+    {
+      id: 'epsilon-candidate-3',
+      name: 'MV Harbor Light',
+      mmsi: '257009000',
+      imo: '9721146',
+      vesselType: 'Passenger',
+      color: '#60a5fa',
+      track: makeTrack(15.18, 36.14, -0.025, 6),
+      candidateScore: 0.42,
+      isCandidate: false,
+      spatialConsistency: 0.32,
+      temporalConsistency: 0.49,
+      trajectoryConsistency: 0.39,
+      note: 'Track remains too far from the spill and source-zone corridor.',
+    },
+  ],
+  evidenceSummary: {
+    spatial: 0.89,
+    temporal: 0.85,
+    trajectory: 0.9,
+    availability: '5 / 5 channels',
+    primaryFinding: 'Strong evidence of a vessel operating in the northern corridor with drift conditions matching the synthetic spill movement.',
+  },
+  analysis: {
+    spill: 'The synthetic oil slick appears as a focused patch in a narrow marine corridor with a strong north-east alignment.',
+    drift: 'A north-east drift and persistent wind forcing explain the observed displacement and the source estimate near the corridor center.',
+    vesselCorrelation: 'MV Asterion is the leading candidate because it tracks closest to the reconstructed origin and drift trajectory.',
+    final: 'The scenario demonstrates a strong but synthetic match between the vessel track and the spill drift footprint, while still labelled as demo-only.',
+  },
+  finalExplanation: 'The Mediterranean example demonstrates the final narrative output of the simulation: clear candidate ranking, explanatory text, and a visible drift-model storyline. This is deliberately a front-end demo and not an operational or scientific conclusion.',
+  databaseSummary: {
+    region: 'Mediterranean',
+    timeWindow: '2025-09-11 01:30Z – 06:30Z',
+    searchRadiusKm: 50,
+    simulatedRecordsFound: 49,
+    spatiallyRelevant: 13,
+    candidateVessels: 5,
+  },
+}

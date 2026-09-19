@@ -1,0 +1,111 @@
+import type { SimulationScenario } from '../simulationTypes'
+
+const makePolygon = (centerLon: number, centerLat: number, width: number, height: number) => ({
+  type: 'Polygon' as const,
+  coordinates: [[
+    [centerLon - width, centerLat - height],
+    [centerLon + width, centerLat - height],
+    [centerLon + width, centerLat + height],
+    [centerLon - width, centerLat + height],
+    [centerLon - width, centerLat - height],
+  ]],
+})
+
+const makeTrack = (seedLon: number, seedLat: number, step: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    timestamp: `2025-06-07T${String(3 + index).padStart(2, '0')}:25:00Z`,
+    longitude: Number((seedLon + index * step).toFixed(4)),
+    latitude: Number((seedLat + index * (step / 3.8)).toFixed(4)),
+  }))
+
+export const scenarioGamma: SimulationScenario = {
+  id: 'gamma',
+  name: 'Bay of Bengal — Scenario Gamma',
+  region: 'Bay of Bengal',
+  timestamp: '2025-06-07T05:30:00Z',
+  satelliteScene: '/satellite/corsica_2018_s1.jpg',
+  spillGeometry: makePolygon(89.162, 18.944, 0.28, 0.18),
+  spillAreaKm2: 21.1,
+  sourceZone: makePolygon(89.276, 19.026, 0.2, 0.16),
+  environmentalDrift: {
+    wind: 'SSW 11 kn',
+    current: 'SW set 0.8 kn',
+    displacementKm: 19.3,
+    bearing: 'SW',
+    sourceZone: 'Monsoon steerage lane',
+  },
+  vesselTracks: [
+    { id: 'vessel-gamma-1', label: 'Simulated Vessel Track', color: '#67e8f9', route: makeTrack(89.02, 18.62, 0.036, 7) },
+    { id: 'vessel-gamma-2', label: 'Simulated Avoidance Path', color: '#facc15', route: makeTrack(89.52, 19.06, -0.026, 6) },
+    { id: 'vessel-gamma-3', label: 'Scenario Spill Zone', color: '#f97316', route: makeTrack(89.17, 18.94, 0.013, 5) },
+  ],
+  candidateVessels: [
+    {
+      id: 'gamma-candidate-1',
+      name: 'MV Cyclone Passage',
+      mmsi: '563209410',
+      imo: '9785120',
+      vesselType: 'Bulk Carrier',
+      color: '#67e8f9',
+      track: makeTrack(89.02, 18.62, 0.036, 7),
+      candidateScore: 0.89,
+      isCandidate: true,
+      spatialConsistency: 0.9,
+      temporalConsistency: 0.87,
+      trajectoryConsistency: 0.89,
+      note: 'Best match to the drift vector and source-zone transit window.',
+    },
+    {
+      id: 'gamma-candidate-2',
+      name: 'MV Madras Crest',
+      mmsi: '282210000',
+      imo: '9731142',
+      vesselType: 'Tanker',
+      color: '#facc15',
+      track: makeTrack(89.22, 18.81, 0.017, 6),
+      candidateScore: 0.72,
+      isCandidate: true,
+      spatialConsistency: 0.7,
+      temporalConsistency: 0.75,
+      trajectoryConsistency: 0.69,
+      note: 'Crossing drift lane with moderate overlap but offset from the source zone.',
+    },
+    {
+      id: 'gamma-candidate-3',
+      name: 'MV East Anchor',
+      mmsi: '477499500',
+      imo: '9718128',
+      vesselType: 'RoRo',
+      color: '#34d399',
+      track: makeTrack(89.57, 19.25, -0.03, 6),
+      candidateScore: 0.44,
+      isCandidate: false,
+      spatialConsistency: 0.3,
+      temporalConsistency: 0.48,
+      trajectoryConsistency: 0.43,
+      note: 'Diversion route outside the source and drift corridor.',
+    },
+  ],
+  evidenceSummary: {
+    spatial: 0.87,
+    temporal: 0.8,
+    trajectory: 0.84,
+    availability: '4 / 5 channels',
+    primaryFinding: 'The most consistent candidate follows the source corridor and disperses with the monsoon drift pattern.',
+  },
+  analysis: {
+    spill: 'A dark surface signature with a moderate footprint is found in a shipping lane subject to southwest monsoon drift.',
+    drift: 'The reconstructed environmental forcing moves the slick toward the south-west, consistent with the scenario’s meteorology and vessel timing.',
+    vesselCorrelation: 'MV Cyclone Passage provides the clearest track coincidence with the source-zone estimate and spill timing.',
+    final: 'This synthetic sector assessment identifies one vessel as the leading candidate while leaving the broader attribution narrative clearly marked as demo-only.',
+  },
+  finalExplanation: 'The synthetic explanation combines a widened spill footprint with a monsoon-driven drift estimate to rank the vessel closest to the source corridor. It is intentionally designed for demo review and not for operational attribution.',
+  databaseSummary: {
+    region: 'Bay of Bengal',
+    timeWindow: '2025-06-07 02:00Z – 06:00Z',
+    searchRadiusKm: 48,
+    simulatedRecordsFound: 44,
+    spatiallyRelevant: 11,
+    candidateVessels: 5,
+  },
+}
