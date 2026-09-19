@@ -8,9 +8,12 @@ import type {
   RankedCandidate,
 } from '../../types/investigationApi'
 import { PrototypeAiAnalysis } from '../../prototype/PrototypeAiAnalysis'
+import type { SimulationScenario } from '../../simulation/simulationTypes'
 
 interface AnalysisPanelProps {
   isDemoMode: boolean
+  isSimulationMode?: boolean
+  simulationScenario?: SimulationScenario | null
   demoIncident: IncidentData
   demoCandidates: CandidateAttribution[]
   selectedCandidate: string
@@ -79,6 +82,8 @@ function DemoAttributionFactors({ candidate }: { candidate: CandidateAttribution
 
 export function AnalysisPanel({
   isDemoMode,
+  isSimulationMode = false,
+  simulationScenario,
   demoIncident,
   demoCandidates,
   selectedCandidate,
@@ -166,6 +171,78 @@ export function AnalysisPanel({
                   <ChevronRight size={15} />
                 </span>
                 <DemoAttributionFactors candidate={candidate} />
+              </button>
+            ))}
+          </div>
+        </section>
+      </aside>
+    )
+  }
+
+  if (isSimulationMode && simulationScenario) {
+    return (
+      <aside className="panel analysis-panel" aria-label="Investigation analysis">
+        <div className="panel-heading">
+          <div>
+            <span className="section-kicker">Simulation Analysis</span>
+            <h2>{simulationScenario.name}</h2>
+          </div>
+          <Compass size={18} className="heading-icon" aria-hidden="true" />
+        </div>
+
+        <section className="panel-section compact-section">
+          <div className="section-title-line">
+            <h3>Spill evidence</h3>
+            <CircleAlert size={15} aria-hidden="true" />
+          </div>
+          <div className="metric-grid">
+            <Metric label="Detection" value="Synthetic spill anomaly" tone="metric--accent" />
+            <Metric label="Area" value={`${simulationScenario.spillAreaKm2.toFixed(1)} km²`} />
+            <Metric label="Drift" value={`${simulationScenario.environmentalDrift.displacementKm.toFixed(1)} km`} />
+            <Metric label="Bearing" value={simulationScenario.environmentalDrift.bearing} />
+            <Metric label="Confidence" value={`${Math.round(simulationScenario.evidenceSummary.spatial * 100)}%`} tone="metric--accent" />
+          </div>
+        </section>
+
+        <section className="panel-section compact-section">
+          <div className="section-title-line">
+            <h3>Source and drift</h3>
+            <Crosshair size={15} aria-hidden="true" />
+          </div>
+          <div className="metric-grid">
+            <Metric label="Wind" value={simulationScenario.environmentalDrift.wind} />
+            <Metric label="Current" value={simulationScenario.environmentalDrift.current} />
+            <Metric label="Source zone" value={simulationScenario.environmentalDrift.sourceZone} />
+            <Metric label="Availability" value={simulationScenario.evidenceSummary.availability} />
+          </div>
+        </section>
+
+        <section className="panel-section candidates-section">
+          <div className="section-title-line">
+            <div>
+              <h3>Candidate vessels</h3>
+              <p className="section-caption">Synthetic ranking</p>
+            </div>
+            <Anchor size={15} aria-hidden="true" />
+          </div>
+          <p className="ranking-notice">Synthetic candidate ranking for frontend showcase only. This is not a scientific attribution result.</p>
+          <div className="candidate-list">
+            {simulationScenario.candidateVessels.map((candidate) => (
+              <button
+                key={candidate.id}
+                className={`candidate-card${selectedCandidate === candidate.id ? ' is-selected' : ''}`}
+                type="button"
+                onClick={() => onSelectCandidate(candidate.id)}
+              >
+                <span className="candidate-rank" style={{ background: candidate.color }}>{candidate.isCandidate ? '01' : '99'}</span>
+                <span className="candidate-details">
+                  <strong>{candidate.name}</strong>
+                  <small>{candidate.vesselType}</small>
+                  <span className="evidence-placeholder">{candidate.note}</span>
+                </span>
+                <span className="candidate-arrow">
+                  <ChevronRight size={15} />
+                </span>
               </button>
             ))}
           </div>

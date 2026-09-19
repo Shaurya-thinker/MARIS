@@ -19,6 +19,8 @@ const G1_PIPELINE_STAGES: Array<{ id: string; label: string; shortLabel: string 
 
 interface InvestigationPipelineProps {
   isDemoMode: boolean
+  isSimulationMode?: boolean
+  simulationStages?: Array<{ id: string; label: string; shortLabel: string; description: string }>
   demoStages?: PipelineStage[]
   completedStages?: string[]
   currentStage?: string | null
@@ -28,24 +30,30 @@ interface InvestigationPipelineProps {
 
 export function InvestigationPipeline({
   isDemoMode,
+  isSimulationMode = false,
+  simulationStages = [],
   demoStages = [],
   completedStages = [],
   currentStage,
   workflowStatus,
   isExecuting = false,
 }: InvestigationPipelineProps) {
-  if (isDemoMode) {
+  if (isDemoMode || isSimulationMode) {
+    const stageList = isSimulationMode ? simulationStages : demoStages
+    const note = isSimulationMode ? 'SIMULATION SHOWCASE MODE' : 'HISTORICAL DEMO CASE'
     return (
       <section className="pipeline" aria-label="Investigation pipeline">
         <div className="pipeline-header">
           <span className="section-kicker">Investigation workflow</span>
-          <span className="pipeline-note">HISTORICAL DEMO CASE</span>
+          <span className="pipeline-note">{note}</span>
         </div>
         <div className="pipeline-track">
-          {demoStages.map((stage, index) => (
-            <div className="pipeline-stage" key={stage.label}>
-              <div className={`pipeline-node pipeline-node--${stage.status}`}>
-                {stage.status === 'completed' ? (
+          {stageList.map((stage, index) => (
+            <div className="pipeline-stage" key={stage.label || stage.id}>
+              <div className={`pipeline-node ${isSimulationMode ? 'pipeline-node--completed' : `pipeline-node--${stage.status}`}`}>
+                {isSimulationMode ? (
+                  index < simulationStages.length - 1 ? <Check size={13} /> : <CircleDot size={14} />
+                ) : stage.status === 'completed' ? (
                   <Check size={13} />
                 ) : stage.status === 'current' ? (
                   <CircleDot size={14} />
@@ -54,10 +62,8 @@ export function InvestigationPipeline({
                 )}
               </div>
               <span>{stage.label}</span>
-              {index < demoStages.length - 1 && (
-                <div
-                  className={`pipeline-connector${stage.status === 'completed' ? ' is-complete' : ''}`}
-                />
+              {index < stageList.length - 1 && (
+                <div className={`pipeline-connector${isSimulationMode ? ' is-complete' : stage.status === 'completed' ? ' is-complete' : ''}`} />
               )}
             </div>
           ))}

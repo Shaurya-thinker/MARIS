@@ -1,0 +1,51 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.0,
+          51.0
+        ]
+      },
+      "properties": {
+        "feature_kind": "candidate_cpa",
+        "candidate_id": "cand-789789789",
+        "vessel_id": "789789789",
+        "mmsi": "789789789",
+        "imo": null,
+        "vessel_name": "API SHIP",
+        "inside_source_zone": true,
+        "min_distance_to_source_center_km": 0.0,
+        "distance_to_zone_boundary_km": 0.0,
+        "closest_position_time": "2024-06-02T00:00:00+00:00",
+        "time_offset_from_source_hours": 0.0,
+        "speed_over_ground": null,
+        "course_over_ground": null,
+        "heading": null,
+        "navigation_status": null,
+        "observed_positions_count": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.0,
+          51.0
+        ]
+      },
+      "properties": {
+        "feature_kind": "observed_vessel_track",
+        "candidate_id": "cand-789789789",
+        "vessel_id": "789789789",
+        "mmsi": "789789789",
+        "point_count": 1,
+        "zero_fabrication": true
+      }
+    }
+  ]
+}

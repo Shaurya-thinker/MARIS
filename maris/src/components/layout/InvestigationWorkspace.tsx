@@ -129,10 +129,17 @@ export function InvestigationWorkspace({
       setArtifacts([])
       setRankingResult(null)
       setExplainabilityReport(null)
-      setSelectedCandidate(demoCandidateVessels[0].id)
       setApiError(null)
+      setIsLoading(false)
+      setPlaybackActive(true)
+      setPlaybackPlaying(true)
+      setPlaybackStage(0)
+      setSelectedCandidate(simulationScenario?.candidateVessels[0]?.id || demoCandidateVessels[0].id)
       if (simulationScenario) {
-        setSimulationTimeline(createSimulationInvestigation('Simulation Investigation', simulationScenario.id, simulationScenario).stageSequence)
+        const created = createSimulationInvestigation('Simulation Investigation', simulationScenario.id, simulationScenario)
+        setSimulationTimeline(created.stageSequence)
+      } else {
+        setSimulationTimeline(SIMULATION_STAGE_SEQUENCE)
       }
       return
     }
@@ -520,6 +527,8 @@ export function InvestigationWorkspace({
       <div className="workspace-grid">
         <IncidentPanel
           isDemoMode={isDemoMode}
+          isSimulationMode={isSimulationMode}
+          simulationScenario={simulationScenario}
           demoIncident={demoIncidentData}
           liveInvestigation={activeInvestigation}
           statusResponse={statusResponse}
@@ -539,6 +548,8 @@ export function InvestigationWorkspace({
           selectedCandidate={selectedCandidate}
           onSelectCandidate={setSelectedCandidate}
           isDemoMode={isDemoMode}
+          isSimulationMode={isSimulationMode}
+          simulationScenario={simulationScenario}
           aoiBBox={aoiBBox}
           liveSpillGeometry={liveSpillGeometry}
           liveSpillCentroid={liveSpillCentroid}
@@ -547,6 +558,8 @@ export function InvestigationWorkspace({
 
         <AnalysisPanel
           isDemoMode={isDemoMode}
+          isSimulationMode={isSimulationMode}
+          simulationScenario={simulationScenario}
           demoIncident={demoIncidentData}
           demoCandidates={demoCandidateVessels}
           selectedCandidate={selectedCandidate}
@@ -559,6 +572,8 @@ export function InvestigationWorkspace({
 
       <InvestigationPipeline
         isDemoMode={isDemoMode}
+        isSimulationMode={isSimulationMode}
+        simulationStages={simulationTimeline}
         demoStages={visiblePipelineStages}
         completedStages={statusResponse?.completed_stages}
         currentStage={statusResponse?.current_stage}

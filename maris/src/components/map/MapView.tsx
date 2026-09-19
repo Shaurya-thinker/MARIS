@@ -4,6 +4,7 @@ import * as maplibregl from 'maplibre-gl'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import type { Feature, FeatureCollection, LineString, Point, Polygon } from 'geojson'
 import { mapData } from '../../data/mapData'
+import type { SimulationScenario } from '../../simulation/simulationTypes'
 import type { DriftReconstructionData, MapLayerVisibility, ReconstructedAisData, VesselProperties } from '../../types/maris'
 import type { BoundingBox } from '../../types/investigationApi'
 
@@ -15,6 +16,8 @@ interface MapViewProps {
   selectedCandidate: string
   onSelectCandidate: (id: string) => void
   isDemoMode?: boolean
+  isSimulationMode?: boolean
+  simulationScenario?: SimulationScenario | null
   aoiBBox?: BoundingBox | null
   liveSpillGeometry?: Record<string, unknown> | null
   liveSpillCentroid?: { longitude: number; latitude: number } | null
@@ -26,6 +29,8 @@ export function MapView({
   selectedCandidate,
   onSelectCandidate,
   isDemoMode = false,
+  isSimulationMode = false,
+  simulationScenario,
   aoiBBox,
   liveSpillGeometry,
   liveSpillCentroid,
@@ -38,12 +43,14 @@ export function MapView({
 
   // Calculate effective initial bounds
   const effectiveBounds: maplibregl.LngLatBoundsLike =
-    !isDemoMode && aoiBBox
-      ? [
-          [aoiBBox.west, aoiBBox.south],
-          [aoiBBox.east, aoiBBox.north],
-        ]
-      : DEMO_BOUNDS
+    isSimulationMode && simulationScenario
+      ? buildSimulationBounds(simulationScenario)
+      : !isDemoMode && aoiBBox
+        ? [
+            [aoiBBox.west, aoiBBox.south],
+            [aoiBBox.east, aoiBBox.north],
+          ]
+        : DEMO_BOUNDS
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return undefined
@@ -74,8 +81,9 @@ export function MapView({
           const aisData = (await aisResponse.json()) as ReconstructedAisData
           const driftData = (await driftResponse.json()) as DriftReconstructionData
           addMapSourcesAndLayers(map, spillData, aisData, driftData)
+        } else if (isSimulationMode && simulationScenario) {
+          addSimulationMapSourcesAndLayers(map, simulationScenario)
         } else {
-          // Initialize live G1 sources
           initLiveMapSourcesAndLayers(map, liveSpillGeometry, liveSpillCentroid, liveSourceZoneGeometry)
         }
         setMapReady(true)
@@ -85,12 +93,6 @@ export function MapView({
       }
     })
 
-    map.on('click', 'vessel-markers', (event) => {
-      const vesselId = event.features?.[0]?.properties?.vesselId
-      if (typeof vesselId === 'string') {
-        onSelectCandidate(vesselId)
-      }
-    })
     map.on('mouseenter', 'vessel-markers', () => {
       map.getCanvas().style.cursor = 'pointer'
     })
@@ -106,20 +108,20 @@ export function MapView({
       map.remove()
       mapRef.current = null
     }
-  }, [isDemoMode])
+  }, [isDemoMode, isSimulationMode, simulationScenario])
 
   // Update live map sources dynamically when live backend data updates
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapReady || isDemoMode) return
+    if (!map || !mapReady || isDemoMode || isSimulationMode) return
 
     updateLiveSources(map, liveSpillGeometry, liveSpillCentroid, liveSourceZoneGeometry)
-  }, [liveSpillGeometry, liveSpillCentroid, liveSourceZoneGeometry, mapReady, isDemoMode])
+  }, [liveSpillGeometry, liveSpillCentroid, liveSourceZoneGeometry, mapReady, isDemoMode, isSimulationMode])
 
   // Update bounds when AOI changes in live mode
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapReady || isDemoMode || !aoiBBox) return
+    if (!map || !mapReady || isDemoMode || isSimulationMode || !aoiBBox) return
 
     map.fitBounds(
       [
@@ -128,7 +130,7 @@ export function MapView({
       ],
       { padding: 45, duration: 800 }
     )
-  }, [aoiBBox, mapReady, isDemoMode])
+  }, [aoiBBox, mapReady, isDemoMode, isSimulationMode])
 
   // Layer visibility toggle
   useEffect(() => {
@@ -194,7 +196,7 @@ export function MapView({
         <div ref={containerRef} className="map-container" />
         <div className="map-overlay-header">
           <span className="map-watermark">
-            <ScanLine size={17} /> {isDemoMode ? 'GIS VIEW · HISTORICAL CASE RECONSTRUCTION' : 'GIS VIEW · MARIS G1 LIVE ARTIFACTS'}
+            <ScanLine size={17} /> {isDemoMode ? 'GIS VIEW · HISTORICAL CASE RECONSTRUCTION' : isSimulationMode ? 'GIS VIEW · SIMULATION SHOWCASE' : 'GIS VIEW · MARIS G1 LIVE ARTIFACTS'}
           </span>
           <span className="map-status">{mapError ? 'Map unavailable' : mapReady ? 'Map ready' : 'Initializing map'}</span>
         </div>
@@ -207,10 +209,128 @@ export function MapView({
         <button className="map-reset" type="button" onClick={resetView} aria-label="Reset map view" title="Reset map view">
           <Crosshair size={16} /> Reset view
         </button>
-        <MapLegend isDemoMode={isDemoMode} />
+        <MapLegend isDemoMode={isDemoMode} isSimulationMode={isSimulationMode} />
       </div>
     </section>
   )
+}
+
+function buildSimulationBounds(scenario: SimulationScenario): maplibregl.LngLatBoundsLike {
+  const polygonCoords = scenario.spillGeometry.coordinates[0].concat(scenario.sourceZone.coordinates[0])
+  const trackCoords = scenario.candidateVessels.flatMap((vessel) => vessel.track.map((point) => [point.longitude, point.latitude] as [number, number]))
+  const allCoords = [...polygonCoords, ...trackCoords]
+
+  const minLon = Math.min(...allCoords.map(([lon]) => lon))
+  const maxLon = Math.max(...allCoords.map(([lon]) => lon))
+  const minLat = Math.min(...allCoords.map(([, lat]) => lat))
+  const maxLat = Math.max(...allCoords.map(([, lat]) => lat))
+
+  return [
+    [minLon - 0.12, minLat - 0.12],
+    [maxLon + 0.12, maxLat + 0.12],
+  ]
+}
+
+function addSimulationMapSourcesAndLayers(map: MapLibreMap, scenario: SimulationScenario) {
+  const spillFeature = { type: 'Feature', properties: {}, geometry: scenario.spillGeometry }
+  const sourceFeature = { type: 'Feature', properties: {}, geometry: scenario.sourceZone }
+  const vesselTracks = scenario.candidateVessels.map((vessel) => ({
+    type: 'Feature',
+    properties: { vesselId: vessel.id, vesselName: vessel.name, candidate: vessel.isCandidate },
+    geometry: {
+      type: 'LineString',
+      coordinates: vessel.track.map((point) => [point.longitude, point.latitude]),
+    },
+  }))
+  const vesselMarkers = scenario.candidateVessels.map((vessel) => ({
+    type: 'Feature',
+    properties: { vesselId: vessel.id, vesselName: vessel.name, candidate: vessel.isCandidate },
+    geometry: {
+      type: 'Point',
+      coordinates: [vessel.track.at(-1)?.longitude ?? 0, vessel.track.at(-1)?.latitude ?? 0],
+    },
+  }))
+
+  map.addSource('spill-polygon', { type: 'geojson', data: { type: 'FeatureCollection', features: [spillFeature] } })
+  map.addSource('spill-centroid', {
+    type: 'geojson',
+    data: {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          properties: { kind: 'simulation-slick-centroid' },
+          geometry: {
+            type: 'Point',
+            coordinates: [
+              scenario.spillGeometry.coordinates[0][0][0],
+              scenario.spillGeometry.coordinates[0][0][1],
+            ],
+          },
+        },
+      ],
+    },
+  })
+  map.addSource('origin-zone', { type: 'geojson', data: { type: 'FeatureCollection', features: [sourceFeature] } })
+  map.addSource('drift-paths', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+  map.addSource('vessel-tracks', { type: 'geojson', data: { type: 'FeatureCollection', features: vesselTracks } })
+  map.addSource('vessel-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: vesselMarkers } })
+  map.addSource('origin-point', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+  map.addSource('approach-vector', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+  map.addSource('anchor-swing-circle', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+
+  map.addLayer({
+    id: 'origin-zone-fill',
+    type: 'fill',
+    source: 'origin-zone',
+    paint: { 'fill-color': '#62aee8', 'fill-opacity': 0.15 },
+  })
+  map.addLayer({
+    id: 'origin-zone-line',
+    type: 'line',
+    source: 'origin-zone',
+    paint: { 'line-color': '#62aee8', 'line-width': 2, 'line-dasharray': [3, 2] },
+  })
+  map.addLayer({
+    id: 'spill-fill',
+    type: 'fill',
+    source: 'spill-polygon',
+    paint: { 'fill-color': '#e0b15b', 'fill-opacity': 0.45 },
+  })
+  map.addLayer({
+    id: 'spill-line',
+    type: 'line',
+    source: 'spill-polygon',
+    paint: { 'line-color': '#e0b15b', 'line-width': 2.5 },
+  })
+  map.addLayer({
+    id: 'spill-centroid',
+    type: 'circle',
+    source: 'spill-centroid',
+    paint: {
+      'circle-color': '#e49a55',
+      'circle-radius': 6,
+      'circle-stroke-color': '#fff4d6',
+      'circle-stroke-width': 2,
+    },
+  })
+  map.addLayer({
+    id: 'vessel-tracks',
+    type: 'line',
+    source: 'vessel-tracks',
+    paint: { 'line-color': '#6f8d91', 'line-width': 2, 'line-opacity': 0.7 },
+  })
+  map.addLayer({
+    id: 'vessel-markers',
+    type: 'circle',
+    source: 'vessel-markers',
+    paint: {
+      'circle-color': '#6f8d91',
+      'circle-radius': 4,
+      'circle-stroke-color': '#08171b',
+      'circle-stroke-width': 1,
+    },
+  })
 }
 
 function initLiveMapSourcesAndLayers(
@@ -538,7 +658,7 @@ function createCircleFeature(center: [number, number], radiusMeters: number): Fe
   }
 }
 
-function MapLegend({ isDemoMode }: { isDemoMode: boolean }) {
+function MapLegend({ isDemoMode, isSimulationMode }: { isDemoMode: boolean; isSimulationMode: boolean }) {
   if (isDemoMode) {
     return (
       <div className="map-legend">
@@ -560,6 +680,23 @@ function MapLegend({ isDemoMode }: { isDemoMode: boolean }) {
         </span>
         <span>
           <i className="legend-swatch legend-swatch--anchor" /> CSL VIRGINIA swing circle - 1000 m
+        </span>
+      </div>
+    )
+  }
+
+  if (isSimulationMode) {
+    return (
+      <div className="map-legend">
+        <div className="legend-title">Simulation evidence</div>
+        <span>
+          <i className="legend-swatch legend-swatch--spill" /> Synthetic spill polygon
+        </span>
+        <span>
+          <i className="legend-swatch legend-swatch--origin" /> Source zone
+        </span>
+        <span>
+          <i className="legend-swatch legend-swatch--candidate" /> Simulated vessel tracks
         </span>
       </div>
     )

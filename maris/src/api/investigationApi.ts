@@ -2,7 +2,7 @@
  * Stage G1/G2 — Investigation API Client Layer.
  *
  * Provides typed methods for all G1 endpoints without scattering raw fetch calls.
- * Uses VITE_API_BASE_URL (defaults to http://localhost:8000) for configurable backend access.
+ * Uses VITE_API_BASE_URL with a local fallback that matches the active backend port in this workspace.
  */
 
 import type {
@@ -41,9 +41,9 @@ export class ApiError extends Error {
 }
 
 export function getApiBaseUrl(): string {
-  // Use import.meta.env if available in Vite, otherwise fall back to localhost:8000
+  // Use import.meta.env when available. Otherwise match the active backend port for this workspace.
   const envUrl = typeof import.meta !== 'undefined' && import.meta.env ? (import.meta.env.VITE_API_BASE_URL as string | undefined) : undefined
-  return (envUrl && envUrl.trim().length > 0) ? envUrl.replace(/\/+$/, '') : 'http://localhost:8000'
+  return (envUrl && envUrl.trim().length > 0) ? envUrl.replace(/\/+$/, '') : 'http://127.0.0.1:8001'
 }
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes

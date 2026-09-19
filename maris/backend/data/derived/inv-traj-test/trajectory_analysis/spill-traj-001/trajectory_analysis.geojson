@@ -1,0 +1,242 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            2.2,
+            51.1
+          ],
+          [
+            2.0,
+            51.0
+          ]
+        ]
+      },
+      "properties": {
+        "feature_kind": "backward_drift_centerline",
+        "source_estimate_id": "source-spill-traj-001-inv-traj-test",
+        "net_drift_direction_deg": 51.42
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              2.0713715,
+              51.0
+            ],
+            [
+              2.0700001,
+              51.0087626
+            ],
+            [
+              2.0659387,
+              51.0171884
+            ],
+            [
+              2.0593433,
+              51.0249537
+            ],
+            [
+              2.0504673,
+              51.0317601
+            ],
+            [
+              2.0396519,
+              51.0373459
+            ],
+            [
+              2.0273127,
+              51.0414966
+            ],
+            [
+              2.0139239,
+              51.0440525
+            ],
+            [
+              2.0,
+              51.0449156
+            ],
+            [
+              1.9860761,
+              51.0440525
+            ],
+            [
+              1.9726873,
+              51.0414966
+            ],
+            [
+              1.9603481,
+              51.0373459
+            ],
+            [
+              1.9495327,
+              51.0317601
+            ],
+            [
+              1.9406567,
+              51.0249537
+            ],
+            [
+              1.9340613,
+              51.0171884
+            ],
+            [
+              1.9299999,
+              51.0087626
+            ],
+            [
+              1.9286285,
+              51.0
+            ],
+            [
+              1.9299999,
+              50.9912374
+            ],
+            [
+              1.9340613,
+              50.9828116
+            ],
+            [
+              1.9406567,
+              50.9750463
+            ],
+            [
+              1.9495327,
+              50.9682399
+            ],
+            [
+              1.9603481,
+              50.9626541
+            ],
+            [
+              1.9726873,
+              50.9585034
+            ],
+            [
+              1.9860761,
+              50.9559475
+            ],
+            [
+              2.0,
+              50.9550844
+            ],
+            [
+              2.0139239,
+              50.9559475
+            ],
+            [
+              2.0273127,
+              50.9585034
+            ],
+            [
+              2.0396519,
+              50.9626541
+            ],
+            [
+              2.0504673,
+              50.9682399
+            ],
+            [
+              2.0593433,
+              50.9750463
+            ],
+            [
+              2.0659387,
+              50.9828116
+            ],
+            [
+              2.0700001,
+              50.9912374
+            ],
+            [
+              2.0713715,
+              51.0
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "feature_kind": "source_candidate_zone",
+        "source_estimate_id": "source-spill-traj-001-inv-traj-test",
+        "uncertainty_radius_km": 5.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            2.001,
+            51.001
+          ],
+          [
+            2.05,
+            51.001
+          ]
+        ]
+      },
+      "properties": {
+        "feature_kind": "candidate_trajectory",
+        "candidate_id": "cand-api-01",
+        "vessel_id": "VESSEL-API",
+        "mmsi": "555555555",
+        "imo": null,
+        "vessel_name": "ApiCarrier",
+        "observed_positions_count": 2,
+        "total_track_distance_m": 3428.81,
+        "total_track_duration_seconds": 0.0,
+        "mean_derived_speed_knots": null,
+        "points_inside_zone": 2,
+        "observed_transit_duration_seconds": 0.0,
+        "min_distance_to_center_km": 0.131,
+        "min_distance_to_centerline_km": 0.044,
+        "course_drift_angle_diff_deg": 38.58,
+        "zero_fabrication": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.001,
+          51.001
+        ]
+      },
+      "properties": {
+        "feature_kind": "closest_approach_point",
+        "candidate_id": "cand-api-01",
+        "vessel_id": "VESSEL-API",
+        "mmsi": "555555555",
+        "closest_position_time": "2024-06-02T00:00:00+00:00",
+        "min_distance_to_center_km": 0.131,
+        "time_offset_from_source_hours": 0.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.001387,
+          51.000694
+        ]
+      },
+      "properties": {
+        "feature_kind": "centerline_closest_point",
+        "candidate_id": "cand-api-01",
+        "vessel_id": "VESSEL-API",
+        "min_distance_to_centerline_km": 0.044
+      }
+    }
+  ]
+}

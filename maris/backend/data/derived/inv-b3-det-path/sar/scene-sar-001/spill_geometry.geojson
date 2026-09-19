@@ -1,0 +1,104 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              8.02,
+              42.98
+            ],
+            [
+              8.02,
+              42.965
+            ],
+            [
+              8.035,
+              42.965
+            ],
+            [
+              8.035,
+              42.98
+            ],
+            [
+              8.02,
+              42.98
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "region_id": 1,
+        "area_m2": 2039087.07,
+        "area_km2": 2.0391,
+        "pixel_count": 225,
+        "confidence": 1.0,
+        "mean_db": -20.0,
+        "min_db": -20.0,
+        "damping_contrast_db": 10.0,
+        "background_mean_db": -10.0,
+        "bbox": [
+          8.02,
+          42.965,
+          8.035,
+          42.98
+        ],
+        "centroid": [
+          8.0275,
+          42.9725
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "detected": true,
+    "confidence": 1.0,
+    "spill_count": 1,
+    "total_area_m2": 2039087.07,
+    "total_area_km2": 2.0391,
+    "bbox": [
+      8.02,
+      42.965,
+      8.035,
+      42.98
+    ],
+    "centroid": [
+      8.0275,
+      42.9725
+    ],
+    "raster_stats": {
+      "detected_pixels": 225,
+      "spill_count": 1,
+      "total_area_m2": 2039087.07,
+      "total_area_km2": 2.0391,
+      "min_slick_db": -20.0,
+      "mean_slick_db": -20.0,
+      "background_mean_db": -10.0,
+      "damping_contrast_db": 10.0
+    },
+    "detector_metadata": {
+      "model_version": "maris.b3.sar_adaptive_baseline.v1",
+      "polarization": "VV",
+      "parameters": {
+        "damping_threshold_db": 3.5,
+        "k_sigma": 2.0,
+        "window_size_pixels": 51,
+        "morphological_opening": true,
+        "border_margin_pixels": 2,
+        "noise_floor_db": -45.0
+      },
+      "valid_pixel_count": 3600,
+      "candidate_pixel_count": 225,
+      "candidate_pixel_ratio": 0.0625,
+      "global_background_mean_db": -10.0,
+      "global_background_std_db": 0.0
+    },
+    "investigation_id": "inv-b3-det-path",
+    "scene_id": "scene-sar-001",
+    "parent_asset_id": "asset-b2-sar-test",
+    "polarization": "VV"
+  }
+}

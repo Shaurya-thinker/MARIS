@@ -1,0 +1,91 @@
+{
+  "id": "explainability-spill-f3-api-29-inv-f3-api-29",
+  "investigation_id": "inv-f3-api-29",
+  "spill_id": "spill-f3-api-29",
+  "candidate_ranking_id": "ranking-f3-test",
+  "generated_at": "2026-09-15T20:15:01.058411Z",
+  "methodology_version": "F3-1.0.0",
+  "asset_id": null,
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "rank": 1,
+      "vessel_id": "v1",
+      "candidate_id": "c1",
+      "mmsi": "111222333",
+      "imo": "9123456",
+      "name": "Nordic Star",
+      "vessel_type": "Crude Oil Tanker",
+      "evidence_consistency_score": 0.88,
+      "evidence_consistency_level": "HIGH",
+      "evidence_availability_ratio": 1.0,
+      "valid_primary_channels": 3,
+      "total_primary_channels": 3,
+      "evidence_availability_summary": "All three primary evidence channels were available.",
+      "evidence_availability_band": "HIGH evidence availability",
+      "spatial_score": 0.9,
+      "spatial_explanation": "Spatial evidence indicates HIGH consistency (score: 0.90). Vessel closest point of approach was 1.20 km from estimated source candidate center.",
+      "temporal_score": 0.8,
+      "temporal_explanation": "Temporal evidence indicates HIGH consistency (score: 0.80). Vessel closest approach occurred 0.50 hours from estimated spill release time.",
+      "trajectory_score": 0.8,
+      "trajectory_explanation": "Trajectory evidence indicates HIGH consistency (score: 0.80) based on centerline proximity and observed heading alignment.",
+      "behavioral_context": {
+        "label": "Contextual behavioral observations",
+        "observations": [
+          "No anomalous behavioral patterns observed in genuine AIS observations."
+        ],
+        "numerical_contribution_statement": "Contextual behavioral observations do not contribute numerically to the evidence_consistency_score.",
+        "raw_summary": {
+          "total_anomalies_count": 0,
+          "anomalies_in_zone_count": 0,
+          "loitering_detected": false,
+          "transmission_gaps_count": 0,
+          "gaps_spanning_zone_count": 0,
+          "speed_drop_in_zone": false,
+          "speed_surge_near_zone": false,
+          "nav_status_mismatch": false,
+          "anchor_swing_observed": false,
+          "notable_anomaly_types": []
+        }
+      },
+      "drift_cross_check": {
+        "label": "Forward drift cross-check",
+        "status": "UNAVAILABLE",
+        "min_distance_km": null,
+        "explanation": "Forward drift cross-check was unavailable; D1 forward drift simulation was not provided for this investigation. This does not affect the primary consistency score.",
+        "non_additive_statement": "Forward drift cross-check is non-additive contextual evidence and does not modify the consistency score.",
+        "raw_cross_check": {
+          "evaluated": false,
+          "min_distance_to_forward_track_km": null,
+          "closest_forward_step_time": null,
+          "cross_check_note": ""
+        }
+      },
+      "limitations": [
+        "Forward drift cross-check was unavailable.",
+        "AIS observations are discrete reported observations and do not establish continuous vessel position between observations.",
+        "The source zone is an analytical search envelope, not a statistical confidence region.",
+        "Results are subject to the data coverage and model assumptions documented by upstream processing stages."
+      ],
+      "scientific_disclaimer": "This analysis ranks vessels by consistency with the available satellite, environmental, and AIS evidence. It does not establish causation, legal responsibility, or culpability. Results are subject to data coverage, measurement uncertainty, model assumptions, and the limitations listed for each candidate.",
+      "provenance": {
+        "candidate_ranking_id": "ranking-f3-test",
+        "f2_rank": 1,
+        "f2_score": 0.88,
+        "spatial_discrepancy_km": 1.2,
+        "temporal_discrepancy_hours": 0.5,
+        "zero_fabrication": true
+      }
+    }
+  ],
+  "scientific_disclaimer": "This analysis ranks vessels by consistency with the available satellite, environmental, and AIS evidence. It does not establish causation, legal responsibility, or culpability. Results are subject to data coverage, measurement uncertainty, model assumptions, and the limitations listed for each candidate.",
+  "metadata": {
+    "stage": "F3",
+    "asset_type": "explainability_report",
+    "zero_fabrication": true,
+    "methodology": "Stage F3 Explainability & Uncertainty",
+    "scoring_rule": "F2 evidence consistency scores and ranks are authoritative and preserved without modification.",
+    "source_zone_description": "Analytical search envelope, not a statistical confidence region.",
+    "confidence_metric_policy": "Uncertainty communicated through evidence availability and explicit limitations only; no fabricated statistical values generated."
+  }
+}

@@ -16,6 +16,7 @@ import {
   Waves,
 } from 'lucide-react'
 import type { IncidentData } from '../../types/maris'
+import type { SimulationScenario } from '../../simulation/simulationTypes'
 import type {
   ArtifactSummary,
   InvestigationResponse,
@@ -25,6 +26,8 @@ import type {
 
 interface IncidentPanelProps {
   isDemoMode: boolean
+  isSimulationMode?: boolean
+  simulationScenario?: SimulationScenario | null
   demoIncident: IncidentData
   liveInvestigation: InvestigationResponse | null
   statusResponse: InvestigationStatusResponse | null
@@ -50,6 +53,8 @@ function InfoRow({ label, value }: { label: string; value: string | React.ReactN
 
 export function IncidentPanel({
   isDemoMode,
+  isSimulationMode = false,
+  simulationScenario,
   demoIncident,
   liveInvestigation,
   statusResponse,
@@ -129,6 +134,84 @@ export function IncidentPanel({
         </section>
 
         <div className="demo-note">HISTORICAL DEMO CASE — Corsica 2018 Reconstruction</div>
+      </aside>
+    )
+  }
+
+  if (isSimulationMode && simulationScenario) {
+    return (
+      <aside className="panel incident-panel" aria-label="Incident and map controls">
+        <div className="panel-heading">
+          <div>
+            <span className="section-kicker">Simulation Showcase</span>
+            <h2>{simulationScenario.name}</h2>
+          </div>
+          <Activity size={18} className="heading-icon" aria-hidden="true" />
+        </div>
+
+        <section className="panel-section">
+          <h3>Case summary</h3>
+          <dl className="info-list">
+            <InfoRow label="Scenario ID" value={`simulation-${simulationScenario.id}`} />
+            <InfoRow label="Region" value={simulationScenario.region} />
+            <InfoRow label="Status" value="Synthetic scenario active" />
+            <InfoRow label="Observed" value={new Date(simulationScenario.timestamp).toLocaleString()} />
+            <InfoRow label="Mode" value="Frontend-only demonstration" />
+          </dl>
+        </section>
+
+        <section className="panel-section">
+          <div className="section-title-line">
+            <h3>Satellite scene</h3>
+            <Satellite size={15} aria-hidden="true" />
+          </div>
+          <img
+            className="satellite-evidence"
+            src={simulationScenario.satelliteScene}
+            alt={simulationScenario.name}
+          />
+          <dl className="info-list">
+            <InfoRow label="Source" value="Synthetic SAR scene" />
+            <InfoRow label="Acquisition" value={simulationScenario.timestamp} />
+            <InfoRow label="Scene status" value="Simulation evidence loaded" />
+          </dl>
+        </section>
+
+        <section className="panel-section">
+          <div className="section-title-line">
+            <h3>Spill</h3>
+            <Waves size={15} aria-hidden="true" />
+          </div>
+          <dl className="info-list">
+            <InfoRow label="Status" value="Detected synthetic spill" />
+            <InfoRow label="Est. area" value={`${simulationScenario.spillAreaKm2.toFixed(1)} km²`} />
+            <InfoRow label="Evidence" value={`${simulationScenario.evidenceSummary.availability}`} />
+          </dl>
+        </section>
+
+        <section className="panel-section">
+          <div className="section-title-line">
+            <h3>Database search</h3>
+            <Ship size={15} aria-hidden="true" />
+          </div>
+          <dl className="info-list">
+            <InfoRow label="Search radius" value={`${simulationScenario.databaseSummary.searchRadiusKm} km`} />
+            <InfoRow label="Records found" value={String(simulationScenario.databaseSummary.simulatedRecordsFound)} />
+            <InfoRow label="Relevant" value={String(simulationScenario.databaseSummary.spatiallyRelevant)} />
+            <InfoRow label="Candidate vessels" value={String(simulationScenario.databaseSummary.candidateVessels)} />
+          </dl>
+        </section>
+
+        <section className="panel-section controls-section">
+          <h3>Controls</h3>
+          <div className="layer-controls">
+            <LayerButton label="Spill overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />
+            <LayerButton label="Drift paths" icon={Activity} active={layers.drift} onClick={() => onToggleLayer('drift')} />
+            <LayerButton label="Vessel tracks" icon={Ship} active={layers.vessels} onClick={() => onToggleLayer('vessels')} />
+          </div>
+        </section>
+
+        <div className="demo-note">SIMULATION SHOWCASE MODE — FRONTEND-ONLY DEMONSTRATION</div>
       </aside>
     )
   }

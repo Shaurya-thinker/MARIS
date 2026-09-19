@@ -1,0 +1,145 @@
+{
+  "id": "ranking-spill-api-success-f2-inv-api-success-f2",
+  "investigation_id": "inv-api-success-f2",
+  "spill_id": "spill-api-success-f2",
+  "evidence_fusion_id": "ef-f2-unit",
+  "generated_at": "2026-09-15T20:14:25.952104Z",
+  "methodology_version": "F2-1.0.0",
+  "asset_id": null,
+  "nominal_weights": {
+    "spatial": 0.5,
+    "temporal": 0.25,
+    "trajectory": 0.25
+  },
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "rank": 1,
+      "vessel_id": "v2",
+      "candidate_id": "c2",
+      "mmsi": "111222333",
+      "imo": null,
+      "name": "Test Ship",
+      "vessel_type": "tanker",
+      "evidence_consistency_score": 0.75,
+      "spatial_score": 0.9,
+      "temporal_score": 0.7,
+      "trajectory_score": 0.5,
+      "valid_primary_channels": 3,
+      "total_primary_channels": 3,
+      "evidence_availability_ratio": 1.0,
+      "contextual_evidence": {
+        "total_anomalies_count": 0,
+        "anomalies_in_zone_count": 0,
+        "loitering_detected": false,
+        "transmission_gaps_count": 0,
+        "gaps_spanning_zone_count": 0,
+        "speed_drop_in_zone": false,
+        "speed_surge_near_zone": false,
+        "nav_status_mismatch": false,
+        "anchor_swing_observed": false,
+        "notable_anomaly_types": []
+      },
+      "drift_cross_check": {
+        "evaluated": false,
+        "min_distance_to_forward_track_km": null,
+        "closest_forward_step_time": null,
+        "cross_check_note": ""
+      },
+      "limitations": [
+        "D1 forward drift cross-check was not evaluated; primary consistency score is unaffected.",
+        "Evidence consistency score is a physical compatibility index, not a probability of discharge or legal responsibility."
+      ],
+      "provenance": {
+        "candidate_id": "c2",
+        "vessel_id": "v2",
+        "input_index_f1": 0,
+        "f1_composite_concordance_score": 0.75,
+        "spatial_discrepancy_km": 2.0,
+        "temporal_discrepancy_hours": 1.0,
+        "channel_weights_applied": {
+          "spatial": 0.5,
+          "temporal": 0.25,
+          "trajectory": 0.25
+        },
+        "behavioral_anomalies_count": 0,
+        "behavioral_score_contribution": 0.0,
+        "forward_drift_score_contribution": 0.0,
+        "zero_fabrication": true
+      }
+    },
+    {
+      "rank": 2,
+      "vessel_id": "v1",
+      "candidate_id": "c1",
+      "mmsi": "111222333",
+      "imo": null,
+      "name": "Test Ship",
+      "vessel_type": "tanker",
+      "evidence_consistency_score": 0.65,
+      "spatial_score": 0.8,
+      "temporal_score": 0.6,
+      "trajectory_score": 0.4,
+      "valid_primary_channels": 3,
+      "total_primary_channels": 3,
+      "evidence_availability_ratio": 1.0,
+      "contextual_evidence": {
+        "total_anomalies_count": 0,
+        "anomalies_in_zone_count": 0,
+        "loitering_detected": false,
+        "transmission_gaps_count": 0,
+        "gaps_spanning_zone_count": 0,
+        "speed_drop_in_zone": false,
+        "speed_surge_near_zone": false,
+        "nav_status_mismatch": false,
+        "anchor_swing_observed": false,
+        "notable_anomaly_types": []
+      },
+      "drift_cross_check": {
+        "evaluated": false,
+        "min_distance_to_forward_track_km": null,
+        "closest_forward_step_time": null,
+        "cross_check_note": ""
+      },
+      "limitations": [
+        "D1 forward drift cross-check was not evaluated; primary consistency score is unaffected.",
+        "Evidence consistency score is a physical compatibility index, not a probability of discharge or legal responsibility."
+      ],
+      "provenance": {
+        "candidate_id": "c1",
+        "vessel_id": "v1",
+        "input_index_f1": 0,
+        "f1_composite_concordance_score": 0.65,
+        "spatial_discrepancy_km": 2.0,
+        "temporal_discrepancy_hours": 1.0,
+        "channel_weights_applied": {
+          "spatial": 0.5,
+          "temporal": 0.25,
+          "trajectory": 0.25
+        },
+        "behavioral_anomalies_count": 0,
+        "behavioral_score_contribution": 0.0,
+        "forward_drift_score_contribution": 0.0,
+        "zero_fabrication": true
+      }
+    }
+  ],
+  "metadata": {
+    "stage": "F2",
+    "asset_type": "candidate_ranking",
+    "zero_fabrication": true,
+    "methodology": "Stage F2 Candidate Scoring & Ranking",
+    "scoring_formula": "weighted average of valid primary channels: spatial=0.50, temporal=0.25, trajectory=0.25 with dynamic denominator renormalization",
+    "tie_breaking_order": [
+      "1. evidence_consistency_score (descending)",
+      "2. evidence_availability_ratio (descending)",
+      "3. spatial_discrepancy_km (ascending)",
+      "4. temporal_discrepancy_hours (ascending)",
+      "5. vessel_id (lexicographical ascending)",
+      "6. candidate_id (lexicographical ascending)"
+    ],
+    "scientific_notice": "Ranked by physical consistency with available evidence. Evidence consistency score is a compatibility index in [0, 1], not a probability of responsibility, guilt, or legal liability.",
+    "behavioral_contribution": 0.0,
+    "forward_drift_contribution": 0.0
+  }
+}
