@@ -70,6 +70,8 @@ export function resolveSpillId(artifacts: ArtifactSummary[]): string | null {
 export function InvestigationWorkspace({
   activeId,
   isDemoMode,
+  isSimulationMode,
+  simulationScenario,
   investigations,
   onSelectInvestigation,
   isCreateModalOpen,
