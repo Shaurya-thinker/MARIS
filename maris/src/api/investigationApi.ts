@@ -243,3 +243,9 @@ export async function getExplainabilityReport(
     }
   )
 }
+
+/**
+ * Real-Data Experiment Config
+ * Exported here for compatibility with existing imports.
+ */
+export { fetchExperimentConfig } from '../real-experiment/experimentApi'

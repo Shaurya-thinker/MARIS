@@ -6,14 +6,17 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  Info,
   Loader2,
   Play,
   PlusCircle,
+  Radio,
   RefreshCw,
   Satellite,
   Ship,
   Sliders,
   Waves,
+  Zap,
 } from 'lucide-react'
 import type { IncidentData } from '../../types/maris'
 import type { SimulationScenario } from '../../simulation/simulationTypes'
@@ -42,11 +45,11 @@ interface IncidentPanelProps {
   hasDeferredChecked?: boolean
 }
 
-function InfoRow({ label, value }: { label: string; value: string | React.ReactNode }) {
+function InfoRow({ label, value, isMono = false }: { label: string; value: string | React.ReactNode; isMono?: boolean }) {
   return (
     <div className="info-row">
       <dt>{label}</dt>
-      <dd>{value}</dd>
+      <dd className={isMono ? 'mono-num' : ''}>{value}</dd>
     </div>
   )
 }
@@ -72,72 +75,96 @@ export function IncidentPanel({
   const [driftHours, setDriftHours] = useState('')
   const [lookbackHours, setLookbackHours] = useState('')
   const [showConfig, setShowConfig] = useState(false)
-  // Demo mode: show the historical Corsica demo panel
+  const [showTechDetails, setShowTechDetails] = useState(false)
+
+  // Demo mode: Historical Corsica Demo Case
   if (isDemoMode) {
     return (
       <aside className="panel incident-panel" aria-label="Incident and map controls">
         <div className="panel-heading">
           <div>
-            <span className="section-kicker">Case file (Demo)</span>
-            <h2>Incident overview</h2>
+            <span className="section-kicker">Benchmark Case</span>
+            <h2>Incident Overview</h2>
           </div>
-          <Activity size={18} className="heading-icon" aria-hidden="true" />
+          <Activity size={17} className="heading-icon" aria-hidden="true" />
         </div>
 
         <section className="panel-section">
-          <h3>Incident</h3>
+          <h3>Key Telemetry</h3>
           <dl className="info-list">
-            <InfoRow label="Incident ID" value={demoIncident.id} />
+            <InfoRow label="Incident ID" value={demoIncident.id} isMono />
             <InfoRow label="Region" value={demoIncident.region} />
-            <InfoRow label="Status" value={demoIncident.status} />
-            <InfoRow label="Detected" value={demoIncident.detectionTime} />
-            <InfoRow label="Updated" value={demoIncident.lastUpdated} />
+            <InfoRow label="Status" value={<span className="status-badge status-badge--completed">{demoIncident.status}</span>} />
+            <InfoRow label="Detection Time" value={demoIncident.detectionTime} isMono />
           </dl>
         </section>
 
         <section className="panel-section">
           <div className="section-title-line">
-            <h3>Satellite scene</h3>
-            <Satellite size={15} aria-hidden="true" />
+            <h3>SAR Evidence</h3>
+            <Satellite size={14} aria-hidden="true" />
           </div>
-          <img
-            className="satellite-evidence"
-            src={demoIncident.satelliteImage}
-            alt="Sentinel-1A SAR visualization of the reconstructed Corsica oil slick"
-          />
-          <dl className="info-list">
-            <InfoRow label="Source" value={demoIncident.satelliteSource} />
-            <InfoRow label="Acquired" value={demoIncident.acquisitionTime} />
-            <InfoRow label="Scene status" value={demoIncident.sceneStatus} />
+          <div className="satellite-frame">
+            <img
+              className="satellite-evidence"
+              src={demoIncident.satelliteImage}
+              alt="Sentinel-1A SAR visualization of the reconstructed Corsica oil slick"
+            />
+            <span className="satellite-overlay-tag">S1A SAR C-BAND</span>
+          </div>
+          <dl className="info-list" style={{ marginTop: '0.5rem' }}>
+            <InfoRow label="Sensor Source" value={demoIncident.satelliteSource} />
+            <InfoRow label="Acquired UTC" value={demoIncident.acquisitionTime} isMono />
           </dl>
         </section>
 
         <section className="panel-section">
           <div className="section-title-line">
-            <h3>Spill</h3>
-            <Waves size={15} aria-hidden="true" />
+            <h3>Spill Geometry</h3>
+            <Waves size={14} aria-hidden="true" />
           </div>
           <dl className="info-list">
-            <InfoRow label="Status" value="Detected oil spill" />
-            <InfoRow label="Est. area" value={demoIncident.estimatedArea} />
-            <InfoRow label="Confidence" value={demoIncident.confidence} />
+            <InfoRow label="Est. Area" value={demoIncident.estimatedArea} isMono />
+            <InfoRow label="Confidence" value={demoIncident.confidence} isMono />
           </dl>
+
+          {/* Progressive Disclosure: Technical Metadata */}
+          <div className="disclosure-block" style={{ marginTop: '0.65rem' }}>
+            <button
+              type="button"
+              className="disclosure-trigger"
+              onClick={() => setShowTechDetails((prev) => !prev)}
+            >
+              <span>{showTechDetails ? 'Hide technical metadata' : 'View technical metadata'}</span>
+              {showTechDetails ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+
+            {showTechDetails && (
+              <div className="disclosure-content">
+                <dl className="info-list">
+                  <InfoRow label="Scene Status" value={demoIncident.sceneStatus} />
+                  <InfoRow label="Geographic Extent" value="9.08°E, 42.90°N to 9.75°E, 43.52°N" isMono />
+                  <InfoRow label="Last Reconstructed" value={demoIncident.lastUpdated} isMono />
+                  <InfoRow label="Target Slick Kind" value="Calibrated Multi-Polygon" />
+                </dl>
+              </div>
+            )}
+          </div>
         </section>
 
         <section className="panel-section controls-section">
-          <h3>Controls</h3>
+          <h3>GIS Layer Controls</h3>
           <div className="layer-controls">
-            <LayerButton label="Spill overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />
-            <LayerButton label="Drift paths" icon={Activity} active={layers.drift} onClick={() => onToggleLayer('drift')} />
-            <LayerButton label="Vessel tracks" icon={Ship} active={layers.vessels} onClick={() => onToggleLayer('vessels')} />
+            <LayerButton label="Calibrated Spill Overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />
+            <LayerButton label="Drift Trajectories" icon={Activity} active={layers.drift} onClick={() => onToggleLayer('drift')} />
+            <LayerButton label="AIS Vessel Tracks" icon={Ship} active={layers.vessels} onClick={() => onToggleLayer('vessels')} />
           </div>
         </section>
-
-        <div className="demo-note">HISTORICAL DEMO CASE — Corsica 2018 Reconstruction</div>
       </aside>
     )
   }
 
+  // Simulation mode
   if (isSimulationMode && simulationScenario) {
     return (
       <aside className="panel incident-panel" aria-label="Incident and map controls">
@@ -146,11 +173,11 @@ export function IncidentPanel({
             <span className="section-kicker">Simulation Showcase</span>
             <h2>{simulationScenario.name}</h2>
           </div>
-          <Activity size={18} className="heading-icon" aria-hidden="true" />
+          <Activity size={17} className="heading-icon" aria-hidden="true" />
         </div>
 
         <section className="panel-section">
-          <h3>Case summary</h3>
+          <h3>Case Summary</h3>
           <dl className="info-list">
             <InfoRow label="Scenario ID" value={`simulation-${simulationScenario.id}`} />
             <InfoRow label="Region" value={simulationScenario.region} />
@@ -162,61 +189,52 @@ export function IncidentPanel({
 
         <section className="panel-section">
           <div className="section-title-line">
-            <h3>Satellite scene</h3>
-            <Satellite size={15} aria-hidden="true" />
+            <h3>Reference Scene</h3>
+            <Satellite size={14} aria-hidden="true" />
           </div>
-          <img
-            className="satellite-evidence"
-            src={simulationScenario.satelliteScene}
-            alt={simulationScenario.name}
-          />
+          <div className="satellite-frame">
+            <img
+              className="satellite-evidence"
+              src={simulationScenario.satelliteScene}
+              alt={simulationScenario.name}
+            />
+            <span className="satellite-overlay-tag">SYNTHETIC SAR</span>
+          </div>
           <dl className="info-list">
-            <InfoRow label="Source" value="Reference SAR imagery" />
-            <InfoRow label="Acquisition" value={simulationScenario.timestamp} />
-            <InfoRow label="Scene status" value="Reference imagery loaded; simulation overlays are synthetic" />
+            <InfoRow label="Source" value="Reference SAR Imagery" />
+            <InfoRow label="Timestamp" value={simulationScenario.timestamp} />
           </dl>
         </section>
 
         <section className="panel-section">
           <div className="section-title-line">
-            <h3>Spill</h3>
-            <Waves size={15} aria-hidden="true" />
+            <h3>Spill Dimensions</h3>
+            <Waves size={14} aria-hidden="true" />
           </div>
           <dl className="info-list">
-            <InfoRow label="Status" value="Detected synthetic spill" />
-            <InfoRow label="Est. area" value={`${simulationScenario.spillAreaKm2.toFixed(1)} km²`} />
-            <InfoRow label="Evidence" value={`${simulationScenario.evidenceSummary.availability}`} />
-          </dl>
-        </section>
-
-        <section className="panel-section">
-          <div className="section-title-line">
-            <h3>Database search</h3>
-            <Ship size={15} aria-hidden="true" />
-          </div>
-          <dl className="info-list">
-            <InfoRow label="Search radius" value={`${simulationScenario.databaseSummary.searchRadiusKm} km`} />
-            <InfoRow label="Records found" value={String(simulationScenario.databaseSummary.simulatedRecordsFound)} />
-            <InfoRow label="Relevant" value={String(simulationScenario.databaseSummary.spatiallyRelevant)} />
-            <InfoRow label="Candidate vessels" value={String(simulationScenario.databaseSummary.candidateVessels)} />
+            <InfoRow label="Status" value="Synthetic Slick Detected" />
+            <InfoRow label="Est. Surface" value={`${simulationScenario.spillAreaKm2.toFixed(1)} km²`} />
+            <InfoRow label="Evidence Availability" value={`${simulationScenario.evidenceSummary.availability}`} />
           </dl>
         </section>
 
         <section className="panel-section controls-section">
-          <h3>Controls</h3>
+          <h3>GIS Layer Controls</h3>
           <div className="layer-controls">
-            <LayerButton label="Spill overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />
-            <LayerButton label="Drift paths" icon={Activity} active={layers.drift} onClick={() => onToggleLayer('drift')} />
-            <LayerButton label="Vessel tracks" icon={Ship} active={layers.vessels} onClick={() => onToggleLayer('vessels')} />
+            <LayerButton label="Synthetic Spill Overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />
+            <LayerButton label="Drift Paths" icon={Activity} active={layers.drift} onClick={() => onToggleLayer('drift')} />
+            <LayerButton label="Simulated Vessel Tracks" icon={Ship} active={layers.vessels} onClick={() => onToggleLayer('vessels')} />
           </div>
         </section>
 
-        <div className="demo-note">SIMULATION SHOWCASE MODE — FRONTEND-ONLY DEMONSTRATION</div>
+        <div className="demo-note" style={{ padding: '0.6rem 1rem', fontSize: '0.6rem', color: 'var(--color-text-subtle)', fontFamily: 'var(--font-mono)' }}>
+          SIMULATION SHOWCASE MODE — FRONTEND-ONLY DEMONSTRATION
+        </div>
       </aside>
     )
   }
 
-  // Live mode — investigation not yet loaded (loading or API error)
+  // Live mode — not yet loaded or error
   if (!liveInvestigation) {
     return (
       <aside className="panel incident-panel" aria-label="Incident and map controls">
@@ -225,18 +243,18 @@ export function IncidentPanel({
             <span className="section-kicker">Live Investigation</span>
             <h2>{error ? 'Unavailable' : 'Loading…'}</h2>
           </div>
-          <Activity size={18} className="heading-icon" aria-hidden="true" />
+          <Activity size={17} className="heading-icon" aria-hidden="true" />
         </div>
         {error && (
-          <div className="error-callout" role="alert">
+          <div className="error-callout" role="alert" style={{ margin: '1rem' }}>
             <AlertTriangle size={16} />
             <span>{error}</span>
           </div>
         )}
         {!error && (
-          <div className="panel-section">
+          <div className="panel-section" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <Loader2 size={16} className="spinner" />
-            <span style={{ marginLeft: 8, opacity: 0.7 }}>Loading investigation details…</span>
+            <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>Loading investigation details…</span>
           </div>
         )}
       </aside>
@@ -252,8 +270,8 @@ export function IncidentPanel({
       ? `GeoJSON Polygon (${aoi.polygon.coordinates[0]?.length || 0} pts)`
       : 'Area of Interest: N/A'
 
-  // Check for B3 spill artifact
-  const spillArtifact = artifacts.find(
+  const safeArtifacts = Array.isArray(artifacts) ? artifacts : []
+  const spillArtifact = safeArtifacts.find(
     (a) => a.asset_type === 'spill_geometry' || a.source === 'spill_detection'
   )
   const spillMetadata = spillArtifact?.metadata || {}
@@ -291,18 +309,18 @@ export function IncidentPanel({
           <span className="section-kicker">Live Investigation</span>
           <h2>{liveInvestigation.name}</h2>
         </div>
-        <Activity size={18} className="heading-icon" aria-hidden="true" />
+        <Activity size={17} className="heading-icon" aria-hidden="true" />
       </div>
 
       {error && (
-        <div className="error-callout" role="alert">
+        <div className="error-callout" role="alert" style={{ margin: '0.75rem 1rem' }}>
           <AlertTriangle size={16} />
           <span>{error}</span>
         </div>
       )}
 
       {errors.length > 0 && (
-        <div className="stage-error-box" role="alert">
+        <div className="stage-error-box" role="alert" style={{ margin: '0.75rem 1rem' }}>
           <div className="stage-error-header">
             <AlertTriangle size={15} />
             <strong>Pipeline Execution Error</strong>
@@ -320,9 +338,9 @@ export function IncidentPanel({
       <section className="panel-section">
         <h3>Investigation Details</h3>
         <dl className="info-list">
-          <InfoRow label="ID" value={liveInvestigation.id} />
+          <InfoRow label="Case ID" value={liveInvestigation.id} />
           <InfoRow label="Status" value={<span className={`status-badge status-badge--${activeStatus.toLowerCase()}`}>{activeStatus}</span>} />
-          <InfoRow label="AOI" value={aoiDescription} />
+          <InfoRow label="AOI Bounding Box" value={aoiDescription} />
           <InfoRow
             label="Time Window"
             value={
@@ -332,39 +350,36 @@ export function IncidentPanel({
             }
           />
           <InfoRow
-            label="Created"
-            value={liveInvestigation.created_at ? new Date(liveInvestigation.created_at).toLocaleString() : 'N/A'}
+            label="Registered"
+            value={liveInvestigation.created_at ? new Date(liveInvestigation.created_at).toLocaleDateString() : 'N/A'}
           />
-          {liveInvestigation.description && (
-            <InfoRow label="Notes" value={liveInvestigation.description} />
-          )}
         </dl>
       </section>
 
       <section className="panel-section">
         <div className="section-title-line">
-          <h3>Spill Detection</h3>
-          <Waves size={15} aria-hidden="true" />
+          <h3>Spill Detection (B3)</h3>
+          <Waves size={14} aria-hidden="true" />
         </div>
         <dl className="info-list">
           <InfoRow
-            label="Status"
+            label="Detection Status"
             value={
               spillArtifact
                 ? spillMetadata.detected
                   ? 'Confirmed slick detected'
                   : 'No slick detected'
-                : 'Pending B3 detection'
+                : 'Pending B3 Execution'
             }
           />
           {spillAreaM2 !== undefined && (
             <InfoRow
-              label="Area"
-              value={`${spillAreaM2.toLocaleString()} m² (${(spillAreaM2 / 1_000_000).toFixed(3)} km²)`}
+              label="Area Footprint"
+              value={`${(spillAreaM2 / 1_000_000).toFixed(3)} km² (${spillAreaM2.toLocaleString()} m²)`}
             />
           )}
           {spillConfidence !== undefined && (
-            <InfoRow label="Confidence" value={`${(spillConfidence * 100).toFixed(0)}%`} />
+            <InfoRow label="Spatial Confidence" value={`${(spillConfidence * 100).toFixed(0)}%`} />
           )}
           {spillCentroid && (
             <InfoRow
@@ -378,10 +393,10 @@ export function IncidentPanel({
       <section className="panel-section controls-section">
         <div className="section-title-line">
           <h3>Pipeline Execution</h3>
-          <span className="badge-subtle">{artifacts.length} Artifacts</span>
+          <span className="vessel-tag" style={{ color: 'var(--color-accent)' }}>{artifacts.length} Artifacts</span>
         </div>
 
-        {/* Stage G3: Run Configuration (Server-side SAR path & optional tuning parameters) */}
+        {/* Run Configuration (Server-side SAR path & optional tuning parameters) */}
         <div className="run-config-box">
           <button
             type="button"
@@ -444,7 +459,7 @@ export function IncidentPanel({
           )}
         </div>
 
-        {/* Stage G3: Run Button & Action States */}
+        {/* Run Actions */}
         {isCompleted ? (
           <div className="completed-state-box">
             <p className="completed-state-message">
@@ -452,10 +467,10 @@ export function IncidentPanel({
             </p>
             <div className="completed-btn-group">
               <button
-                className="primary-button run-button"
+                className="primary-button"
                 type="button"
                 disabled={true}
-                title="Investigation already completed. Create a new investigation to re-run the pipeline."
+                style={{ width: '100%' }}
               >
                 Pipeline Completed (B1 → F3)
               </button>
@@ -473,10 +488,11 @@ export function IncidentPanel({
         ) : (
           <div className="run-actions-group">
             <button
-              className="primary-button run-button"
+              className="primary-button"
               type="button"
               onClick={handleRunClick}
               disabled={isProcessing}
+              style={{ width: '100%' }}
               title={
                 isProcessing
                   ? 'Pipeline is currently executing...'
@@ -500,7 +516,6 @@ export function IncidentPanel({
               )}
             </button>
 
-            {/* Stage G3: PROCESSING recovery manual action */}
             {activeStatus === 'PROCESSING' && onRefreshStatus && (
               <button
                 className="secondary-button refresh-status-button"
@@ -514,10 +529,10 @@ export function IncidentPanel({
           </div>
         )}
 
-        <div className="layer-controls">
-          <LayerButton label="Spill overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />
-          <LayerButton label="Drift paths" icon={Activity} active={layers.drift} onClick={() => onToggleLayer('drift')} />
-          <LayerButton label="Vessel tracks" icon={Ship} active={layers.vessels} onClick={() => onToggleLayer('vessels')} />
+        <div className="layer-controls" style={{ marginTop: '0.75rem' }}>
+          <LayerButton label="Calibrated Spill Overlay" icon={Waves} active={layers.spill} onClick={() => onToggleLayer('spill')} />
+          <LayerButton label="Drift Trajectories" icon={Activity} active={layers.drift} onClick={() => onToggleLayer('drift')} />
+          <LayerButton label="AIS Vessel Tracks" icon={Ship} active={layers.vessels} onClick={() => onToggleLayer('vessels')} />
         </div>
       </section>
     </aside>
@@ -542,7 +557,7 @@ function LayerButton({
       aria-pressed={active}
       onClick={onClick}
     >
-      {active ? <Eye size={15} /> : <EyeOff size={15} />}
+      {active ? <Eye size={14} color="var(--color-accent)" /> : <EyeOff size={14} />}
       <Icon size={14} />
       <span>{label}</span>
     </button>

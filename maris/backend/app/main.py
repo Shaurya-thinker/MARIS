@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.experiment_routes import router as experiment_router
 from app.api.routes import router
 from app.core.config import settings
 
@@ -73,3 +74,4 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(experiment_router, prefix="/api/experiment")

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Crosshair, ScanLine } from 'lucide-react'
+import { Crosshair, Eye, EyeOff, Layers, Maximize2, Navigation, ScanLine, Ship, Waves, Wind, ZoomIn, ZoomOut } from 'lucide-react'
 import * as maplibregl from 'maplibre-gl'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import type { Feature, FeatureCollection, LineString, Point, Polygon } from 'geojson'
@@ -8,7 +8,7 @@ import type { SimulationScenario } from '../../simulation/simulationTypes'
 import type { DriftReconstructionData, MapLayerVisibility, ReconstructedAisData, VesselProperties } from '../../types/maris'
 import type { BoundingBox } from '../../types/investigationApi'
 
-const MAP_STYLE = 'https://demotiles.maplibre.org/style.json'
+const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 const DEMO_BOUNDS: maplibregl.LngLatBoundsLike = [[9.08, 42.9], [9.75, 43.52]]
 
 interface MapViewProps {
@@ -40,6 +40,7 @@ export function MapView({
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const [mapError, setMapError] = useState(false)
+  const [cursorCoords, setCursorCoords] = useState<string>('--.----° N, --.----° E')
 
   // Calculate effective initial bounds
   const effectiveBounds: maplibregl.LngLatBoundsLike =
@@ -62,13 +63,21 @@ export function MapView({
       fitBoundsOptions: { padding: 45 },
     })
     mapRef.current = map
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right')
     map.on('error', () => setMapError(true))
+
+    map.on('mousemove', (e) => {
+      const lat = e.lngLat.lat
+      const lng = e.lngLat.lng
+      const latDir = lat >= 0 ? 'N' : 'S'
+      const lngDir = lng >= 0 ? 'E' : 'W'
+      setCursorCoords(
+        `${Math.abs(lat).toFixed(4)}° ${latDir}, ${Math.abs(lng).toFixed(4)}° ${lngDir}`
+      )
+    })
 
     map.on('style.load', async () => {
       try {
         if (isDemoMode) {
-          // Load demo static files
           const [spillResponse, aisResponse, driftResponse] = await Promise.all([
             fetch(mapData.spillGeoJsonUrl),
             fetch(mapData.aisJsonUrl),
@@ -190,25 +199,45 @@ export function MapView({
     mapRef.current?.fitBounds(effectiveBounds, { padding: 45, duration: 500 })
   }
 
+  function handleZoomIn() {
+    mapRef.current?.zoomIn({ duration: 300 })
+  }
+
+  function handleZoomOut() {
+    mapRef.current?.zoomOut({ duration: 300 })
+  }
+
   return (
     <section className="map-panel" aria-label="MARIS GIS map">
       <div className="map-surface">
         <div ref={containerRef} className="map-container" />
-        <div className="map-overlay-header">
-          <span className="map-watermark">
-            <ScanLine size={17} /> {isDemoMode ? 'GIS VIEW · HISTORICAL CASE RECONSTRUCTION' : isSimulationMode ? 'GIS VIEW · SIMULATION SHOWCASE' : 'GIS VIEW · MARIS G1 LIVE ARTIFACTS'}
-          </span>
-          <span className="map-status">{mapError ? 'Map unavailable' : mapReady ? 'Map ready' : 'Initializing map'}</span>
+        
+        {/* Floating Mission Control HUD Toolbar */}
+        <div className="map-hud-toolbar">
+          <button className="map-hud-btn" type="button" onClick={resetView} title="Reset camera bounds to AOI">
+            <Crosshair size={14} color="var(--color-accent)" />
+            <span>Reset AOI</span>
+          </button>
+          <button className="map-hud-btn" type="button" onClick={handleZoomIn} title="Zoom in">
+            <ZoomIn size={14} />
+          </button>
+          <button className="map-hud-btn" type="button" onClick={handleZoomOut} title="Zoom out">
+            <ZoomOut size={14} />
+          </button>
         </div>
+
+        {/* Live Coordinate Crosshair Tracker */}
+        <div className="map-coord-tracker mono-num">
+          <span>{cursorCoords}</span>
+        </div>
+
         {mapError && (
           <div className="map-fallback">
             <strong>GIS view unavailable</strong>
             <span>The geographic base map could not be initialized. Analytical data remains available in the panels.</span>
           </div>
         )}
-        <button className="map-reset" type="button" onClick={resetView} aria-label="Reset map view" title="Reset map view">
-          <Crosshair size={16} /> Reset view
-        </button>
+
         <MapLegend isDemoMode={isDemoMode} isSimulationMode={isSimulationMode} />
       </div>
     </section>
@@ -662,7 +691,7 @@ function MapLegend({ isDemoMode, isSimulationMode }: { isDemoMode: boolean; isSi
   if (isDemoMode) {
     return (
       <div className="map-legend">
-        <div className="legend-title">Historical evidence</div>
+        <div className="legend-title">Historical Evidence</div>
         <span>
           <i className="legend-swatch legend-swatch--spill" /> Observed slick - reconstructed
         </span>
@@ -670,16 +699,13 @@ function MapLegend({ isDemoMode, isSimulationMode }: { isDemoMode: boolean; isSi
           <i className="legend-swatch legend-swatch--origin" /> Estimated origin zone
         </span>
         <span>
-          <i className="legend-swatch legend-swatch--backward" /> Environmental drift reconstruction
+          <i className="legend-swatch legend-swatch--backward" /> Drift trajectory
         </span>
         <span>
           <i className="legend-swatch legend-swatch--candidate" /> Reconstructed vessel anchor
         </span>
         <span>
-          <i className="legend-swatch legend-swatch--approach" /> ULYSSE approach - 161 deg
-        </span>
-        <span>
-          <i className="legend-swatch legend-swatch--anchor" /> CSL VIRGINIA swing circle - 1000 m
+          <i className="legend-swatch legend-swatch--approach" /> ULYSSE approach (161°)
         </span>
       </div>
     )
@@ -688,15 +714,15 @@ function MapLegend({ isDemoMode, isSimulationMode }: { isDemoMode: boolean; isSi
   if (isSimulationMode) {
     return (
       <div className="map-legend">
-        <div className="legend-title">Simulation evidence</div>
+        <div className="legend-title">Simulation Evidence</div>
         <span>
-          <i className="legend-swatch legend-swatch--spill" /> Synthetic spill polygon
+          <i className="legend-swatch legend-swatch--spill" /> Synthetic slick polygon
         </span>
         <span>
-          <i className="legend-swatch legend-swatch--origin" /> Source zone
+          <i className="legend-swatch legend-swatch--origin" /> Derived source zone
         </span>
         <span>
-          <i className="legend-swatch legend-swatch--candidate" /> Simulated vessel tracks
+          <i className="legend-swatch legend-swatch--candidate" /> Correlated vessel tracks
         </span>
       </div>
     )
@@ -704,7 +730,7 @@ function MapLegend({ isDemoMode, isSimulationMode }: { isDemoMode: boolean; isSi
 
   return (
     <div className="map-legend">
-      <div className="legend-title">Live Geographic Artifacts</div>
+      <div className="legend-title">Live GIS Artifacts</div>
       <span>
         <i className="legend-swatch legend-swatch--spill" /> B3 Spill Geometry
       </span>
