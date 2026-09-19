@@ -262,17 +262,19 @@ export function InvestigationWorkspace({
   // Demo playback timer
   useEffect(() => {
     if (!playbackPlaying) return undefined
+
+    const stageLimit = isSimulationMode ? simulationTimeline.length - 1 : prototypeFlowStages.length - 1
     const timer = window.setInterval(() => {
       setPlaybackStage((current) => {
-        if (current >= prototypeFlowStages.length - 1) {
+        if (current >= stageLimit) {
           setPlaybackPlaying(false)
           return current
         }
         return current + 1
       })
-    }, 1800)
+    }, isSimulationMode ? 1600 : 1800)
     return () => window.clearInterval(timer)
-  }, [playbackPlaying])
+  }, [playbackPlaying, isSimulationMode, simulationTimeline.length])
 
   // Manual status refresh for PROCESSING recovery
   async function handleRefreshStatus() {
@@ -560,6 +562,8 @@ export function InvestigationWorkspace({
           isDemoMode={isDemoMode}
           isSimulationMode={isSimulationMode}
           simulationScenario={simulationScenario}
+          simulationStageIndex={playbackStage}
+          simulationStages={simulationTimeline}
           demoIncident={demoIncidentData}
           demoCandidates={demoCandidateVessels}
           selectedCandidate={selectedCandidate}

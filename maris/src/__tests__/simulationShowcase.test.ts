@@ -79,5 +79,6 @@ describe('Simulation showcase', () => {
     expect(screen.getByText(/synthetic scenario active/i)).toBeTruthy()
     expect(screen.queryByText(/loading investigation details/i)).toBeNull()
     expect(screen.getAllByText(/arabian sea/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/investigation report/i).length).toBeGreaterThan(0)
   })
 })
