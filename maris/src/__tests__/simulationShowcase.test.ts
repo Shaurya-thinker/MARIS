@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { InvestigationWorkspace } from '../components/layout/InvestigationWorkspace'
 import {
@@ -81,4 +81,32 @@ describe('Simulation showcase', () => {
     expect(screen.getAllByText(/arabian sea/i).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/investigation report/i).length).toBeGreaterThan(0)
   })
+
+  it('allows skipping simulation analysis directly to candidate attribution results', () => {
+    const scenario = getSimulationScenarioById('alpha')
+    expect(scenario).toBeTruthy()
+
+    render(
+      React.createElement(InvestigationWorkspace, {
+        activeId: 'simulation-alpha',
+        isDemoMode: false,
+        isSimulationMode: true,
+        simulationScenario: scenario ?? null,
+        investigations: [],
+        onSelectInvestigation: () => {},
+        onOpenCreateModal: () => {},
+        onCloseCreateModal: () => {},
+      })
+    )
+
+    const skipBtn = screen.getByText(/skip to results/i)
+    expect(skipBtn).toBeTruthy()
+    fireEvent.click(skipBtn)
+
+    // Once skipped to final stage, candidates and attribution are rendered
+    expect(screen.getByText(/candidate vessels \(f2\)/i)).toBeTruthy()
+    expect(screen.getAllByText(/spill dimensions/i).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText(/source & drift dynamics/i)).toBeTruthy()
+  })
 })
+

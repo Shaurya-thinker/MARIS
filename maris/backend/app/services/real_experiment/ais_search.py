@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from app.acquisition.base import AcquisitionConfigurationError, AcquisitionError
@@ -166,7 +167,7 @@ class AisSearchService:
         req = AcquisitionRequest(
             investigation_id=investigation_id,
             provider_id="ais",
-            asset_type=AssetType.AIS_TRACK,
+            asset_type=AssetType.VESSEL_TRACK,
             area_of_interest=bbox,
             time_window=TimeWindow(start=start_utc, end=end_utc),
         )
@@ -183,14 +184,15 @@ class AisSearchService:
         all_records: list[AisPositionRecord] = []
         for artifact in result.artifacts:
             try:
-                raw = json.loads(Path_read(artifact.location))
-                if isinstance(raw, list):
+                raw = json.loads(Path(artifact.location).read_text(encoding="utf-8"))
+                records_data = raw.get("records", raw) if isinstance(raw, dict) else raw
+                if isinstance(records_data, list):
                     query = AisHistoricalQuery(
                         investigation_id=investigation_id,
                         area_of_interest=bbox,
                         time_window=TimeWindow(start=start_utc, end=end_utc),
                     )
-                    all_records.extend(normalize_ais_records(raw, query))
+                    all_records.extend(normalize_ais_records(records_data, query))
             except Exception:
                 pass  # Skip artifacts that cannot be parsed; do not fabricate data
 
@@ -246,7 +248,9 @@ class AisSearchService:
         )
 
     @staticmethod
-    def _utc(dt: datetime) -> datetime:
+    def _utc(dt: datetime | str) -> datetime:
+        if isinstance(dt, str):
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)

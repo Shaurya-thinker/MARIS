@@ -2,6 +2,25 @@ import os
 from pathlib import Path
 
 
+def _load_dotenv(backend_root: Path) -> None:
+    env_file = backend_root / ".env"
+    if not env_file.exists():
+        return
+    try:
+        with open(env_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip("'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except Exception:
+        pass
+
+
 def _env(name: str, default: str = "") -> str:
     value = os.environ.get(name)
     if value is None:
@@ -14,6 +33,7 @@ class Settings:
 
     def __init__(self, **overrides: object) -> None:
         backend_root = Path(__file__).resolve().parents[2]
+        _load_dotenv(backend_root)
         self.service_name = _env("MARIS_SERVICE_NAME", "MARIS backend")
         self.data_dir = Path(_env("MARIS_DATA_DIR", str(backend_root / "data")))
         self.cdse_username = _env("CDSE_USERNAME")

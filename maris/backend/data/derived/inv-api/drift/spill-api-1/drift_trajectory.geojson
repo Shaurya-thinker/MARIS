@@ -28,8 +28,8 @@
   "properties": {
     "investigation_id": "inv-api",
     "spill_detection_id": "spill-api-1",
-    "wind_asset_id": "1b93243d-943a-4a8b-9978-493ef8e31745",
-    "current_asset_id": "761c10c9-2a50-46e6-b8da-e86bce459fa3",
+    "wind_asset_id": "3c5b0d39-05f0-4f00-9722-758bd43b5385",
+    "current_asset_id": "c2b03027-266c-45b7-bbb1-1da23ca6c3a9",
     "model_version": "leeway_euler_v1",
     "observation_time": "2024-06-01T12:00:00+00:00",
     "origin_lon": 2.5,

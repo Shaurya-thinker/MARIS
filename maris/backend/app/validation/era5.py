@@ -356,6 +356,10 @@ class Era5Validator(ScientificValidator):
         try:
             import xarray as xr
             xds = xr.open_dataset(str(path), engine="netcdf4")
+            if "valid_time" in xds and "time" not in xds:
+                xds = xds.rename({"valid_time": "time"})
+            elif "valid_time" in xds.coords and "time" not in xds.coords:
+                xds = xds.rename_vars({"valid_time": "time"})
         except Exception as exc:
             issues.append(_issue(_ERROR, "ERA5_NETCDF_UNREADABLE",
                                  f"NetCDF cannot be opened: {exc}"))

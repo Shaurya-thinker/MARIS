@@ -113,6 +113,28 @@ def _haversine_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     return 2.0 * R * math.asin(math.sqrt(min(a, 1.0)))
 
 
+def _normalize_netcdf_dataset(ds: xr.Dataset) -> xr.Dataset:
+    """Normalize NetCDF coordinate names and dimensions for ECMWF/CMEMS compatibility."""
+    if "valid_time" in ds and "time" not in ds:
+        ds = ds.rename({"valid_time": "time"})
+    elif "valid_time" in ds.coords and "time" not in ds.coords:
+        ds = ds.rename_vars({"valid_time": "time"})
+
+    if "expver" in ds.dims:
+        ds = ds.isel(expver=0, drop=True)
+    if "number" in ds.dims:
+        ds = ds.isel(number=0, drop=True)
+    if "depth" in ds.dims:
+        ds = ds.isel(depth=0, drop=True)
+
+    if "lat" in ds.dims and "latitude" not in ds.dims:
+        ds = ds.rename({"lat": "latitude"})
+    if "lon" in ds.dims and "longitude" not in ds.dims:
+        ds = ds.rename({"lon": "longitude"})
+
+    return ds
+
+
 def _open_netcdf(location: str) -> xr.Dataset:
     """Open a validated NetCDF artifact.
 
@@ -122,7 +144,8 @@ def _open_netcdf(location: str) -> xr.Dataset:
     """
     path = Path(location)
     if path.is_file():
-        return xr.open_dataset(str(path), engine="netcdf4")
+        ds = xr.open_dataset(str(path), engine="netcdf4")
+        return _normalize_netcdf_dataset(ds)
     if path.is_dir():
         nc_files = sorted(path.glob("*.nc"))
         if not nc_files:
@@ -130,11 +153,12 @@ def _open_netcdf(location: str) -> xr.Dataset:
                 f"NetCDF directory '{path}' contains no .nc files. "
                 "Expected ERA5 monthly output from Stage C1."
             )
-        return xr.open_mfdataset(
+        ds = xr.open_mfdataset(
             [str(f) for f in nc_files],
             engine="netcdf4",
             combine="by_coords",
         )
+        return _normalize_netcdf_dataset(ds)
     raise DriftModellingError(
         f"NetCDF artifact path does not exist: '{location}'"
     )
@@ -330,12 +354,15 @@ def run_forward_drift(
     wind_times_ns = wind_times.astype("datetime64[ns]")
     curr_times_ns = curr_times.astype("datetime64[ns]")
 
-    if obs_np < wind_times_ns.min() or obs_np > wind_times_ns.max():
+    time_tol_ns = np.timedelta64(3600, "s").astype("timedelta64[ns]")
+    c_time_tol_ns = np.timedelta64(86400, "s").astype("timedelta64[ns]")
+
+    if obs_np < (wind_times_ns.min() - time_tol_ns) or obs_np > (wind_times_ns.max() + time_tol_ns):
         raise DriftModellingError(
             f"Observation time {obs_utc.isoformat()} is outside the ERA5 data "
             f"temporal range [{wind_times_ns.min()}, {wind_times_ns.max()}]."
         )
-    if obs_np < curr_times_ns.min() or obs_np > curr_times_ns.max():
+    if obs_np < (curr_times_ns.min() - c_time_tol_ns) or obs_np > (curr_times_ns.max() + c_time_tol_ns):
         raise DriftModellingError(
             f"Observation time {obs_utc.isoformat()} is outside the CMEMS data "
             f"temporal range [{curr_times_ns.min()}, {curr_times_ns.max()}]."

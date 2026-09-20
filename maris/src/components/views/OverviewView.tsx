@@ -1,13 +1,15 @@
+import { useRef } from 'react'
 import { ArrowRight, Compass, Plus, Shield, Sparkles } from 'lucide-react'
 import type { InvestigationListItem } from '../../types/investigationApi'
 import type { SimulationScenario } from '../../simulation/simulationTypes'
 import { incidentData as demoIncident } from '../../data/demoData'
+import { gsap, useGSAP, isReducedMotion, TIMINGS, EASINGS } from '../../lib/motion'
 
 interface OverviewViewProps {
   investigations: InvestigationListItem[]
   activeId: string
   onSelectInvestigation: (id: string) => void
-  onNavigateToView: (view: 'workspace' | 'investigations' | 'evidence' | 'vessels' | 'analytics' | 'pipeline' | 'settings') => void
+  onNavigateToView: (view: 'workspace' | 'investigations' | 'evidence' | 'vessels' | 'analytics' | 'pipeline') => void
   onOpenCreateModal: () => void
   simulationScenarios: SimulationScenario[]
   isBackendUnavailable?: boolean
@@ -22,7 +24,41 @@ export function OverviewView({
   simulationScenarios,
   isBackendUnavailable = false,
 }: OverviewViewProps) {
+  const overviewRef = useRef<HTMLDivElement>(null)
   const totalLive = investigations.length
+
+  useGSAP(
+    () => {
+      const el = overviewRef.current
+      if (!el || isReducedMotion()) return
+
+      const tl = gsap.timeline({ defaults: { ease: EASINGS.out } })
+
+      // 1. Hero text & action buttons
+      tl.fromTo(
+        el.querySelectorAll('.view-hero-text, .view-hero button'),
+        { opacity: 0, y: 10 },
+        { opacity: 1, y: 0, duration: TIMINGS.base, stagger: 0.04, clearProps: 'transform,opacity' }
+      )
+
+      // 2. Metrics cards subtle stagger
+      tl.fromTo(
+        el.querySelectorAll('.telemetry-hero-card'),
+        { opacity: 0, y: 12 },
+        { opacity: 1, y: 0, duration: TIMINGS.base, stagger: 0.04, clearProps: 'transform,opacity' },
+        '-=0.12'
+      )
+
+      // 3. Showcase section header & cards
+      tl.fromTo(
+        el.querySelectorAll('.section-title-line, .catalog-card'),
+        { opacity: 0, y: 14 },
+        { opacity: 1, y: 0, duration: TIMINGS.base, stagger: 0.04, clearProps: 'transform,opacity' },
+        '-=0.1'
+      )
+    },
+    { scope: overviewRef }
+  )
 
   const allCases = [
     {
@@ -58,7 +94,7 @@ export function OverviewView({
   ]
 
   return (
-    <div className="view-container">
+    <div className="view-container" ref={overviewRef}>
       {/* Editorial Hero Section */}
       <div className="view-hero">
         <div className="view-hero-text">

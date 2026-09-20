@@ -21,6 +21,8 @@ interface InvestigationPipelineProps {
   isDemoMode: boolean
   isSimulationMode?: boolean
   simulationStages?: Array<{ id: string; label: string; shortLabel: string; description: string }>
+  simulationStageIndex?: number
+  onSelectStage?: (index: number) => void
   demoStages?: PipelineStage[]
   completedStages?: string[]
   currentStage?: string | null
@@ -32,6 +34,8 @@ export function InvestigationPipeline({
   isDemoMode,
   isSimulationMode = false,
   simulationStages = [],
+  simulationStageIndex,
+  onSelectStage,
   demoStages = [],
   completedStages = [],
   currentStage,
@@ -41,6 +45,7 @@ export function InvestigationPipeline({
   if (isDemoMode || isSimulationMode) {
     const stageList = isSimulationMode ? simulationStages : demoStages
     const modeLabel = isSimulationMode ? 'SIMULATION' : 'HISTORICAL'
+    const activeSimIndex = simulationStageIndex !== undefined ? simulationStageIndex : simulationStages.length - 1
 
     return (
       <section className="mission-timeline" aria-label="Investigation pipeline timeline">
@@ -52,10 +57,10 @@ export function InvestigationPipeline({
         <div className="timeline-nodes">
           {stageList.map((stage, index) => {
             const isCompleted = isSimulationMode
-              ? index < simulationStages.length - 1
+              ? index < activeSimIndex
               : stage.status === 'completed'
             const isCurrent = isSimulationMode
-              ? index === simulationStages.length - 1
+              ? index === activeSimIndex
               : stage.status === 'current'
 
             const stageId = (stage as any).id || `S${index + 1}`
@@ -66,6 +71,20 @@ export function InvestigationPipeline({
                 key={stage.label || stageId}
                 className={`timeline-step ${isCurrent ? 'is-current' : isCompleted ? 'is-completed' : 'is-pending'}`}
                 title={`${stage.label} — ${isCompleted ? 'Completed' : isCurrent ? 'Active Stage' : 'Pending'}`}
+                onClick={onSelectStage ? () => onSelectStage(index) : undefined}
+                style={onSelectStage ? { cursor: 'pointer' } : undefined}
+                role={onSelectStage ? 'button' : undefined}
+                tabIndex={onSelectStage ? 0 : undefined}
+                onKeyDown={
+                  onSelectStage
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          onSelectStage(index)
+                        }
+                      }
+                    : undefined
+                }
               >
                 <div className="timeline-node">
                   {isCompleted ? (

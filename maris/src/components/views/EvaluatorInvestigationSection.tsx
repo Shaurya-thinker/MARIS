@@ -84,7 +84,11 @@ const ACTIVE_MODEL_VERSION = 'attr_lr_scaled_10k_20260919_183349'
 // Main Component
 // ---------------------------------------------------------------------------
 
-export default function EvaluatorInvestigationSection() {
+export interface EvaluatorInvestigationSectionProps {
+  initialInvestigationId?: string | null
+}
+
+export default function EvaluatorInvestigationSection({ initialInvestigationId }: EvaluatorInvestigationSectionProps = {}) {
   // Navigation & Step Control (1 through 6)
   const [activeStep, setActiveStep] = useState<number>(1)
 
@@ -122,6 +126,35 @@ export default function EvaluatorInvestigationSection() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [successNotice, setSuccessNotice] = useState<string | null>(null)
 
+  // Explicit Workflow Completion State
+  const isStep1Complete = Boolean(selectedImage)
+  const isStep2Complete = Boolean(isStep1Complete && driftPreview)
+  const isStep3Complete = Boolean(isStep2Complete && filteringResponse)
+  const isStep4Complete = Boolean(isStep3Complete && investigationRecord)
+  const isStep5Complete = Boolean(isStep4Complete && investigationRecord?.investigation_id)
+  const isStep6Complete = Boolean(isStep5Complete)
+
+  const completedSteps: Record<number, boolean> = {
+    1: isStep1Complete,
+    2: isStep2Complete,
+    3: isStep3Complete,
+    4: isStep4Complete,
+    5: isStep5Complete,
+    6: isStep6Complete,
+  }
+
+  function isStepUnlocked(stepNum: number): boolean {
+    if (stepNum === 1) return true
+    return Boolean(completedSteps[stepNum - 1])
+  }
+
+  function handleStepClick(targetStep: number) {
+    if (!isStepUnlocked(targetStep)) {
+      return // Strict NO-OP
+    }
+    setActiveStep(targetStep)
+  }
+
   // Load initial reference observations
   useEffect(() => {
     async function loadRefs() {
@@ -129,15 +162,6 @@ export default function EvaluatorInvestigationSection() {
       try {
         const refs = await fetchEvaluatorReferenceObservations()
         setReferenceImages(refs)
-        if (refs.length > 0) {
-          const defaultRef = refs[0]
-          setSelectedImage(defaultRef)
-          setWindSpeed(defaultRef.default_wind_speed_ms)
-          setWindDirection(defaultRef.default_wind_direction_deg)
-          setCurrentSpeed(defaultRef.default_current_speed_ms)
-          setCurrentDirection(defaultRef.default_current_direction_deg)
-          setBacktrackHours(defaultRef.backtrack_hours)
-        }
       } catch (err) {
         setErrorMessage(err instanceof Error ? err.message : 'Failed to load reference observations.')
       } finally {
@@ -146,7 +170,10 @@ export default function EvaluatorInvestigationSection() {
     }
     loadRefs()
     loadSavedHistory()
-  }, [])
+    if (initialInvestigationId) {
+      handleReplaySavedInvestigation(initialInvestigationId)
+    }
+  }, [initialInvestigationId])
 
   async function loadSavedHistory() {
     setLoadingHistory(true)
@@ -288,6 +315,26 @@ export default function EvaluatorInvestigationSection() {
           v: record.current_inputs.v,
         },
       })
+      // Sync candidate filtering state so Step 3 is completed & inspectable
+      setFilteringResponse({
+        total_evaluated: (record.candidate_probabilities?.length || 0) + (record.ineligible_vessels_data?.length || 0),
+        eligible_count: record.candidate_probabilities?.length || 0,
+        ineligible_count: record.ineligible_vessels_data?.length || 0,
+        provider_status: (record.candidate_probabilities?.length || 0) > 0 ? 'LIVE_AIS' : 'NO_ELIGIBLE_VESSELS',
+        provider_description: 'Archived AIS candidate filtering state.',
+        eligible_candidates: record.candidate_probabilities?.map(c => ({
+          vessel_id: c.vessel_id,
+          vessel_name: c.vessel_name,
+          vessel_type: c.vessel_type,
+          mmsi: c.mmsi,
+          min_corridor_dist_km: c.corridor_dist_km,
+          time_difference_hours: c.time_difference_hours,
+          has_temporal_overlap: true,
+          has_spatial_corridor_overlap: true,
+          is_eligible: true,
+        })) || [],
+        ineligible_candidates: record.ineligible_vessels_data || [],
+      })
       // Sync environment values
       setWindSpeed(record.wind_inputs.speed_ms)
       setWindDirection(record.wind_inputs.direction_deg)
@@ -296,9 +343,30 @@ export default function EvaluatorInvestigationSection() {
       setBacktrackHours(record.drift_parameters.backtrack_hours)
       setCorridorKm(record.drift_parameters.corridor_km)
 
-      // Set matched reference image
+      // Set matched reference image or reconstruct minimal observation
       const matched = referenceImages.find(r => r.id === record.selected_image_id)
-      if (matched) setSelectedImage(matched)
+      if (matched) {
+        setSelectedImage(matched)
+      } else {
+        setSelectedImage({
+          id: record.selected_image_id,
+          title: record.image_title || 'Archived S-1 Reference Observation',
+          observation_lon: record.coordinates.lon,
+          observation_lat: record.coordinates.lat,
+          observation_time: record.acquisition_timestamp,
+          image_path: '/satellite/corsica_2018_s1.jpg',
+          historical_context: 'Archived investigation reference observation.',
+          slick_area_km2: 18.5,
+          sensor: 'Sentinel-1 C-SAR',
+          mode: 'IW GRDH',
+          is_historical_demo: record.selected_image_id.includes('corsica'),
+          default_wind_speed_ms: record.wind_inputs.speed_ms,
+          default_wind_direction_deg: record.wind_inputs.direction_deg,
+          default_current_speed_ms: record.current_inputs.speed_ms,
+          default_current_direction_deg: record.current_inputs.direction_deg,
+          backtrack_hours: record.drift_parameters.backtrack_hours,
+        })
+      }
 
       setActiveStep(5)
       setSuccessNotice(`Replaying saved investigation ${invId} (Model: ${record.model_version}). Analysis was NOT rerun.`)
@@ -313,42 +381,47 @@ export default function EvaluatorInvestigationSection() {
       <div className="eval-architecture-card">
         <div className="eval-arch-header">
           <div className="eval-arch-badge">NEW MARIS INVESTIGATION WORKFLOW</div>
-          <h3>Evaluator Attribution Pipeline Architecture</h3>
+          <h3>Vessel Attribution Investigation Workflow</h3>
           <p>
-            Dynamic attribution driven by Sentinel-1 SAR observations, metocean backward drift physics,
-            strict spatial corridor/temporal AIS filtering, and the active scaled ML attribution model.
+            Sentinel-1 SAR imagery analysis, metocean backward drift modeling, spatial and temporal AIS candidate filtering, and calibrated vessel attribution scoring.
           </p>
         </div>
 
         <div className="eval-flow-diagram">
           {[
-            { num: 1, title: 'SELECT SENTINEL-1 IMAGE', sub: 'Verified SAR Acquisition', icon: <Satellite size={16} /> },
-            { num: 2, title: 'WIND + OCEAN CURRENT', sub: 'Backward Drift Physics', icon: <Wind size={16} /> },
-            { num: 3, title: 'ELIGIBLE AIS VESSELS', sub: 'Corridor & Time Filtering', icon: <Ship size={16} /> },
-            { num: 4, title: 'RUN ATTRIBUTION', sub: 'Scaled ML Model (10k)', icon: <Play size={16} /> },
-            { num: 5, title: 'RESULTS + MAP', sub: 'Attribution & Vector Map', icon: <Layers size={16} /> },
-            { num: 6, title: 'SAVED INVESTIGATION', sub: 'Immutable Replay Store', icon: <History size={16} /> },
-          ].map((s, idx, arr) => (
-            <React.Fragment key={s.num}>
-              <button
-                type="button"
-                className={`eval-flow-step ${activeStep === s.num ? 'active' : ''} ${activeStep > s.num ? 'completed' : ''}`}
-                onClick={() => setActiveStep(s.num)}
-              >
-                <div className="eval-step-num-badge">{activeStep > s.num ? '✓' : s.num}</div>
-                <div className="eval-step-info">
-                  <div className="eval-step-title">{s.title}</div>
-                  <div className="eval-step-sub">{s.sub}</div>
-                </div>
-              </button>
-              {idx < arr.length - 1 && (
-                <div className="eval-flow-arrow">
-                  <ArrowRight size={16} className="desktop-arrow" />
-                  <ArrowDown size={14} className="mobile-arrow" />
-                </div>
-              )}
-            </React.Fragment>
-          ))}
+            { num: 1, title: 'SELECT SENTINEL-1 IMAGE', sub: 'SAR Scene Selection', icon: <Satellite size={16} /> },
+            { num: 2, title: 'WIND + OCEAN CURRENT', sub: 'Drift Forcing Vectors', icon: <Wind size={16} /> },
+            { num: 3, title: 'ELIGIBLE AIS VESSELS', sub: 'Corridor & Time Window', icon: <Ship size={16} /> },
+            { num: 4, title: 'RUN ATTRIBUTION', sub: 'Inference Model', icon: <Play size={16} /> },
+            { num: 5, title: 'RESULTS + MAP', sub: 'Trajectory & Scores', icon: <Layers size={16} /> },
+            { num: 6, title: 'SAVED INVESTIGATION', sub: 'Record Persistence', icon: <History size={16} /> },
+          ].map((s, idx, arr) => {
+            const unlocked = isStepUnlocked(s.num)
+            const isCompleted = Boolean(completedSteps[s.num])
+            return (
+              <React.Fragment key={s.num}>
+                <button
+                  type="button"
+                  className={`eval-flow-step ${activeStep === s.num ? 'active' : ''} ${isCompleted ? 'completed' : ''} ${!unlocked ? 'locked' : ''}`}
+                  onClick={() => handleStepClick(s.num)}
+                  disabled={!unlocked}
+                  aria-disabled={!unlocked}
+                >
+                  <div className="eval-step-num-badge">{isCompleted ? '✓' : s.num}</div>
+                  <div className="eval-step-info">
+                    <div className="eval-step-title">{s.title}</div>
+                    <div className="eval-step-sub">{s.sub}</div>
+                  </div>
+                </button>
+                {idx < arr.length - 1 && (
+                  <div className={`eval-flow-arrow ${!isStepUnlocked(arr[idx + 1].num) ? 'locked-arrow' : ''}`}>
+                    <ArrowRight size={16} className="desktop-arrow" />
+                    <ArrowDown size={14} className="mobile-arrow" />
+                  </div>
+                )}
+              </React.Fragment>
+            )
+          })}
         </div>
       </div>
 
@@ -372,13 +445,12 @@ export default function EvaluatorInvestigationSection() {
           <div className="eval-panel-heading">
             <h4>Step 1: Select Verified Sentinel-1 SAR Reference Observation</h4>
             <p>
-              Choose from verified reference satellite observations stored in <code>public/satellite/</code>.
-              Coordinates, acquisition times, and historical benchmark semantics correspond truthfully to actual files.
+              Select a reference Sentinel-1 SAR observation. Geographic coordinates, sensing timestamps, and benchmark incident parameters are matched to verified scene data.
             </p>
           </div>
 
           {loadingReferences ? (
-            <div className="eval-loading">Loading verified reference scenes…</div>
+            <div className="eval-loading">Loading reference scenes…</div>
           ) : (
             <div className="eval-references-grid">
               {referenceImages.map((obs) => {
@@ -446,9 +518,9 @@ export default function EvaluatorInvestigationSection() {
           <div className="eval-panel-heading">
             <h4>Step 2: Set Environmental Forcing (Wind & Ocean Current)</h4>
             <p>
-              Enter or modify wind speed/direction and surface ocean-current speed/direction.
-              These values are passed directly into the real backward-drift integration engine (Stage D3).
-              Attribution results are strictly physics-derived and never hardcoded.
+              Specify wind and surface current vectors for trajectory reconstruction.
+              Environmental forcing is integrated with backward drift physics to reconstruct
+              the estimated release origin.
             </p>
           </div>
 
@@ -579,7 +651,7 @@ export default function EvaluatorInvestigationSection() {
                   onChange={(e) => setBacktrackHours(parseFloat(e.target.value))}
                 />
                 <p className="eval-field-hint">
-                  Euler backward drift integration will integrate backward in time from observation timestamp.
+                  Euler backward drift integration computes the trajectory upstream in time from the observation timestamp.
                 </p>
               </div>
 
@@ -589,7 +661,7 @@ export default function EvaluatorInvestigationSection() {
                 onClick={handleCalculateDrift}
                 disabled={simulatingDrift}
               >
-                {simulatingDrift ? 'Computing D3 Backward Drift…' : 'Calculate Backward Drift →'}
+                {simulatingDrift ? 'Computing Backward Drift…' : 'Calculate Backward Drift →'}
               </button>
             </div>
           </div>
@@ -602,9 +674,9 @@ export default function EvaluatorInvestigationSection() {
           <div className="eval-panel-heading">
             <h4>Step 3: Filter Eligible AIS Vessels (Spatial Corridor & Temporal Intersection)</h4>
             <p>
-              Candidates are strictly evaluated against the reconstructed drift track and release window.
-              Only vessels with <strong>BOTH</strong> spatial corridor intersection (≤ {corridorKm} km) and
-              temporal overlap enter the ML attribution model.
+              Vessels are evaluated against the reconstructed drift trajectory and estimated release window.
+              Only vessels satisfying both spatial corridor (≤ {corridorKm} km) and temporal intersection
+              criteria qualify for attribution scoring.
             </p>
           </div>
 
@@ -641,7 +713,7 @@ export default function EvaluatorInvestigationSection() {
               </span>
             </div>
             <p className="eval-corridor-desc">
-              Maximum allowable lateral distance from vessel AIS points to either the reconstructed source centroid or any point along the backward drift track.
+              Maximum allowable lateral distance between vessel positions and either the reconstructed source centroid or the backward drift trajectory.
             </p>
             <div className="eval-slider-row">
               <span>5 km</span>
@@ -771,7 +843,7 @@ export default function EvaluatorInvestigationSection() {
               type="button"
               className="eval-btn-primary"
               onClick={() => setActiveStep(4)}
-              disabled={!filteringResponse || filteringResponse.eligible_count === 0}
+              disabled={!filteringResponse || filteringVessels}
             >
               Proceed to ML Attribution ({filteringResponse?.eligible_count || 0} Eligible Vessels) →
             </button>
@@ -785,8 +857,8 @@ export default function EvaluatorInvestigationSection() {
           <div className="eval-panel-heading">
             <h4>Step 4: Execute Attribution with Active Scaled ML Model</h4>
             <p>
-              The active model was trained on 10,000 synthetic scenarios with zero evaluation leak.
-              Only eligible vessels meeting spatial and temporal requirements are submitted for inference.
+              Execute vessel attribution using the trained Logistic Regression model.
+              Only eligible vessels meeting spatial corridor and temporal overlap criteria are submitted for scoring.
             </p>
           </div>
 
@@ -796,7 +868,7 @@ export default function EvaluatorInvestigationSection() {
                 <Sparkles size={18} className="eval-icon-ml" />
                 <span>Active Model: <code>{ACTIVE_MODEL_VERSION}</code></span>
               </div>
-              <span className="eval-model-badge">DEFAULT ACTIVE PIPELINE</span>
+              <span className="eval-model-badge">ACTIVE INFERENCE PIPELINE</span>
             </div>
 
             <div className="eval-model-specs-grid">
@@ -836,7 +908,7 @@ export default function EvaluatorInvestigationSection() {
               onClick={handleRunAttribution}
               disabled={runningAttribution}
             >
-              {runningAttribution ? 'Running Active ML Model & Persisting…' : '🚀 RUN MARIS ATTRIBUTION NOW'}
+              {runningAttribution ? 'Running Attribution Model…' : 'RUN MARIS ATTRIBUTION NOW'}
             </button>
           </div>
         </div>
@@ -850,8 +922,8 @@ export default function EvaluatorInvestigationSection() {
               <div>
                 <h4>Step 5: Attribution Results & Interactive Investigation Map</h4>
                 <p>
-                  Reconstructed source zone, backward drift track, environmental forcing vectors,
-                  and ML attribution probabilities.
+                  Reconstructed source zone, backward drift trajectory, environmental forcing vectors,
+                  and candidate attribution scores.
                 </p>
               </div>
               <div className="eval-record-meta-badges">
@@ -1098,13 +1170,13 @@ export default function EvaluatorInvestigationSection() {
               <div className="eval-evidence-title">
                 <Sparkles size={18} className="eval-icon-ml" />
                 <h5>“Why this vessel?” Evidence Panel</h5>
-                <span className="eval-evidence-badge">Physical &amp; Model Audit</span>
+                <span className="eval-evidence-badge">Physical Feature Audit</span>
                 <span className="eval-evidence-model-version">
                   Model: <code>{investigationRecord?.model_version || ACTIVE_MODEL_VERSION}</code>
                 </span>
               </div>
               <span className="eval-evidence-subtitle">
-                Comprehensive physical feature breakdown and attribution justification for each candidate vessel.
+                Physical feature breakdown and attribution justification for each candidate vessel.
               </span>
             </div>
 
@@ -1192,7 +1264,7 @@ export default function EvaluatorInvestigationSection() {
                   <div className="eval-feature-vector-box">
                     <div className="eval-feature-vector-header">
                       <span>Actual ML Features Used by Classifier (10-D Vector)</span>
-                      <span className="mono">LogisticRegression Inputs</span>
+                      <span className="mono">Model Input Vector</span>
                     </div>
                     <div className="eval-feature-vector-grid">
                       <div className="eval-feature-item">
@@ -1277,7 +1349,7 @@ export default function EvaluatorInvestigationSection() {
                 </span>
               </div>
               <p className="eval-excluded-desc">
-                Vessels below were strictly quarantined by spatial corridor or temporal intersection filters and were <strong>NEVER</strong> passed to ML feature extraction or inference.
+                Vessels below did not meet spatial corridor or temporal intersection criteria and were excluded prior to feature extraction and scoring.
               </p>
 
               <div className="eval-excluded-grid">
@@ -1322,11 +1394,9 @@ export default function EvaluatorInvestigationSection() {
       {activeStep === 6 && (
         <div className="eval-step-panel">
           <div className="eval-panel-heading">
-            <h4>Step 6: Saved Investigations & Replayable Records</h4>
+            <h4>Step 6: Saved Investigations & Replay Records</h4>
             <p>
-              Every completed investigation is permanently stored in SQLite with full reproducible state
-              (satellite metadata, environmental vectors, drift steps, corridor constraints, model version, and attribution scores).
-              Saved investigations are replayed directly from disk without re-running or mutating results.
+              Completed investigations are stored with complete reproducible parameters, environmental vectors, drift steps, candidate features, and attribution scores. Saved records are replayed directly from disk without recomputation.
             </p>
           </div>
 
@@ -1336,7 +1406,7 @@ export default function EvaluatorInvestigationSection() {
                 <CheckCircle2 size={24} className="eval-icon-success" />
                 <div>
                   <h5>Current Active Investigation: <code>{investigationRecord.investigation_id}</code></h5>
-                  <p>Permanently stored at: <code>MARIS SQLite Database (evaluator_investigations)</code></p>
+                  <p>Stored in: <code>MARIS Investigation Archive (evaluator_investigations)</code></p>
                 </div>
               </div>
 
@@ -1350,7 +1420,7 @@ export default function EvaluatorInvestigationSection() {
                   <span className="val">{investigationRecord.image_title}</span>
                 </div>
                 <div className="eval-im-cell">
-                  <span className="lbl">Attributed Spiller:</span>
+                  <span className="lbl">Top Attributed Vessel:</span>
                   <span className="val highlight">
                     {investigationRecord.final_attribution.top_candidate?.vessel_name || 'None'}
                   </span>
@@ -1422,7 +1492,7 @@ export default function EvaluatorInvestigationSection() {
                   {historyList.length === 0 && (
                     <tr>
                       <td colSpan={6} className="eval-empty-table">
-                        No saved evaluator investigations yet. Run Step 4 to persist your first investigation.
+                        No saved investigations found. Run Step 4 to archive an investigation.
                       </td>
                     </tr>
                   )}
@@ -1437,9 +1507,12 @@ export default function EvaluatorInvestigationSection() {
               className="eval-btn-primary"
               onClick={() => {
                 setActiveStep(1)
+                setSelectedImage(null)
                 setDriftPreview(null)
                 setFilteringResponse(null)
                 setInvestigationRecord(null)
+                setSelectedHistoryId(null)
+                setSuccessNotice(null)
               }}
             >
               + Start New MARIS Investigation

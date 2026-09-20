@@ -11,12 +11,12 @@ import { EvidenceView } from './components/views/EvidenceView'
 import { VesselsView } from './components/views/VesselsView'
 import { AnalyticsView } from './components/views/AnalyticsView'
 import { PipelineView } from './components/views/PipelineView'
-import { SettingsView } from './components/views/SettingsView'
 import { listInvestigations } from './api/investigationApi'
 import { candidateVessels as demoCandidateVessels, incidentData as demoIncidentData } from './data/demoData'
 import { getSimulationScenarioById, simulationScenarios } from './simulation/simulationEngine'
 import type { InvestigationListItem } from './types/investigationApi'
 import RealExperimentView from './components/views/RealExperimentView'
+import { usePageTransition } from './lib/motion'
 
 function getInitialViewFromLocation(): MarisView {
   if (typeof window === 'undefined') return 'workspace'
@@ -28,7 +28,6 @@ function getInitialViewFromLocation(): MarisView {
   if (path === 'vessels') return 'vessels'
   if (path === 'analytics') return 'analytics'
   if (path === 'pipeline') return 'pipeline'
-  if (path === 'settings') return 'settings'
   const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase()
   if (hash === 'evaluator' || hash === 'experiment') return 'evaluator'
   if (hash === 'investigations') return 'investigations'
@@ -37,7 +36,6 @@ function getInitialViewFromLocation(): MarisView {
   if (hash === 'vessels') return 'vessels'
   if (hash === 'analytics') return 'analytics'
   if (hash === 'pipeline') return 'pipeline'
-  if (hash === 'settings') return 'settings'
   return 'workspace'
 }
 
@@ -50,6 +48,7 @@ export function App() {
   const [initError, setInitError] = useState<string | null>(null)
   const [isLoadingList, setIsLoadingList] = useState(false)
   const [selectedCandidate, setSelectedCandidate] = useState<string>(demoCandidateVessels[0].id)
+  const pageContainerRef = usePageTransition<HTMLDivElement>(activeView)
 
   const handleSelectView = useCallback((view: MarisView) => {
     setActiveView(view)
@@ -154,103 +153,98 @@ export function App() {
       )}
 
       {/* View Switcher Routing */}
-      {activeView === 'workspace' && (
-        <WorkspaceErrorBoundary onReset={loadInvestigationsList}>
-          <InvestigationWorkspace
+      <div key={activeView} ref={pageContainerRef} className="page-transition-wrapper">
+        {activeView === 'workspace' && (
+          <WorkspaceErrorBoundary onReset={loadInvestigationsList}>
+            <InvestigationWorkspace
+              activeId={activeInvestigationId}
+              isDemoMode={isDemoMode}
+              isSimulationMode={isSimulationMode}
+              simulationScenario={activeSimulationScenario}
+              investigations={investigations}
+              onSelectInvestigation={setActiveInvestigationId}
+              isCreateModalOpen={isCreateModalOpen}
+              onCloseCreateModal={() => setIsCreateModalOpen(false)}
+              onOpenCreateModal={() => setIsCreateModalOpen(true)}
+              onInvestigationCreated={loadInvestigationsList}
+              backendError={initError}
+              onNavigateToEvaluator={() => handleSelectView('evaluator')}
+            />
+          </WorkspaceErrorBoundary>
+        )}
+
+        {activeView === 'evaluator' && (
+          <RealExperimentView initialMode="evaluator" />
+        )}
+
+        {activeView === 'overview' && (
+          <OverviewView
+            investigations={investigations}
             activeId={activeInvestigationId}
+            onSelectInvestigation={setActiveInvestigationId}
+            onNavigateToView={handleSelectView}
+            onOpenCreateModal={() => setIsCreateModalOpen(true)}
+            simulationScenarios={simulationScenarios}
+            isBackendUnavailable={Boolean(initError)}
+          />
+        )}
+
+        {activeView === 'investigations' && (
+          <InvestigationsView
+            investigations={investigations}
+            activeId={activeInvestigationId}
+            onSelectInvestigation={setActiveInvestigationId}
+            onNavigateToView={handleSelectView}
+            onOpenCreateModal={() => setIsCreateModalOpen(true)}
+            simulationScenarios={simulationScenarios}
+          />
+        )}
+
+        {activeView === 'evidence' && (
+          <EvidenceView
             isDemoMode={isDemoMode}
             isSimulationMode={isSimulationMode}
             simulationScenario={activeSimulationScenario}
-            investigations={investigations}
-            onSelectInvestigation={setActiveInvestigationId}
-            isCreateModalOpen={isCreateModalOpen}
-            onCloseCreateModal={() => setIsCreateModalOpen(false)}
-            onOpenCreateModal={() => setIsCreateModalOpen(true)}
-            onInvestigationCreated={loadInvestigationsList}
-            backendError={initError}
-            onNavigateToEvaluator={() => handleSelectView('evaluator')}
+            demoIncident={demoIncidentData}
+            artifacts={[]}
+            activeId={activeInvestigationId}
+            onNavigateToView={handleSelectView}
           />
-        </WorkspaceErrorBoundary>
-      )}
+        )}
 
-      {activeView === 'evaluator' && (
-        <RealExperimentView initialMode="evaluator" />
-      )}
+        {activeView === 'vessels' && (
+          <VesselsView
+            isDemoMode={isDemoMode}
+            isSimulationMode={isSimulationMode}
+            simulationScenario={activeSimulationScenario}
+            demoCandidates={demoCandidateVessels}
+            rankingResult={null}
+            selectedCandidate={selectedCandidate}
+            onSelectCandidate={setSelectedCandidate}
+            onNavigateToView={handleSelectView}
+          />
+        )}
 
-      {activeView === 'overview' && (
-        <OverviewView
-          investigations={investigations}
-          activeId={activeInvestigationId}
-          onSelectInvestigation={setActiveInvestigationId}
-          onNavigateToView={handleSelectView}
-          onOpenCreateModal={() => setIsCreateModalOpen(true)}
-          simulationScenarios={simulationScenarios}
-          isBackendUnavailable={Boolean(initError)}
-        />
-      )}
+        {activeView === 'analytics' && (
+          <AnalyticsView
+            isDemoMode={isDemoMode}
+            isSimulationMode={isSimulationMode}
+            simulationScenario={activeSimulationScenario}
+            rankingResult={null}
+            explainabilityReport={null}
+            onNavigateToView={handleSelectView}
+          />
+        )}
 
-      {activeView === 'investigations' && (
-        <InvestigationsView
-          investigations={investigations}
-          activeId={activeInvestigationId}
-          onSelectInvestigation={setActiveInvestigationId}
-          onNavigateToView={handleSelectView}
-          onOpenCreateModal={() => setIsCreateModalOpen(true)}
-          simulationScenarios={simulationScenarios}
-        />
-      )}
-
-      {activeView === 'evidence' && (
-        <EvidenceView
-          isDemoMode={isDemoMode}
-          isSimulationMode={isSimulationMode}
-          simulationScenario={activeSimulationScenario}
-          demoIncident={demoIncidentData}
-          artifacts={[]}
-          activeId={activeInvestigationId}
-          onNavigateToView={handleSelectView}
-        />
-      )}
-
-      {activeView === 'vessels' && (
-        <VesselsView
-          isDemoMode={isDemoMode}
-          isSimulationMode={isSimulationMode}
-          simulationScenario={activeSimulationScenario}
-          demoCandidates={demoCandidateVessels}
-          rankingResult={null}
-          selectedCandidate={selectedCandidate}
-          onSelectCandidate={setSelectedCandidate}
-          onNavigateToView={handleSelectView}
-        />
-      )}
-
-      {activeView === 'analytics' && (
-        <AnalyticsView
-          isDemoMode={isDemoMode}
-          isSimulationMode={isSimulationMode}
-          simulationScenario={activeSimulationScenario}
-          rankingResult={null}
-          explainabilityReport={null}
-          onNavigateToView={handleSelectView}
-        />
-      )}
-
-      {activeView === 'pipeline' && (
-        <PipelineView
-          completedStages={activeListItem?.status === 'COMPLETED' ? ['B1', 'B2', 'B3', 'C1', 'D1', 'D3', 'E1', 'E2', 'E3', 'F1', 'F2', 'F3'] : ['B1', 'B2', 'B3']}
-          currentStage={null}
-          workflowStatus={activeListItem?.status}
-          onNavigateToView={handleSelectView}
-        />
-      )}
-
-      {activeView === 'settings' && (
-        <SettingsView
-          isBackendUnavailable={Boolean(initError)}
-          onNavigateToView={handleSelectView}
-        />
-      )}
+        {activeView === 'pipeline' && (
+          <PipelineView
+            completedStages={activeListItem?.status === 'COMPLETED' ? ['B1', 'B2', 'B3', 'C1', 'D1', 'D3', 'E1', 'E2', 'E3', 'F1', 'F2', 'F3'] : ['B1', 'B2', 'B3']}
+            currentStage={null}
+            workflowStatus={activeListItem?.status}
+            onNavigateToView={handleSelectView}
+          />
+        )}
+      </div>
     </MainLayout>
   )
 }

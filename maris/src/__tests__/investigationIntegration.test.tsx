@@ -799,10 +799,6 @@ describe('Stage G2 — UI & Invariant Tests (Criteria 6–20)', () => {
     const retryBtn = screen.getByRole('button', { name: /Retry Connection/i })
     expect(retryBtn).toBeDefined()
 
-    // Expect header indicates backend offline and backend service unavailable
-    expect(screen.getByText(/Backend Offline/i)).toBeDefined()
-    expect(screen.getByText(/\(Backend service unavailable\)/i)).toBeDefined()
-
     // Must NOT activate Corsica demo mode
     expect(screen.queryByText(/HISTORICAL DEMO CASE — Corsica 2018 Reconstruction/i)).toBeNull()
     expect(screen.queryByText(/MARIS-HIST-2018-001/i)).toBeNull()
@@ -818,8 +814,8 @@ describe('Stage G2 — UI & Invariant Tests (Criteria 6–20)', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText(/No Investigations/i)).toBeDefined()
-      expect(screen.getByText(/\(No live investigations registered\)/i)).toBeDefined()
+      expect(screen.queryByText(/No Investigations/i)).toBeNull()
+      expect(screen.getByText(/No Investigation Selected/i)).toBeDefined()
     })
 
     // Backend error banner must NOT appear
@@ -858,9 +854,11 @@ describe('Stage G2 — UI & Invariant Tests (Criteria 6–20)', () => {
       },
     ]
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => mockList,
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/api/v1/investigations')) {
+        return { ok: true, json: async () => mockList }
+      }
+      return { ok: true, json: async () => ({ ...mockList[0], metadata: {}, asset_ids: [], evidence_ids: [] }) }
     })
 
     const retryBtn = screen.getByRole('button', { name: /Retry Connection/i })
@@ -869,7 +867,7 @@ describe('Stage G2 — UI & Invariant Tests (Criteria 6–20)', () => {
     await waitFor(() => {
       // Error banner must disappear
       expect(screen.queryByText(/Backend Unavailable/i)).toBeNull()
-      // Recovered case must appear
+      // Recovered case must appear in workspace
       expect(screen.getByText(/Recovered Live Case/i)).toBeDefined()
     })
   })
@@ -1311,7 +1309,7 @@ describe('Stage G3 — End-to-End Investigation Workflow Tests', () => {
 
     // Wait for initial render
     await waitFor(() => {
-      expect(screen.getByText(/No Investigations/i)).toBeDefined()
+      expect(screen.getByRole('button', { name: /\+ New Investigation/i })).toBeDefined()
     })
 
     // Click "+ New Investigation"

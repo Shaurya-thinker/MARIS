@@ -232,23 +232,26 @@ def run_backward_drift(
     obs_np = np.datetime64(obs_utc.replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S"), "s").astype("datetime64[ns]")
     start_np = np.datetime64(start_historical_time.replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S"), "s").astype("datetime64[ns]")
 
-    if obs_np < w_t_min or obs_np > w_t_max:
+    time_tol_ns = np.timedelta64(3600, "s").astype("timedelta64[ns]")
+    c_time_tol_ns = np.timedelta64(86400, "s").astype("timedelta64[ns]")
+
+    if obs_np < (w_t_min - time_tol_ns) or obs_np > (w_t_max + time_tol_ns):
         raise SourceEstimationError(
             f"Observation time {obs_utc.isoformat()} is outside ERA5 data temporal range [{w_t_min}, {w_t_max}]."
         )
-    if obs_np < c_t_min or obs_np > c_t_max:
+    if obs_np < (c_t_min - c_time_tol_ns) or obs_np > (c_t_max + c_time_tol_ns):
         raise SourceEstimationError(
             f"Observation time {obs_utc.isoformat()} is outside CMEMS data temporal range [{c_t_min}, {c_t_max}]."
         )
 
     # Fail closed if the historical lookback extends prior to available environmental data
-    if start_np < w_t_min:
+    if start_np < (w_t_min - time_tol_ns):
         raise SourceEstimationError(
             f"Requested backward lookback ({lookback_hours} h) reaches {start_historical_time.isoformat()}, "
             f"which precedes the start of available ERA5 wind data ({w_t_min}). "
             "Cannot estimate historical source zone without complete environmental coverage."
         )
-    if start_np < c_t_min:
+    if start_np < (c_t_min - c_time_tol_ns):
         raise SourceEstimationError(
             f"Requested backward lookback ({lookback_hours} h) reaches {start_historical_time.isoformat()}, "
             f"which precedes the start of available CMEMS current data ({c_t_min}). "
@@ -262,16 +265,22 @@ def run_backward_drift(
     def get_wind_interp(var: str, t_idx: int):
         key = (var, t_idx)
         if key not in wind_cache:
+            w_data = wind_ds[var].values[t_idx]
+            if w_data.ndim == 3:
+                w_data = w_data[0]
             wind_cache[key] = _build_interpolator(
-                wind_lats, wind_lons, wind_ds[var].values[t_idx, :, :]
+                wind_lats, wind_lons, w_data
             )
         return wind_cache[key]
 
     def get_curr_interp(var: str, t_idx: int):
         key = (var, t_idx)
         if key not in curr_cache:
+            c_data = curr_ds[var].values[t_idx]
+            if c_data.ndim == 3:
+                c_data = c_data[0]
             curr_cache[key] = _build_interpolator(
-                curr_lats, curr_lons, curr_ds[var].values[t_idx, :, :]
+                curr_lats, curr_lons, c_data
             )
         return curr_cache[key]
 

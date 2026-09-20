@@ -143,11 +143,11 @@ export default function SyntheticExperimentSection() {
       {/* Top Banner */}
       <div className="syn-banner">
         <div className="syn-banner-badge">SYNTHETIC EXPERIMENT & ML PIPELINE</div>
-        <h3>Physics Simulation & Machine Learning Vessel Attribution</h3>
+        <h3>Scenario Simulation & Vessel Attribution Pipeline</h3>
         <p>
-          Generate calibrated, physically consistent oil spill scenarios and test attribution with a
-          trained scikit-learn Logistic Regression model. Probabilities are independent binary estimates;
-          scenario-normalized attribution scores are explicitly scaled across candidates.
+          Generate calibrated hydrodynamic oil spill scenarios to evaluate attribution performance.
+          Independent binary probabilities and scenario-normalized scores are computed using
+          trained Logistic Regression.
         </p>
       </div>
 
@@ -170,7 +170,7 @@ export default function SyntheticExperimentSection() {
               onClick={handleRandomizeSeed}
               title="Randomize scenario seed"
             >
-              🎲 Random Seed
+              Random Seed
             </button>
           </div>
 
@@ -192,10 +192,10 @@ export default function SyntheticExperimentSection() {
                 value={candidateCount}
                 onChange={e => setCandidateCount(parseInt(e.target.value, 10))}
               >
-                <option value={3}>3 vessels (1 GT + 2 distractors)</option>
-                <option value={4}>4 vessels (1 GT + 3 distractors)</option>
-                <option value={5}>5 vessels (1 GT + 4 distractors)</option>
-                <option value={6}>6 vessels (1 GT + 5 distractors)</option>
+                <option value={3}>3 vessels (1 incident vessel + 2 traffic vessels)</option>
+                <option value={4}>4 vessels (1 incident vessel + 3 traffic vessels)</option>
+                <option value={5}>5 vessels (1 incident vessel + 4 traffic vessels)</option>
+                <option value={6}>6 vessels (1 incident vessel + 5 traffic vessels)</option>
               </select>
             </div>
 
@@ -279,7 +279,7 @@ export default function SyntheticExperimentSection() {
               onClick={handleGenerateScenario}
               disabled={loadingScenario || runningExperiment}
             >
-              {loadingScenario ? 'Generating…' : '⚡ Generate Scenario'}
+              {loadingScenario ? 'Generating…' : 'Generate Scenario'}
             </button>
             <button
               type="button"
@@ -287,7 +287,7 @@ export default function SyntheticExperimentSection() {
               onClick={handleRunExperiment}
               disabled={runningExperiment}
             >
-              {runningExperiment ? 'Integrating Physics & ML…' : '🚀 Run Drift & ML Attribution'}
+              {runningExperiment ? 'Computing Drift & Attribution…' : 'Run Drift & ML Attribution'}
             </button>
           </div>
         </div>
@@ -296,7 +296,7 @@ export default function SyntheticExperimentSection() {
         <div className="syn-card">
           <div className="syn-card-header">
             <h4>2. Trained ML Attribution Model</h4>
-            <span className="syn-tag-active">Active in Production</span>
+            <span className="syn-tag-active">Active Model</span>
           </div>
 
           {activeModel ? (
@@ -348,7 +348,7 @@ export default function SyntheticExperimentSection() {
 
               {/* Feature Coefficients */}
               <div className="syn-coeffs-section">
-                <div className="syn-subheading">Learned Physical Feature Coefficients</div>
+                <div className="syn-subheading">Feature Coefficients</div>
                 <div className="syn-coeffs-list">
                   {Object.entries(activeModel.feature_coefficients || {}).map(([fname, coef]) => {
                     const isPositive = coef >= 0
@@ -391,7 +391,7 @@ export default function SyntheticExperimentSection() {
                   onClick={handleTrainModel}
                   disabled={trainingModel}
                 >
-                  {trainingModel ? 'Training Pipeline…' : 'Train New Model'}
+                  {trainingModel ? 'Training…' : 'Retrain Model'}
                 </button>
               </div>
             </div>
@@ -435,7 +435,7 @@ export default function SyntheticExperimentSection() {
               {runResult.attribution_match ? (
                 <span className="syn-badge-match">✓ Correct Ground-Truth Match</span>
               ) : (
-                <span className="syn-badge-mismatch">Candidate Discrepancy</span>
+                <span className="syn-badge-mismatch">Alternative Candidate Attributed</span>
               )}
             </div>
             <span className="syn-tag-mono">Run: {runResult.run_id}</span>
@@ -509,7 +509,7 @@ export default function SyntheticExperimentSection() {
                         {isGT ? (
                           <span className="syn-gt-badge">YES (Actual Spiller)</span>
                         ) : (
-                          <span className="syn-distractor-badge">No (Distractor)</span>
+                          <span className="syn-distractor-badge">No (Traffic Vessel)</span>
                         )}
                       </td>
                       <td>
@@ -543,8 +543,7 @@ export default function SyntheticExperimentSection() {
           <div className="syn-footnote">
             <strong>Evaluation Note:</strong> Model Probability is the independent output of{' '}
             <code>predict_proba()</code> on the 10 physically grounded features. The Scenario Attribution
-            Score represents the scenario-normalized attribution score explicitly labeled to distinguish
-            relative candidate weight from raw model probability.
+            Score represents the scenario-normalized attribution score scaled across candidates in the scenario envelope.
           </div>
         </div>
       )}

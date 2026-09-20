@@ -20,6 +20,17 @@ import numpy as np
 import xarray as xr
 
 from app.core.config import settings
+from app.services.real_experiment.ais_database import (
+    PROVENANCE_LIVE_AIS_PROVIDER,
+    PROVENANCE_MANUAL_REFERENCE,
+    PROVENANCE_NOAA_MARINECADASTRE,
+    PROVENANCE_SYNTHETIC_BENCHMARK,
+    PROVENANCE_UNVERIFIED_IMPORT,
+    get_candidates_for_scene,
+    get_vessel_by_identifier,
+    init_ais_database,
+    query_vessels_in_spatiotemporal_box,
+)
 from app.services.real_experiment.ais_search import AisSearchService, ConfigurationUnavailable as AisConfigUnavailable
 from app.services.real_experiment.experiment_store import get_experiment_store
 from app.services.source_estimation import (
@@ -641,6 +652,10 @@ def filter_candidates_for_investigation(
             "vessel_name": v.get("vessel_name", "UNKNOWN"),
             "mmsi": v.get("mmsi"),
             "vessel_type": v.get("vessel_type", "Vessel"),
+            "source_id": v.get("source_id"),
+            "source_type": v.get("source_type"),
+            "is_real_observation": bool(v.get("is_real_observation", False)),
+            "provider_name": v.get("provider_name"),
             "min_source_dist_km": float(round(min_source_dist_km, 3)),
             "min_trajectory_dist_km": float(round(min_trajectory_dist_km, 3)),
             "min_corridor_dist_km": float(round(min_dist_to_corridor_km, 3)),
@@ -687,8 +702,19 @@ def determine_provider_status(
     has_live_provider: bool,
     total_found: int,
     eligible_count: int,
+    provenance_source: str | None = None,
+    insufficient_coverage: bool = False,
 ) -> tuple[str, str]:
-    """Determine explicit provider boundary state (never conflated).
+    """Determine explicit provider and provenance boundary state (never conflated).
+
+    Possible Status Values:
+        LIVE_AIS
+        OBSERVED_ARCHIVE
+        SYNTHETIC_BENCHMARK
+        MANUAL_REFERENCE
+        NO_PROVIDER
+        NO_ELIGIBLE_VESSELS
+        INSUFFICIENT_COVERAGE
 
     Returns:
         (provider_status, status_description)
@@ -698,13 +724,43 @@ def determine_provider_status(
             "NO_PROVIDER",
             "No live AIS provider configured. MARIS AIS adapter credentials are unconfigured or unset.",
         )
-    if eligible_count == 0:
+    if total_found > 0 and eligible_count == 0:
         return (
             "NO_ELIGIBLE_VESSELS",
             f"AIS data checked ({total_found} candidates examined), but 0 vessels met both spatial corridor and temporal intersection criteria.",
         )
+    if insufficient_coverage:
+        return (
+            "INSUFFICIENT_COVERAGE",
+            f"Candidate vessels found ({total_found}), but AIS reporting density or time coverage is insufficient for attribution.",
+        )
+    if provenance_source == PROVENANCE_MANUAL_REFERENCE:
+        return (
+            "MANUAL_REFERENCE",
+            f"Curated reference benchmark active with {eligible_count} eligible vessels. (Non-live historical reconstruction).",
+        )
+    if provenance_source == PROVENANCE_SYNTHETIC_BENCHMARK:
+        return (
+            "SYNTHETIC_BENCHMARK",
+            f"Synthetic benchmark scenario active with {eligible_count} eligible candidate vessels. (Algorithmic test data).",
+        )
+    if provenance_source == PROVENANCE_NOAA_MARINECADASTRE:
+        return (
+            "OBSERVED_ARCHIVE",
+            f"Imported NOAA MarineCadastre observation archive active with {eligible_count} eligible candidates.",
+        )
+    if provenance_source == PROVENANCE_UNVERIFIED_IMPORT:
+        return (
+            "UNVERIFIED_IMPORT",
+            f"Unverified imported AIS sample active with {eligible_count} eligible candidates (requires authoritative provenance verification).",
+        )
+    if has_live_provider:
+        return (
+            "LIVE_AIS",
+            f"Active AIS source available with {eligible_count} eligible candidates within investigation corridor.",
+        )
     return (
-        "LIVE_AIS",
+        "OBSERVED_ARCHIVE" if provenance_source else "LIVE_AIS",
         f"Active AIS source available with {eligible_count} eligible candidates within investigation corridor.",
     )
 
@@ -759,15 +815,59 @@ def run_evaluator_investigation(
     source_radius_m = reconstructed_source["source_radius_m"]
     backward_steps = drift_preview["backward_steps"]
 
-    # 3. Candidate Vessels Gathering (Provider check + Benchmark/Supplied vessels)
+    # 3. Candidate Vessels Gathering (SQLite DB -> live provider -> benchmark fallback)
     ais_search_svc = AisSearchService(cfg=settings)
     is_live_provider_configured = ais_search_svc.is_configured()
 
     candidate_pool: list[dict[str, Any]] = []
+    primary_source_type: str | None = None
+    is_real_obs: bool = False
+
     if custom_vessels is not None:
         candidate_pool.extend(custom_vessels)
-    elif ref_obs and ref_obs.get("benchmark_candidates"):
-        candidate_pool.extend(ref_obs["benchmark_candidates"])
+        primary_source_type = PROVENANCE_MANUAL_REFERENCE
+    else:
+        # Query inspectable SQLite database (ais_vessels.db)
+        try:
+            init_ais_database()
+            db_candidates = get_candidates_for_scene(selected_image_id)
+            if not db_candidates:
+                # Spatial-temporal SQL bounding box prefilter
+                lat_deg_margin = (corridor_km + 25.0) / 111.0
+                cos_lat = max(math.cos(math.radians(observation_lat)), 0.1)
+                lon_deg_margin = (corridor_km + 25.0) / (111.0 * cos_lat)
+                lats = [observation_lat, source_lat] + [
+                    s.get("lat", observation_lat) if isinstance(s, dict) else getattr(s, "lat", observation_lat)
+                    for s in backward_steps
+                ]
+                lons = [observation_lon, source_lon] + [
+                    s.get("lon", observation_lon) if isinstance(s, dict) else getattr(s, "lon", observation_lon)
+                    for s in backward_steps
+                ]
+                lat_min, lat_max = min(lats) - lat_deg_margin, max(lats) + lat_deg_margin
+                lon_min, lon_max = min(lons) - lon_deg_margin, max(lons) + lon_deg_margin
+                t_start = obs_utc - timedelta(hours=backtrack_hours + 2.0)
+                t_end = obs_utc + timedelta(hours=2.0)
+                db_candidates = query_vessels_in_spatiotemporal_box(
+                    lat_min=lat_min,
+                    lat_max=lat_max,
+                    lon_min=lon_min,
+                    lon_max=lon_max,
+                    t_start=t_start,
+                    t_end=t_end,
+                )
+            if db_candidates:
+                candidate_pool.extend(db_candidates)
+        except Exception:
+            pass
+
+        # Fallback to inline reference definitions if DB yielded no candidates
+        if not candidate_pool and ref_obs and ref_obs.get("benchmark_candidates"):
+            candidate_pool.extend(ref_obs["benchmark_candidates"])
+
+    if candidate_pool:
+        primary_source_type = candidate_pool[0].get("source_type")
+        is_real_obs = bool(candidate_pool[0].get("is_real_observation", False))
 
     # 4. Strict Filtering (Spatial corridor AND temporal intersection)
     filtering_result = filter_candidates_for_investigation(
@@ -784,11 +884,18 @@ def run_evaluator_investigation(
     eligible_candidates = filtering_result["eligible_candidates"]
     ineligible_candidates = filtering_result["ineligible_candidates"]
 
+    # Coverage verification
+    insufficient_coverage = bool(
+        candidate_pool and all(len(v.get("positions", [])) < 2 for v in candidate_pool)
+    )
+
     # Provider State
     provider_status, provider_description = determine_provider_status(
-        has_live_provider=is_live_provider_configured or bool(candidate_pool),
+        has_live_provider=is_live_provider_configured or (is_real_obs and bool(candidate_pool)),
         total_found=len(candidate_pool),
         eligible_count=len(eligible_candidates),
+        provenance_source=primary_source_type,
+        insufficient_coverage=insufficient_coverage,
     )
 
     # 5. ML Model Attribution (Only for eligible candidates!)
@@ -825,6 +932,10 @@ def run_evaluator_investigation(
                 "vessel_name": v["vessel_name"],
                 "mmsi": v.get("mmsi"),
                 "vessel_type": v.get("vessel_type", "Vessel"),
+                "source_id": v.get("source_id"),
+                "source_type": v.get("source_type"),
+                "is_real_observation": bool(v.get("is_real_observation", False)),
+                "provider_name": v.get("provider_name"),
                 "model_probability": round(p_ind, 4),
                 "scenario_normalized_score": round(scenario_score, 4),
                 "features": feat_dict,
@@ -891,6 +1002,8 @@ def run_evaluator_investigation(
         "backward_steps": backward_steps,
         "provider_status": provider_status,
         "provider_description": provider_description,
+        "provenance_type": primary_source_type or ("LIVE_AIS" if is_live_provider_configured else "UNKNOWN"),
+        "is_real_observation": is_real_obs,
         "filtering_summary": {
             "corridor_km": corridor_km,
             "total_candidates_checked": len(candidate_pool),
@@ -911,3 +1024,173 @@ def run_evaluator_investigation(
     store.save_evaluator_investigation(record)
 
     return record
+
+
+# ---------------------------------------------------------------------------
+# Manual Vessel Investigation Path
+# ---------------------------------------------------------------------------
+
+def investigate_manual_vessel(
+    *,
+    vessel_identifier: str,
+    observation_lon: float,
+    observation_lat: float,
+    observation_time: datetime,
+    wind_speed_ms: float,
+    wind_direction_deg: float,
+    current_speed_ms: float,
+    current_direction_deg: float,
+    corridor_km: float = 25.0,
+    backtrack_hours: float = 6.0,
+    step_hours: float = 0.5,
+    spill_area_m2: float = 100000.0,
+    model_id: str | None = None,
+    db_path: Path | None = None,
+    force_counterfactual: bool = False,
+) -> dict[str, Any]:
+    """Manually investigate a specific vessel identified by MMSI or vessel ID.
+
+    Loads the vessel and its trajectory from ais_vessels.db, evaluates spatial
+    and temporal corridor constraints, and executes standard attribution only
+    if the vessel meets physical eligibility criteria (no fabricated evidence
+    for vessels outside the current hypothesis).
+    """
+    init_ais_database(db_path)
+    obs_utc = observation_time if observation_time.tzinfo else observation_time.replace(tzinfo=timezone.utc)
+
+    # 1. Look up vessel in database
+    vessel = get_vessel_by_identifier(vessel_identifier, db_path=db_path)
+    if not vessel:
+        return {
+            "found": False,
+            "vessel_identifier": vessel_identifier,
+            "error": f"Vessel with identifier '{vessel_identifier}' was not found in the AIS database.",
+            "is_eligible": False,
+            "attribution": None,
+        }
+
+    # 2. Run backward drift preview
+    drift_preview = calculate_backward_drift_preview(
+        origin_lon=observation_lon,
+        origin_lat=observation_lat,
+        observation_time=obs_utc,
+        wind_speed_ms=wind_speed_ms,
+        wind_direction_deg=wind_direction_deg,
+        current_speed_ms=current_speed_ms,
+        current_direction_deg=current_direction_deg,
+        backtrack_hours=backtrack_hours,
+        step_hours=step_hours,
+        spill_area_m2=spill_area_m2,
+    )
+
+    reconstructed_source = drift_preview["reconstructed_source"]
+    source_lon = reconstructed_source["source_lon"]
+    source_lat = reconstructed_source["source_lat"]
+    source_radius_m = reconstructed_source["source_radius_m"]
+    backward_steps = drift_preview["backward_steps"]
+
+    # 3. Spatial & Temporal Validation
+    filtering_result = filter_candidates_for_investigation(
+        vessels=[vessel],
+        backward_steps=backward_steps,
+        source_lon=source_lon,
+        source_lat=source_lat,
+        source_radius_m=source_radius_m,
+        observation_time=obs_utc,
+        backtrack_hours=backtrack_hours,
+        corridor_km=corridor_km,
+    )
+
+    eligible = filtering_result["eligible_candidates"]
+    ineligible = filtering_result["ineligible_candidates"]
+
+    if eligible:
+        target = eligible[0]
+        # 4. Standard attribution model inference
+        model = load_model(model_id=model_id)
+        feat_dict = extract_vessel_features(
+            vessel_data=target,
+            source_lon=source_lon,
+            source_lat=source_lat,
+            source_radius_m=source_radius_m,
+            observation_time=obs_utc,
+            backtrack_hours=backtrack_hours,
+            backward_steps=backward_steps,
+        )
+        feature_vector = [feat_dict[fn] for fn in FEATURE_NAMES]
+        X = np.array([feature_vector], dtype=np.float32)
+        prob = float(model.pipeline.predict_proba(X)[0, 1])
+
+        return {
+            "found": True,
+            "vessel_identifier": vessel_identifier,
+            "vessel_metadata": {
+                "vessel_id": vessel["vessel_id"],
+                "vessel_name": vessel["vessel_name"],
+                "mmsi": vessel["mmsi"],
+                "vessel_type": vessel["vessel_type"],
+                "source_id": vessel["source_id"],
+                "source_type": vessel["source_type"],
+                "is_real_observation": vessel["is_real_observation"],
+                "provider_name": vessel.get("provider_name"),
+            },
+            "is_eligible": True,
+            "eligibility_status": "ELIGIBLE",
+            "exclusion_reasons": [],
+            "corridor_dist_km": target["min_corridor_dist_km"],
+            "features": feat_dict,
+            "attribution": {
+                "model_id": model.model_id,
+                "model_probability": round(prob, 4),
+                "is_attributed": prob >= 0.5,
+                "confidence_assessment": f"Model probability of responsibility is {prob:.1%}.",
+            },
+            "positions_count": len(vessel.get("positions", [])),
+        }
+    else:
+        rej = ineligible[0] if ineligible else {}
+        resp: dict[str, Any] = {
+            "found": True,
+            "vessel_identifier": vessel_identifier,
+            "vessel_metadata": {
+                "vessel_id": vessel["vessel_id"],
+                "vessel_name": vessel["vessel_name"],
+                "mmsi": vessel["mmsi"],
+                "vessel_type": vessel["vessel_type"],
+                "source_id": vessel["source_id"],
+                "source_type": vessel["source_type"],
+                "is_real_observation": vessel["is_real_observation"],
+                "provider_name": vessel.get("provider_name"),
+            },
+            "is_eligible": False,
+            "eligibility_status": "EXCLUDED",
+            "exclusion_reasons": [rej.get("rejection_reason", "OUTSIDE_SPATIOTEMPORAL_CORRIDOR")],
+            "exclusion_detail": rej.get("rejection_detail", "Vessel did not meet spatial corridor or temporal intersection criteria."),
+            "corridor_dist_km": rej.get("min_corridor_dist_km"),
+            "attribution": None,
+            "positions_count": len(vessel.get("positions", [])),
+        }
+
+        # Documented Counterfactual analysis if explicitly requested
+        if force_counterfactual:
+            model = load_model(model_id=model_id)
+            feat_dict = extract_vessel_features(
+                vessel_data=vessel,
+                source_lon=source_lon,
+                source_lat=source_lat,
+                source_radius_m=source_radius_m,
+                observation_time=obs_utc,
+                backtrack_hours=backtrack_hours,
+                backward_steps=backward_steps,
+            )
+            feature_vector = [feat_dict[fn] for fn in FEATURE_NAMES]
+            X = np.array([feature_vector], dtype=np.float32)
+            prob = float(model.pipeline.predict_proba(X)[0, 1])
+            resp["counterfactual_attribution"] = {
+                "model_id": model.model_id,
+                "model_probability": round(prob, 4),
+                "notice": "DOCUMENTED COUNTERFACTUAL ANALYSIS ONLY: Vessel is physically outside corridor.",
+            }
+
+        return resp
+

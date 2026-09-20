@@ -261,6 +261,23 @@ export function InvestigationWorkspace({
     }
   }, [activeId, isDemoMode, isSimulationMode, currentStatus, hasDeferredChecked])
 
+  // Demo and simulation analysis progression timer
+  useEffect(() => {
+    if (!playbackPlaying) return undefined
+
+    const stageLimit = isSimulationMode ? simulationTimeline.length - 1 : prototypeFlowStages.length - 1
+    const timer = window.setInterval(() => {
+      setPlaybackStage((current) => {
+        if (current >= stageLimit) {
+          setPlaybackPlaying(false)
+          return current
+        }
+        return current + 1
+      })
+    }, isSimulationMode ? 1400 : 1800)
+    return () => window.clearInterval(timer)
+  }, [playbackPlaying, isSimulationMode, simulationTimeline.length])
+
   async function handleRefreshStatus() {
     if (!activeId || isDemoMode || isSimulationMode) return
     setIsLoading(true)
@@ -609,6 +626,20 @@ export function InvestigationWorkspace({
               simulationScenario={simulationScenario}
               simulationStageIndex={playbackStage}
               simulationStages={simulationTimeline}
+              onSkipSimulation={() => {
+                setPlaybackStage(simulationTimeline.length - 1)
+                setPlaybackPlaying(false)
+              }}
+              onReplaySimulation={() => {
+                setPlaybackStage(0)
+                setPlaybackPlaying(true)
+              }}
+              onSelectSimulationStage={(idx) => {
+                setPlaybackStage(idx)
+                if (idx >= simulationTimeline.length - 1) {
+                  setPlaybackPlaying(false)
+                }
+              }}
               demoIncident={demoIncidentData}
               demoCandidates={demoCandidateVessels}
               selectedCandidate={selectedCandidate}
@@ -653,6 +684,13 @@ export function InvestigationWorkspace({
             isDemoMode={isDemoMode}
             isSimulationMode={isSimulationMode}
             simulationStages={simulationTimeline}
+            simulationStageIndex={playbackStage}
+            onSelectStage={(idx) => {
+              setPlaybackStage(idx)
+              if (idx >= simulationTimeline.length - 1) {
+                setPlaybackPlaying(false)
+              }
+            }}
             demoStages={visiblePipelineStages}
             completedStages={statusResponse?.completed_stages}
             currentStage={statusResponse?.current_stage}

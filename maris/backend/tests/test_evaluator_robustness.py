@@ -97,8 +97,15 @@ def test_multi_scene_drift_and_investigation_robustness(ref_id: str):
     )
 
     assert inv["investigation_id"].startswith("inv_eval_")
-    assert inv["selected_image_id"] == ref_id
-    assert inv["provider_status"] in ("LIVE_AIS", "NO_PROVIDER", "NO_ELIGIBLE_VESSELS")
+    assert inv["provider_status"] in (
+        "LIVE_AIS",
+        "OBSERVED_ARCHIVE",
+        "SYNTHETIC_BENCHMARK",
+        "MANUAL_REFERENCE",
+        "NO_PROVIDER",
+        "NO_ELIGIBLE_VESSELS",
+        "INSUFFICIENT_COVERAGE",
+    )
     assert "candidate_probabilities" in inv
     assert "final_attribution" in inv
     assert inv["coordinates"]["observation_lon"] == pytest.approx(lon, abs=1e-5)

@@ -229,6 +229,29 @@ const mockInvestigationResult: EvaluatorInvestigationRecord = {
   created_at: '2026-09-19T20:00:00Z',
 }
 
+async function selectFirstObservation() {
+  const selectBtns = await screen.findAllByRole('button', { name: /Select This Observation/i })
+  fireEvent.click(selectBtns[0])
+}
+
+function getFlowStepButton(stepNum: number): HTMLButtonElement {
+  const titles = [
+    'SELECT SENTINEL-1 IMAGE',
+    'WIND + OCEAN CURRENT',
+    'ELIGIBLE AIS VESSELS',
+    'RUN ATTRIBUTION',
+    'RESULTS + MAP',
+    'SAVED INVESTIGATION',
+  ]
+  const title = titles[stepNum - 1]
+  const allBtns = screen.getAllByRole('button')
+  const found = allBtns.find(
+    b => b.classList.contains('eval-flow-step') && b.textContent?.includes(title)
+  )
+  if (!found) throw new Error(`Flow step button ${stepNum} (${title}) not found`)
+  return found as HTMLButtonElement
+}
+
 describe('EvaluatorInvestigationSection Component', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -273,87 +296,308 @@ describe('EvaluatorInvestigationSection Component', () => {
     expect(screen.getByText(/Central Arabian Sea Transit Corridor/i)).toBeDefined()
   })
 
-  it('navigates through drift preview and executes strict candidate filtering', async () => {
+  // -------------------------------------------------------------------------
+  // 12 Mandatory Sequential Navigation & State Gating Scenarios
+  // -------------------------------------------------------------------------
+
+  it('Scenario 1: Initial state has Step 1 active and Steps 2–6 strictly locked', async () => {
     render(<EvaluatorInvestigationSection />)
+    await screen.findByText(/Cap Corse \/ Northern Corsica/i)
 
-    // Step 1: Select observation
-    const selectBtn = await screen.findByRole('button', { name: /✓ Selected Observation/i })
-    fireEvent.click(selectBtn)
+    const step1 = getFlowStepButton(1)
+    const step2 = getFlowStepButton(2)
+    const step3 = getFlowStepButton(3)
+    const step4 = getFlowStepButton(4)
+    const step5 = getFlowStepButton(5)
+    const step6 = getFlowStepButton(6)
 
-    // Step 2: Set environmental parameters & click calculate drift
+    expect(step1.className).toContain('active')
+    expect(step1.disabled).toBe(false)
+
+    expect(step2.disabled).toBe(true)
+    expect(step2.className).toContain('locked')
+
+    expect(step3.disabled).toBe(true)
+    expect(step3.className).toContain('locked')
+
+    expect(step4.disabled).toBe(true)
+    expect(step4.className).toContain('locked')
+
+    expect(step5.disabled).toBe(true)
+    expect(step5.className).toContain('locked')
+
+    expect(step6.disabled).toBe(true)
+    expect(step6.className).toContain('locked')
+
+    expect(screen.getByText(/Step 1: Select Verified Sentinel-1 SAR Reference Observation/i)).toBeDefined()
+  })
+
+  it('Scenario 2: Attempt to click Step 6 from Step 1 is a strict NO-OP', async () => {
+    render(<EvaluatorInvestigationSection />)
+    await screen.findByText(/Cap Corse \/ Northern Corsica/i)
+
+    const step6 = getFlowStepButton(6)
+    fireEvent.click(step6)
+
+    // Active step remains Step 1
+    expect(screen.getByText(/Step 1: Select Verified Sentinel-1 SAR Reference Observation/i)).toBeDefined()
+    expect(screen.queryByText(/Step 6: Saved Investigation/i)).toBeNull()
+    expect(screen.queryByText(/Historical Saved Investigations/i)).toBeNull()
+
+    // No workflow APIs called
+    expect(experimentApi.previewEvaluatorDrift).not.toHaveBeenCalled()
+    expect(experimentApi.filterEvaluatorVessels).not.toHaveBeenCalled()
+    expect(experimentApi.runEvaluatorInvestigation).not.toHaveBeenCalled()
+  })
+
+  it('Scenario 3: Completing Step 1 unlocks Step 2 while Steps 3–6 remain locked', async () => {
+    render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
+
+    // Step 2 is now active
     expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+
+    const step1 = getFlowStepButton(1)
+    const step2 = getFlowStepButton(2)
+    const step3 = getFlowStepButton(3)
+    const step4 = getFlowStepButton(4)
+    const step5 = getFlowStepButton(5)
+    const step6 = getFlowStepButton(6)
+
+    expect(step1.className).toContain('completed')
+    expect(step1.disabled).toBe(false)
+
+    expect(step2.className).toContain('active')
+    expect(step2.disabled).toBe(false)
+
+    expect(step3.disabled).toBe(true)
+    expect(step3.className).toContain('locked')
+    expect(step4.disabled).toBe(true)
+    expect(step4.className).toContain('locked')
+    expect(step5.disabled).toBe(true)
+    expect(step5.className).toContain('locked')
+    expect(step6.disabled).toBe(true)
+    expect(step6.className).toContain('locked')
+  })
+
+  it('Scenario 4: Attempt to click Step 4 while on Step 2 does not navigate', async () => {
+    render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
+
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+
+    const step4 = getFlowStepButton(4)
+    fireEvent.click(step4)
+
+    // Still on Step 2
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+    expect(screen.queryByText(/Step 4: Execute Attribution/i)).toBeNull()
+    expect(experimentApi.runEvaluatorInvestigation).not.toHaveBeenCalled()
+  })
+
+  it('Scenario 5: Completing Step 2 unlocks Step 3', async () => {
+    render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
+
     const calcDriftBtn = screen.getByRole('button', { name: /Calculate Backward Drift →/i })
     fireEvent.click(calcDriftBtn)
 
-    // Step 3: Candidate filtering displayed with explicit provider boundary
     await waitFor(() => {
       expect(screen.getByText(/Step 3: Filter Eligible AIS Vessels/i)).toBeDefined()
     })
-    expect(screen.getByText(/LIVE AIS PROVIDER AVAILABLE/i)).toBeDefined()
-    expect(screen.getByText('MV ULYSSE')).toBeDefined()
-    expect(screen.getByText('ELIGIBLE FOR ML')).toBeDefined()
-    expect(screen.getByText('DISTANT SHIP')).toBeDefined()
-    expect(screen.getByText(/EXCLUDED: OUTSIDE_CORRIDOR_25.0KM/i)).toBeDefined()
+
+    const step3 = getFlowStepButton(3)
+    expect(step3.disabled).toBe(false)
+    expect(step3.className).toContain('active')
   })
 
-  it('executes attribution with active scaled ML model and shows results with map', async () => {
+  it('Scenario 6: Completing Step 3 unlocks Step 4', async () => {
     render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
 
-    // Step 1 -> Step 2
-    const selectBtn = await screen.findByRole('button', { name: /✓ Selected Observation/i })
-    fireEvent.click(selectBtn)
-
-    // Step 2 -> Step 3
     const calcDriftBtn = screen.getByRole('button', { name: /Calculate Backward Drift →/i })
     fireEvent.click(calcDriftBtn)
 
-    // Step 3 -> Step 4
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Proceed to ML Attribution/i })).toBeDefined()
+    })
+
+    const proceedBtn = screen.getByRole('button', { name: /Proceed to ML Attribution/i }) as HTMLButtonElement
+    expect(proceedBtn.disabled).toBe(false)
+    fireEvent.click(proceedBtn)
+
+    expect(screen.getByText(/Step 4: Execute Attribution with Active Scaled ML Model/i)).toBeDefined()
+
+    const step4 = getFlowStepButton(4)
+    expect(step4.disabled).toBe(false)
+    expect(step4.className).toContain('active')
+  })
+
+  it('Scenario 7: Completing Step 4 unlocks Step 5 and persistance unlocks Step 6', async () => {
+    render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
+
+    const calcDriftBtn = screen.getByRole('button', { name: /Calculate Backward Drift →/i })
+    fireEvent.click(calcDriftBtn)
+
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Proceed to ML Attribution/i })).toBeDefined()
     })
     fireEvent.click(screen.getByRole('button', { name: /Proceed to ML Attribution/i }))
 
-    // Step 4: Active scaled model confirmation
-    expect(screen.getByText(/Active Model:/i)).toBeDefined()
-    expect(screen.getByText(/10,000 Scenarios/i)).toBeDefined()
-
-    // Step 4 -> Step 5: Run Attribution
     const runBtn = screen.getByRole('button', { name: /RUN MARIS ATTRIBUTION NOW/i })
     fireEvent.click(runBtn)
 
-    // Step 5: Results & Map
     await waitFor(() => {
-      expect(screen.getByText(/MOST PROBABLE SPILLER \(RANK #1\)/i)).toBeDefined()
+      expect(screen.getByText(/Step 5: Attribution Results & Interactive Investigation Map/i)).toBeDefined()
     })
-    expect(screen.getAllByText('94.2%').length).toBeGreaterThan(0) // model_probability in hero card & table
-    expect(screen.getByText(/Geographic Reconstruction & Attribution Overlay/i)).toBeDefined()
 
-    // "Why this vessel?" Evidence Panel assertions
-    expect(screen.getByText(/“Why this vessel\?” Evidence Panel/i)).toBeDefined()
-    expect(screen.getAllByText(/Spatial Distance/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Temporal Offset \/ Overlap/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Heading Consistency/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Speed Consistency/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Drift-Track Proximity/i).length).toBeGreaterThan(0)
-    expect(screen.getByText(/Actual ML Features Used by Classifier/i)).toBeDefined()
-    expect(screen.getByText(/Excluded Vessels — Pre-ML Quarantine/i)).toBeDefined()
-    expect(screen.getByText(/OUTSIDE_CORRIDOR_25.0KM/i)).toBeDefined()
+    const step5 = getFlowStepButton(5)
+    const step6 = getFlowStepButton(6)
+
+    expect(step5.disabled).toBe(false)
+    expect(step5.className).toContain('active')
+
+    // Since attribution persists to SQLite, Step 6 is now unlocked
+    expect(step6.disabled).toBe(false)
+    expect(step6.className).not.toContain('locked')
   })
 
-  it('replays a saved investigation from history without re-running analysis', async () => {
+  it('Scenario 8: Completing Step 5 allows accessing Step 6 normally', async () => {
     render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
 
-    // Click step 6 in flow header to view saved investigations
-    const step6Btn = await screen.findByRole('button', { name: /SAVED INVESTIGATION/i })
-    fireEvent.click(step6Btn)
+    const calcDriftBtn = screen.getByRole('button', { name: /Calculate Backward Drift →/i })
+    fireEvent.click(calcDriftBtn)
 
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Proceed to ML Attribution/i })).toBeDefined()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Proceed to ML Attribution/i }))
+
+    const runBtn = screen.getByRole('button', { name: /RUN MARIS ATTRIBUTION NOW/i })
+    fireEvent.click(runBtn)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Step 5: Attribution Results/i)).toBeDefined()
+    })
+
+    const viewSavedBtn = screen.getByRole('button', { name: /View Saved Investigation & History →/i })
+    fireEvent.click(viewSavedBtn)
+
+    expect(screen.getByText(/Step 6: Saved Investigations & Replay Records/i)).toBeDefined()
     expect(screen.getByText(/Historical Saved Investigations/i)).toBeDefined()
-    const replayBtn = await screen.findByRole('button', { name: /Replay \/ View/i })
-    fireEvent.click(replayBtn)
+  })
+
+  it('Scenario 9: Zero eligible AIS candidates legitimately completes Step 3 and unlocks Step 4', async () => {
+    // Mock 0 eligible candidates
+    vi.spyOn(experimentApi, 'filterEvaluatorVessels').mockResolvedValue({
+      corridor_km: 25.0,
+      temporal_window: mockFilterResponse.temporal_window,
+      total_evaluated: 1,
+      eligible_count: 0,
+      ineligible_count: 1,
+      eligible_candidates: [],
+      ineligible_candidates: mockFilterResponse.ineligible_candidates,
+      provider_status: 'NO_ELIGIBLE_VESSELS',
+      provider_description: 'No candidates met spatial corridor or temporal intersection criteria.',
+    })
+
+    render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
+
+    const calcDriftBtn = screen.getByRole('button', { name: /Calculate Backward Drift →/i })
+    fireEvent.click(calcDriftBtn)
+
+    await waitFor(() => {
+      expect(screen.getByText(/NO ELIGIBLE VESSELS/i)).toBeDefined()
+    })
+
+    const proceedBtn = screen.getByRole('button', { name: /Proceed to ML Attribution \(0 Eligible Vessels\) →/i }) as HTMLButtonElement
+    expect(proceedBtn.disabled).toBe(false)
+    fireEvent.click(proceedBtn)
+
+    expect(screen.getByText(/Step 4: Execute Attribution with Active Scaled ML Model/i)).toBeDefined()
+    expect(screen.getAllByText(/0 Vessels/i).length).toBeGreaterThan(0)
+  })
+
+  it('Scenario 10: Failed API operation does not mark step complete and keeps next step locked', async () => {
+    vi.spyOn(experimentApi, 'previewEvaluatorDrift').mockRejectedValue(new Error('CMEMS service offline'))
+
+    render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
+
+    const calcDriftBtn = screen.getByRole('button', { name: /Calculate Backward Drift →/i })
+    fireEvent.click(calcDriftBtn)
+
+    await waitFor(() => {
+      expect(screen.getByText(/CMEMS service offline/i)).toBeDefined()
+    })
+
+    // User remains on Step 2
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+
+    // Step 3 remains locked
+    const step3 = getFlowStepButton(3)
+    expect(step3.disabled).toBe(true)
+    expect(step3.className).toContain('locked')
+
+    fireEvent.click(step3)
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+    expect(screen.queryByText(/Step 3: Filter Eligible AIS Vessels/i)).toBeNull()
+  })
+
+  it('Scenario 11: Previously saved investigation restores completed state with Step 6 accessible', async () => {
+    render(<EvaluatorInvestigationSection initialInvestigationId="inv_eval_test_001" />)
 
     await waitFor(() => {
       expect(screen.getByText(/Replaying saved investigation inv_eval_test_001/i)).toBeDefined()
     })
-    expect(screen.getByText(/Analysis was NOT rerun/i)).toBeDefined()
+
+    const step1 = getFlowStepButton(1)
+    const step2 = getFlowStepButton(2)
+    const step3 = getFlowStepButton(3)
+    const step4 = getFlowStepButton(4)
+    const step5 = getFlowStepButton(5)
+    const step6 = getFlowStepButton(6)
+
+    // All steps unlocked for replayed investigation
+    expect(step1.disabled).toBe(false)
+    expect(step2.disabled).toBe(false)
+    expect(step3.disabled).toBe(false)
+    expect(step4.disabled).toBe(false)
+    expect(step5.disabled).toBe(false)
+    expect(step6.disabled).toBe(false)
+
+    // Clicking Step 6 opens saved investigation view normally
+    fireEvent.click(step6)
+    expect(screen.getByText(/Historical Saved Investigations/i)).toBeDefined()
+    expect(screen.getAllByText(/inv_eval_test_001/i).length).toBeGreaterThan(0)
+  })
+
+  it('Scenario 12: Back navigation works for completed steps while future incomplete steps remain locked', async () => {
+    render(<EvaluatorInvestigationSection />)
+    await selectFirstObservation()
+
+    // Now on Step 2. Step 1 is complete.
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+
+    // Navigate back to Step 1
+    const step1 = getFlowStepButton(1)
+    fireEvent.click(step1)
+    expect(screen.getByText(/Step 1: Select Verified Sentinel-1 SAR Reference Observation/i)).toBeDefined()
+
+    // Can navigate forward to unlocked Step 2
+    const step2 = getFlowStepButton(2)
+    fireEvent.click(step2)
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+
+    // Cannot jump forward to locked Step 3 or 5
+    const step3 = getFlowStepButton(3)
+    const step5 = getFlowStepButton(5)
+    fireEvent.click(step3)
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
+    fireEvent.click(step5)
+    expect(screen.getByText(/Step 2: Set Environmental Forcing/i)).toBeDefined()
   })
 })

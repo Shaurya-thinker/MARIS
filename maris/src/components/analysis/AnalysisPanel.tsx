@@ -14,6 +14,7 @@ import {
   Info,
   Loader2,
   Minus,
+  RotateCcw,
   Shield,
   Ship,
   Wind,
@@ -35,6 +36,9 @@ interface AnalysisPanelProps {
   simulationScenario?: SimulationScenario | null
   simulationStageIndex?: number
   simulationStages?: Array<{ id: string; label: string; shortLabel: string; description: string }>
+  onSkipSimulation?: () => void
+  onReplaySimulation?: () => void
+  onSelectSimulationStage?: (stageIndex: number) => void
   demoIncident: IncidentData
   demoCandidates: CandidateAttribution[]
   selectedCandidate: string
@@ -145,6 +149,9 @@ export function AnalysisPanel({
   simulationScenario,
   simulationStageIndex = 0,
   simulationStages = [],
+  onSkipSimulation,
+  onReplaySimulation,
+  onSelectSimulationStage,
   demoIncident,
   demoCandidates,
   selectedCandidate,
@@ -288,7 +295,20 @@ export function AnalysisPanel({
               <span className="section-kicker">Simulation Analysis</span>
               <h2>{simulationScenario.name}</h2>
             </div>
-            <Compass size={17} className="heading-icon" aria-hidden="true" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {onSkipSimulation && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{ fontSize: '0.72rem', padding: '3px 8px', height: '24px' }}
+                  onClick={onSkipSimulation}
+                  title="Skip to candidate attribution results"
+                >
+                  Skip to Results
+                </button>
+              )}
+              <Compass size={17} className="heading-icon" aria-hidden="true" />
+            </div>
           </div>
 
           <section className="panel-section compact-section">
@@ -322,6 +342,7 @@ export function AnalysisPanel({
                 return (
                   <div
                     key={step.id}
+                    onClick={onSelectSimulationStage ? () => onSelectSimulationStage(index + 1) : undefined}
                     style={{
                       display: 'flex',
                       alignItems: 'flex-start',
@@ -331,6 +352,7 @@ export function AnalysisPanel({
                       border: `1px solid ${status === 'completed' ? 'rgba(69, 194, 177, 0.35)' : status === 'processing' ? 'rgba(98, 174, 232, 0.5)' : 'rgba(255, 255, 255, 0.08)'}`,
                       background: status === 'completed' ? 'rgba(69, 194, 177, 0.08)' : status === 'processing' ? 'rgba(98, 174, 232, 0.08)' : 'rgba(13, 34, 39, 0.4)',
                       opacity: status === 'pending' ? 0.6 : 1,
+                      cursor: onSelectSimulationStage ? 'pointer' : undefined,
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, minWidth: 20, height: 20, marginTop: 1 }}>
@@ -376,7 +398,21 @@ export function AnalysisPanel({
             <span className="section-kicker">Simulation Analysis</span>
             <h2>{simulationScenario.name}</h2>
           </div>
-          <Compass size={17} className="heading-icon" aria-hidden="true" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {onReplaySimulation && (
+              <button
+                type="button"
+                className="icon-button"
+                style={{ width: '26px', height: '26px' }}
+                onClick={onReplaySimulation}
+                title="Re-run Simulation Analysis"
+                aria-label="Re-run Simulation Analysis"
+              >
+                <RotateCcw size={14} />
+              </button>
+            )}
+            <Compass size={17} className="heading-icon" aria-hidden="true" />
+          </div>
         </div>
 
         <section className="panel-section compact-section">

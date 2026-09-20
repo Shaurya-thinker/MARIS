@@ -107,6 +107,51 @@ class StaticAisAdapter:
         return copied
 
 
+class SqliteAisAdapter:
+    """AIS adapter querying the local SQLite ais_vessels.db database."""
+
+    def __init__(self, adapter_id: str = "sqlite", db_path: Path | None = None) -> None:
+        self.adapter_id = adapter_id
+        self._db_path = db_path
+
+    def fetch_positions(self, query: AisHistoricalQuery) -> list[dict[str, Any]]:
+        from app.services.real_experiment.ais_database import query_vessels_in_spatiotemporal_box
+        west, south, east, north = area_to_lonlat_bbox(query.area_of_interest)
+        vessels = query_vessels_in_spatiotemporal_box(
+            lat_min=south,
+            lat_max=north,
+            lon_min=west,
+            lon_max=east,
+            t_start=query.time_window.start,
+            t_end=query.time_window.end,
+            db_path=self._db_path,
+        )
+        records: list[dict[str, Any]] = []
+        for v in vessels:
+            mmsi = v.get("mmsi")
+            name = v.get("vessel_name")
+            imo = v.get("imo")
+            for pos in v.get("positions", []):
+                records.append({
+                    "timestamp": pos.get("timestamp"),
+                    "lat": pos.get("lat"),
+                    "lon": pos.get("lon"),
+                    "mmsi": mmsi,
+                    "imo": imo,
+                    "vessel_name": name,
+                    "speed_over_ground": pos.get("speed") if pos.get("speed") is not None else pos.get("sog"),
+                    "course_over_ground": pos.get("cog"),
+                    "heading": pos.get("heading"),
+                    "navigation_status": pos.get("nav_status"),
+                    "source_attributes": {
+                        "source_id": v.get("source_id"),
+                        "source_type": v.get("source_type"),
+                        "is_real_observation": v.get("is_real_observation"),
+                    },
+                })
+        return records
+
+
 def utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
@@ -287,6 +332,8 @@ class AisAcquisitionProvider(AcquisitionProvider):
     def _resolve_adapter(self) -> AisSourceAdapter:
         if self._adapter is not None:
             return self._adapter
+        if self._settings.ais_adapter_id in ("sqlite", "ais_db", "local_db"):
+            return SqliteAisAdapter(adapter_id=self._settings.ais_adapter_id)
         if self._settings.ais_adapter_id and self._settings.ais_adapter_id != "unconfigured":
             raise AcquisitionConfigurationError(
                 f"AIS adapter '{self._settings.ais_adapter_id}' is named in configuration but "

@@ -801,9 +801,10 @@ import EvaluatorInvestigationSection from './EvaluatorInvestigationSection'
 
 export interface RealExperimentViewProps {
   initialMode?: 'real' | 'evaluator' | 'synthetic'
+  initialInvestigationId?: string | null
 }
 
-export default function RealExperimentView({ initialMode = 'real' }: RealExperimentViewProps) {
+export default function RealExperimentView({ initialMode = 'real', initialInvestigationId }: RealExperimentViewProps) {
   const experiment = useExperiment()
   const { state } = experiment
   const [experimentMode, setExperimentMode] = useState<'real' | 'evaluator' | 'synthetic'>(initialMode)
@@ -826,18 +827,18 @@ export default function RealExperimentView({ initialMode = 'real' }: RealExperim
           </div>
           <h2>
             {experimentMode === 'synthetic'
-              ? 'Synthetic Data & ML Attribution Pipeline'
+              ? 'Synthetic Scenario & Attribution Pipeline'
               : experimentMode === 'evaluator'
-              ? 'Evaluator Attribution Investigation (6-Step Flow)'
-              : 'Interactive Attribution Experiment'}
+              ? 'Evaluator Attribution Investigation'
+              : 'Real-Data Interactive Attribution Experiment'}
           </h2>
         </div>
         <div className="re-header-sub">
           {experimentMode === 'synthetic'
-            ? 'Physically consistent synthetic scenario generator with group-safe trained scikit-learn ML attribution model'
+            ? 'Controlled hydrodynamic scenario simulation and attribution model evaluation.'
             : experimentMode === 'evaluator'
-            ? 'Dynamic attribution driven by Sentinel-1 SAR observations, metocean backward drift physics, strict spatial corridor/temporal AIS filtering, and the active scaled ML attribution model'
-            : 'Physics + feature-based backward drift attribution using live Sentinel-1, ERA5, CMEMS, and AIS data'}
+            ? 'Sentinel-1 SAR observation analysis, metocean backward drift trajectory, AIS corridor filtering, and calibrated vessel attribution.'
+            : 'Backward drift reconstruction using Sentinel-1 SAR observations, ERA5 reanalysis winds, CMEMS surface currents, and AIS vessel tracks.'}
         </div>
 
         {/* Experiment Mode Selector */}
@@ -847,27 +848,27 @@ export default function RealExperimentView({ initialMode = 'real' }: RealExperim
             className={`re-mode-tab ${experimentMode === 'evaluator' ? 'active' : ''}`}
             onClick={() => setExperimentMode('evaluator')}
           >
-            🎯 Evaluator Investigation Workflow (6-Step Flow)
+            Evaluator Investigation Workflow
           </button>
           <button
             type="button"
             className={`re-mode-tab ${experimentMode === 'real' ? 'active' : ''}`}
             onClick={() => setExperimentMode('real')}
           >
-            🛰 Real-Data Observation Wizard
+            Real-Data Observation Wizard
           </button>
           <button
             type="button"
             className={`re-mode-tab ${experimentMode === 'synthetic' ? 'active' : ''}`}
             onClick={() => setExperimentMode('synthetic')}
           >
-            🔬 Synthetic ML Experiment Pipeline
+            Synthetic ML Experiment Pipeline
           </button>
         </div>
       </div>
 
       {experimentMode === 'evaluator' && (
-        <EvaluatorInvestigationSection />
+        <EvaluatorInvestigationSection initialInvestigationId={initialInvestigationId} />
       )}
 
       {experimentMode === 'real' && (

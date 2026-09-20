@@ -201,15 +201,9 @@ class ExperimentRunner:
 
         # Step 1 — Backward drift (reuses Stage D3 pure function)
         try:
-            import xarray as xr
-            wind_ds = xr.open_dataset(era5_netcdf_path)
-            curr_raw = xr.open_dataset(cmems_netcdf_path)
-
-            # CMEMS may have depth dimension; select shallowest layer
-            if "depth" in curr_raw.dims or "depth" in curr_raw.coords:
-                curr_ds = curr_raw.isel(depth=0, missing_dims="ignore")
-            else:
-                curr_ds = curr_raw
+            from app.services.drift_modelling import _open_netcdf
+            wind_ds = _open_netcdf(era5_netcdf_path)
+            curr_ds = _open_netcdf(cmems_netcdf_path)
 
             backward_steps = run_backward_drift(
                 origin_lon=observation_lon,
@@ -222,7 +216,7 @@ class ExperimentRunner:
                 spill_area_m2=spill_area_m2,
             )
             wind_ds.close()
-            curr_raw.close()
+            curr_ds.close()
         except SourceEstimationError as exc:
             raise ExperimentError(f"Backward drift failed: {exc}") from exc
         except Exception as exc:

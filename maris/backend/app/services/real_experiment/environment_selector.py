@@ -214,7 +214,7 @@ class EnvironmentSelectorService:
         req = AcquisitionRequest(
             investigation_id=inv_id,
             provider_id="era5",
-            asset_type=AssetType.ERA5_WIND,
+            asset_type=AssetType.ENVIRONMENT_WIND,
             area_of_interest=bbox,
             time_window=TimeWindow(start=start, end=end),
         )
@@ -248,7 +248,7 @@ class EnvironmentSelectorService:
         req = AcquisitionRequest(
             investigation_id=inv_id,
             provider_id="cmems",
-            asset_type=AssetType.CMEMS_CURRENT,
+            asset_type=AssetType.ENVIRONMENT_CURRENT,
             area_of_interest=bbox,
             time_window=TimeWindow(start=start, end=end),
         )
@@ -268,9 +268,10 @@ class EnvironmentSelectorService:
     def _sample_netcdf(path: str, u_var: str, v_var: str) -> EnvironmentSample:
         """Extract a representative scalar sample from a NetCDF file for display."""
         try:
-            import xarray as xr
+            import netCDF4 as nc
             import numpy as np
-            ds = xr.open_dataset(path)
+
+            ds = nc.Dataset(path, "r")
             u_vals = ds[u_var].values.flatten() if u_var in ds else np.array([])
             v_vals = ds[v_var].values.flatten() if v_var in ds else np.array([])
             u_finite = u_vals[np.isfinite(u_vals)]
@@ -284,7 +285,9 @@ class EnvironmentSelectorService:
             return EnvironmentSample()
 
     @staticmethod
-    def _utc(dt: datetime) -> datetime:
+    def _utc(dt: datetime | str) -> datetime:
+        if isinstance(dt, str):
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
