@@ -18,6 +18,13 @@ async def lifespan(app: FastAPI):
     logger.warning(
         "Investigation store is in-memory and ephemeral. All investigation data will be lost on server restart."
     )
+    # Ensure AIS SQLite schema and benchmark seed data are always present.
+    try:
+        from app.services.real_experiment.ais_database import init_ais_database
+        init_ais_database()
+        logger.info("AIS database initialised and benchmark data seeded.")
+    except Exception as exc:
+        logger.warning("AIS database init failed (non-fatal): %s", exc)
     yield
 
 

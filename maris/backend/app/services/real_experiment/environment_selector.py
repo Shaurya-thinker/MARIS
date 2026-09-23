@@ -272,11 +272,22 @@ class EnvironmentSelectorService:
             import numpy as np
 
             ds = nc.Dataset(path, "r")
-            u_vals = ds[u_var].values.flatten() if u_var in ds else np.array([])
-            v_vals = ds[v_var].values.flatten() if v_var in ds else np.array([])
-            u_finite = u_vals[np.isfinite(u_vals)]
-            v_finite = v_vals[np.isfinite(v_vals)]
+
+            def _extract_finite(var_name: str) -> np.ndarray:
+                var_obj = ds.variables.get(var_name)
+                if var_obj is None:
+                    return np.array([])
+                data = var_obj[:]
+                if np.ma.is_masked(data):
+                    data = data.compressed()
+                else:
+                    data = np.asarray(data).flatten()
+                return data[np.isfinite(data)]
+
+            u_finite = _extract_finite(u_var)
+            v_finite = _extract_finite(v_var)
             ds.close()
+
             return EnvironmentSample(
                 u=float(np.nanmean(u_finite)) if len(u_finite) else None,
                 v=float(np.nanmean(v_finite)) if len(v_finite) else None,

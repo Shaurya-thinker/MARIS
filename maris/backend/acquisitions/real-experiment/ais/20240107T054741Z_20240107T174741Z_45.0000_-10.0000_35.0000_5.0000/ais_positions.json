@@ -1,0 +1,17 @@
+{
+  "schema": "maris.ais.positions.v1",
+  "query": {
+    "investigation_id": "real-experiment",
+    "time_window": {
+      "start": "2024-01-07T05:47:41.566000+00:00",
+      "end": "2024-01-07T17:47:41.566000+00:00"
+    },
+    "bounding_box": {
+      "west": -10.0,
+      "south": 35.0,
+      "east": 5.0,
+      "north": 45.0
+    }
+  },
+  "records": []
+}

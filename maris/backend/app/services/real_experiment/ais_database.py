@@ -229,7 +229,7 @@ def seed_benchmark_data(db_path: Path | None = None) -> dict[str, int]:
                 "source_url": "https://www.bea-mer.developpement-durable.gouv.fr/",
                 "acquisition_timestamp": "2018-10-08T05:28:00Z",
                 "coverage_start": "2018-10-07T20:00:00Z",
-                "coverage_end": "2018-10-08T06:00:00Z",
+                "coverage_end": "2018-10-10T00:00:00Z",
                 "geographic_coverage": "Cap Corse, Northern Mediterranean (WGS84 9.0-10.0E, 42.5-44.0N)",
                 "is_real_observation": 0,
                 "notes": (
@@ -273,6 +273,30 @@ def seed_benchmark_data(db_path: Path | None = None) -> dict[str, int]:
                 "is_real_observation": 0,
                 "notes": "Synthetic benchmark scenario for demonstration.",
             },
+            {
+                "source_id": "src_synth_gulf_of_kutch",
+                "provider_name": "MARIS Synthetic Scenario Generator",
+                "source_type": PROVENANCE_SYNTHETIC_BENCHMARK,
+                "source_url": "https://github.com/maris-project/maris",
+                "acquisition_timestamp": "2025-08-18T06:20:00Z",
+                "coverage_start": "2025-08-18T01:00:00Z",
+                "coverage_end": "2025-08-18T07:00:00Z",
+                "geographic_coverage": "Gulf of Kutch, Gujarat (WGS84 69.5-70.2E, 22.5-23.2N)",
+                "is_real_observation": 0,
+                "notes": "Synthetic benchmark scenario for coastal tidal channel demonstration near oil terminal traffic.",
+            },
+            {
+                "source_id": "src_synth_mediterranean_epsilon",
+                "provider_name": "MARIS Synthetic Scenario Generator",
+                "source_type": PROVENANCE_SYNTHETIC_BENCHMARK,
+                "source_url": "https://github.com/maris-project/maris",
+                "acquisition_timestamp": "2025-09-11T06:45:00Z",
+                "coverage_start": "2025-09-11T00:00:00Z",
+                "coverage_end": "2025-09-11T07:30:00Z",
+                "geographic_coverage": "Strait of Sicily, Central Mediterranean (WGS84 14.0-16.0E, 35.0-37.0N)",
+                "is_real_observation": 0,
+                "notes": "Synthetic benchmark scenario for Strait of Sicily major east-west transit passage demonstration.",
+            },
         ]
 
         for s in sources:
@@ -309,6 +333,8 @@ def seed_benchmark_data(db_path: Path | None = None) -> dict[str, int]:
             "ref_arabian_sea_alpha": ("src_synth_arabian_sea_alpha", PROVENANCE_SYNTHETIC_BENCHMARK),
             "ref_arabian_sea_beta": ("src_synth_arabian_sea_beta", PROVENANCE_SYNTHETIC_BENCHMARK),
             "ref_bay_of_bengal_gamma": ("src_synth_bay_of_bengal", PROVENANCE_SYNTHETIC_BENCHMARK),
+            "ref_gulf_of_kutch_delta": ("src_synth_gulf_of_kutch", PROVENANCE_SYNTHETIC_BENCHMARK),
+            "ref_mediterranean_epsilon": ("src_synth_mediterranean_epsilon", PROVENANCE_SYNTHETIC_BENCHMARK),
         }
 
         for scene in REFERENCE_OBSERVATIONS:

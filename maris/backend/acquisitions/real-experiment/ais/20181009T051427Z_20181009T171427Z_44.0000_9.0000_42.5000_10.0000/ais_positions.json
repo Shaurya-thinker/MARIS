@@ -1,0 +1,138 @@
+{
+  "schema": "maris.ais.positions.v1",
+  "query": {
+    "investigation_id": "real-experiment",
+    "time_window": {
+      "start": "2018-10-09T05:14:27.947000+00:00",
+      "end": "2018-10-09T17:14:27.947000+00:00"
+    },
+    "bounding_box": {
+      "west": 9.0,
+      "south": 42.5,
+      "east": 10.0,
+      "north": 44.0
+    }
+  },
+  "records": [
+    {
+      "timestamp": "2018-10-09T06:00:00Z",
+      "lat": 43.248,
+      "lon": 9.478,
+      "mmsi": "229986000",
+      "vessel_name": "CSL VIRGINIA",
+      "speed_over_ground": 0.0,
+      "course_over_ground": 90.0,
+      "heading": 90.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    },
+    {
+      "timestamp": "2018-10-09T12:00:00Z",
+      "lat": 43.248,
+      "lon": 9.478,
+      "mmsi": "229986000",
+      "vessel_name": "CSL VIRGINIA",
+      "speed_over_ground": 0.0,
+      "course_over_ground": 90.0,
+      "heading": 90.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    },
+    {
+      "timestamp": "2018-10-09T17:14:00Z",
+      "lat": 43.248,
+      "lon": 9.478,
+      "mmsi": "229986000",
+      "vessel_name": "CSL VIRGINIA",
+      "speed_over_ground": 0.0,
+      "course_over_ground": 90.0,
+      "heading": 90.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    },
+    {
+      "timestamp": "2018-10-09T06:00:00Z",
+      "lat": 43.2,
+      "lon": 9.5,
+      "mmsi": "247112233",
+      "vessel_name": "MEDITERRANEAN STAR",
+      "speed_over_ground": 5.0,
+      "course_over_ground": 320.0,
+      "heading": 320.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    },
+    {
+      "timestamp": "2018-10-09T17:14:00Z",
+      "lat": 43.25,
+      "lon": 9.48,
+      "mmsi": "247112233",
+      "vessel_name": "MEDITERRANEAN STAR",
+      "speed_over_ground": 1.2,
+      "course_over_ground": 10.0,
+      "heading": 10.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    },
+    {
+      "timestamp": "2018-10-09T06:00:00Z",
+      "lat": 43.248,
+      "lon": 9.478,
+      "mmsi": "228308800",
+      "vessel_name": "MV ULYSSE",
+      "speed_over_ground": 0.0,
+      "course_over_ground": 205.0,
+      "heading": 205.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    },
+    {
+      "timestamp": "2018-10-09T12:00:00Z",
+      "lat": 43.248,
+      "lon": 9.478,
+      "mmsi": "228308800",
+      "vessel_name": "MV ULYSSE",
+      "speed_over_ground": 0.0,
+      "course_over_ground": 205.0,
+      "heading": 205.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    },
+    {
+      "timestamp": "2018-10-09T17:14:00Z",
+      "lat": 43.248,
+      "lon": 9.478,
+      "mmsi": "228308800",
+      "vessel_name": "MV ULYSSE",
+      "speed_over_ground": 0.0,
+      "course_over_ground": 205.0,
+      "heading": 205.0,
+      "source_attributes": {
+        "source_id": "src_manual_ref_corsica_2018",
+        "source_type": "MANUAL_REFERENCE",
+        "is_real_observation": false
+      }
+    }
+  ]
+}

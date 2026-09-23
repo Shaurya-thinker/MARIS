@@ -144,10 +144,21 @@ def load_model(model_id: str | None = None) -> TrainedAttributionModel:
             train_m = data.get("train_metrics")
             val_m = data["val_metrics"]
             test_m = data["test_metrics"]
+            pipeline = data["pipeline"]
+            try:
+                clf = (
+                    pipeline.named_steps.get("classifier")
+                    if hasattr(pipeline, "named_steps")
+                    else (pipeline.steps[-1][1] if hasattr(pipeline, "steps") else None)
+                )
+                if clf is not None and not hasattr(clf, "multi_class"):
+                    setattr(clf, "multi_class", "auto")
+            except Exception:
+                pass
             model = TrainedAttributionModel(
                 model_id=data["model_id"],
                 model_type=data["model_type"],
-                pipeline=data["pipeline"],
+                pipeline=pipeline,
                 feature_names=data["feature_names"],
                 feature_coefficients=data["feature_coefficients"],
                 train_metrics=EvaluationMetrics(**train_m) if train_m else None,
