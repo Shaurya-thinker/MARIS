@@ -85,13 +85,27 @@ from app.models.behavioral_intelligence import (
 from app.models.common import AssetType, Provenance
 from app.models.drift import DriftResult, DriftStep
 from app.models.evidence_fusion import (
+    AisEvidenceSummary,
     BehavioralContextSummary,
+    CandidateEvidenceDetail,
+    DataQualityEvidenceSummary,
+    EnvironmentalEvidenceSummary,
+    EvidenceAvailabilityProfile,
     EvidenceFusionResult,
+    EvidenceProvenanceRecord,
     EvidenceSignal,
     ForwardDriftCrossCheck,
+    KinematicEvidenceSummary,
+    MultiSourceUncertainty,
+    NormalizedEvidenceProfile,
     SignalStatus,
+    SourceEvidenceSummary,
+    SpatialEvidenceSummary,
+    SpillEvidenceSummary,
+    TemporalEvidenceSummary,
     VesselFusedEvidence,
 )
+from app.models.satellite import SpillDetection
 from app.models.source_estimation import SourceEstimateResult
 from app.models.trajectory_analysis import (
     TrajectoryAnalysisResult,
@@ -101,6 +115,7 @@ from app.models.vessel import (
     CandidateVessel,
     CandidateVesselGenerationResult,
 )
+from app.services.candidate_environment import CandidateEnvironment
 from app.services.drift_modelling import _haversine_m, _sanitize, _utc
 
 
@@ -330,6 +345,109 @@ def _build_forward_drift_cross_check(
 
 
 # ---------------------------------------------------------------------------
+# Domain Summary Builders (B3, C2, D3)
+# ---------------------------------------------------------------------------
+
+
+def _build_spill_summary(
+    spill_detection: SpillDetection | None,
+    spill_id: str,
+) -> SpillEvidenceSummary:
+    """Extract structured B3 spill detection context."""
+    if spill_detection is None:
+        return SpillEvidenceSummary(spill_id=spill_id)
+
+    geom = spill_detection.geometry or {}
+    centroid_lon: float | None = None
+    centroid_lat: float | None = None
+    if geom.get("type") == "Point" and len(geom.get("coordinates", [])) >= 2:
+        centroid_lon = float(geom["coordinates"][0])
+        centroid_lat = float(geom["coordinates"][1])
+    elif geom.get("type") == "Polygon" and geom.get("coordinates"):
+        ring = geom["coordinates"][0]
+        if ring:
+            centroid_lon = round(sum(p[0] for p in ring) / len(ring), 6)
+            centroid_lat = round(sum(p[1] for p in ring) / len(ring), 6)
+
+    prov = dict(spill_detection.metadata.get("provenance") or {})
+    maritime_status = spill_detection.metadata.get("maritime_status") or spill_detection.metadata.get("maritime_domain_status")
+    vv_vh = spill_detection.metadata.get("vv_vh_ratio") or spill_detection.metadata.get("polarization_ratio")
+
+    return SpillEvidenceSummary(
+        spill_id=spill_detection.id or spill_id,
+        detection_confidence=spill_detection.confidence,
+        spill_area_m2=spill_detection.area,
+        centroid_lon=centroid_lon,
+        centroid_lat=centroid_lat,
+        maritime_domain_status=str(maritime_status) if maritime_status else None,
+        vv_vh_ratio=float(vv_vh) if vv_vh is not None else None,
+        detection_provenance=prov,
+    )
+
+
+def _build_environmental_summary(
+    env_context: CandidateEnvironment | None,
+) -> EnvironmentalEvidenceSummary:
+    """Extract structured C2 metocean context."""
+    if env_context is None:
+        return EnvironmentalEvidenceSummary(
+            missing_data_status="UNAVAILABLE",
+        )
+
+    w = env_context.wind
+    c = env_context.current
+    reg = env_context.regime
+    dq = env_context.data_quality
+
+    reg_val = reg.classification.value if hasattr(reg.classification, "value") else str(reg.classification)
+    missing_status = "NONE" if (dq.wind_available and dq.current_available) else (
+        "MISSING_CURRENT" if dq.wind_available else (
+            "MISSING_WIND" if dq.current_available else "UNAVAILABLE"
+        )
+    )
+
+    return EnvironmentalEvidenceSummary(
+        wind_speed_ms=w.speed_ms,
+        wind_direction_from_deg=w.direction_from_deg,
+        wind_regime=reg_val,
+        current_speed_ms=c.speed_ms,
+        current_direction_to_deg=c.direction_to_deg,
+        source_timestamp=w.source_timestamp or c.source_timestamp,
+        interpolation_method=w.spatial_interpolation or c.spatial_interpolation,
+        data_quality="VALID" if (dq.wind_available and dq.interpolation_valid) else "DEGRADED",
+        missing_data_status=missing_status,
+    )
+
+
+def _build_source_summary(
+    source_estimate: SourceEstimateResult,
+) -> SourceEvidenceSummary:
+    """Extract structured D3 source estimation evidence."""
+    term_status = source_estimate.metadata.get("termination_reason") or source_estimate.metadata.get("status")
+    shoreline = bool(
+        source_estimate.metadata.get("shoreline_terminated")
+        or (term_status and "shoreline" in str(term_status).lower())
+    )
+    fallback = bool(
+        source_estimate.metadata.get("current_fallback")
+        or source_estimate.metadata.get("wind_only_fallback")
+    )
+    fallback_info = source_estimate.metadata.get("fallback_info") or source_estimate.metadata.get("environmental_fallback")
+
+    return SourceEvidenceSummary(
+        source_point_lon=source_estimate.source_point_lon,
+        source_point_lat=source_estimate.source_point_lat,
+        source_uncertainty_radius_km=source_estimate.source_uncertainty_radius_km,
+        source_time=_utc(source_estimate.source_time),
+        steps_count=len(source_estimate.steps) if source_estimate.steps else 0,
+        termination_status=str(term_status) if term_status else "COMPLETED",
+        current_fallback_applied=fallback,
+        shoreline_terminated=shoreline,
+        environmental_fallback_info=str(fallback_info) if fallback_info else None,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Core Fusion Logic — Per-Vessel
 # ---------------------------------------------------------------------------
 
@@ -343,6 +461,9 @@ def _fuse_vessel_evidence(
     tau_scale_hours: float,
     source_time: datetime,
     drift_result: DriftResult | None,
+    spill_summary: SpillEvidenceSummary | None = None,
+    env_summary: EnvironmentalEvidenceSummary | None = None,
+    source_summary: SourceEvidenceSummary | None = None,
 ) -> VesselFusedEvidence:
     """Compute the fused evidence record for a single candidate vessel.
 
@@ -352,6 +473,13 @@ def _fuse_vessel_evidence(
     - Forward drift is an excluded cross-check.
     - Input order is preserved via input_index.
     """
+    spill_sum = spill_summary or SpillEvidenceSummary()
+    env_sum = env_summary or EnvironmentalEvidenceSummary()
+    src_sum = source_summary or SourceEvidenceSummary(
+        source_uncertainty_radius_km=r_zone_km,
+        source_time=source_time,
+    )
+
     # ---- Signal 1: Spatial Proximity ----
     if trajectory_analysis is None:
         spatial_signal = EvidenceSignal(
@@ -490,6 +618,201 @@ def _fuse_vessel_evidence(
     # ---- Forward Drift Cross-Check (excluded from score) ----
     fwd_check = _build_forward_drift_cross_check(candidate, drift_result)
 
+    # ---- Build Structured Evidence Blocks ----
+    cand_meta = candidate.metadata or {}
+    ais_summary = AisEvidenceSummary(
+        mmsi=candidate.mmsi,
+        imo=cand_meta.get("imo"),
+        vessel_name=candidate.vessel_name,
+        vessel_type=candidate.vessel_type or cand_meta.get("vessel_type"),
+        call_sign=cand_meta.get("call_sign"),
+        flag=cand_meta.get("flag"),
+        accepted_observation_count=candidate.observed_positions_count,
+        spatial_filtering_passed=True,
+        temporal_filtering_passed=True,
+        data_source_type=str(cand_meta.get("data_source_type", "curated_historical_reconstruction")),
+        is_real_observation=bool(cand_meta.get("is_real_observation", False)),
+    )
+
+    if trajectory_analysis is not None:
+        tp = trajectory_analysis.transit_profile
+        cp = trajectory_analysis.centerline_proximity
+        q = getattr(trajectory_analysis, "quality", None)
+        tc = getattr(trajectory_analysis, "temporal_correlation", None)
+        e2_ev = getattr(trajectory_analysis, "evidence", {}) or {}
+        kin_ev = e2_ev.get("kinematic", {})
+
+        inside_zone = (tp.distance_to_zone_boundary_km <= 0.0) or bool(getattr(candidate, "inside_source_zone", False))
+        spatial_summary = SpatialEvidenceSummary(
+            min_distance_to_center_km=tp.min_distance_to_center_km,
+            distance_to_zone_boundary_km=tp.distance_to_zone_boundary_km,
+            inside_source_zone=inside_zone,
+            min_distance_to_centerline_km=cp.min_distance_to_centerline_km,
+            cpa_lon=getattr(tp, "cpa_lon", None),
+            cpa_lat=getattr(tp, "cpa_lat", None),
+            cpa_time=_utc(tp.closest_position_time) if tp.closest_position_time else None,
+        )
+
+        abs_offset_h = abs(tp.time_offset_from_source_hours)
+        span_h: float | None = None
+        if tc and tc.temporal_span_seconds:
+            span_h = round(tc.temporal_span_seconds / 3600.0, 4)
+        elif q and q.temporal_span_seconds:
+            span_h = round(q.temporal_span_seconds / 3600.0, 4)
+
+        temporal_summary = TemporalEvidenceSummary(
+            time_offset_from_source_hours=tp.time_offset_from_source_hours,
+            abs_time_offset_hours=round(abs_offset_h, 4),
+            tau_scale_hours=round(tau_scale_hours, 4),
+            closest_observation_time=_utc(tp.closest_position_time) if tp.closest_position_time else None,
+            temporal_span_hours=span_h,
+        )
+
+        reported_sog = kin_ev.get("reported_sog_knots") or getattr(trajectory_analysis, "mean_reported_sog_knots", None)
+        derived_speed = kin_ev.get("derived_speed_mps")
+        bearing = kin_ev.get("bearing_degrees")
+        continuity = kin_ev.get("trajectory_continuity")
+        has_valid_kin = kin_ev.get("has_valid_kinematics", False)
+        invalid_cnt = kin_ev.get("invalid_intervals_count", 0)
+
+        kinematic_summary = KinematicEvidenceSummary(
+            reported_sog_knots=reported_sog,
+            derived_speed_mps=derived_speed,
+            bearing_degrees=bearing,
+            trajectory_continuity=str(continuity) if continuity else None,
+            has_valid_kinematics=has_valid_kin,
+            invalid_intervals_count=invalid_cnt,
+        )
+
+        sparse = (candidate.observed_positions_count <= 1)
+        if q is not None:
+            sparse = q.sparse_track or (candidate.observed_positions_count <= 1)
+
+        data_quality_summary = DataQualityEvidenceSummary(
+            observed_positions_count=candidate.observed_positions_count,
+            duplicate_count=q.duplicate_count if q else 0,
+            sparse_track=sparse,
+            quality_flags=list(q.quality_flags) if q else (["sparse_track"] if sparse else []),
+            provenance=dict(cand_meta.get("provenance") or {}),
+        )
+    else:
+        spatial_summary = SpatialEvidenceSummary()
+        temporal_summary = TemporalEvidenceSummary()
+        kinematic_summary = KinematicEvidenceSummary()
+        data_quality_summary = DataQualityEvidenceSummary(
+            observed_positions_count=candidate.observed_positions_count,
+            sparse_track=(candidate.observed_positions_count <= 1),
+        )
+
+    evidence_detail = CandidateEvidenceDetail(
+        spill=spill_sum,
+        environment=env_sum,
+        source=src_sum,
+        ais=ais_summary,
+        spatial=spatial_summary,
+        temporal=temporal_summary,
+        kinematic=kinematic_summary,
+        data_quality=data_quality_summary,
+    )
+
+    normalized_profile = NormalizedEvidenceProfile(
+        spatial_proximity=spatial_signal.score,
+        temporal_proximity=temporal_signal.score,
+        trajectory_alignment=trajectory_signal.score,
+        source_zone_membership=spatial_summary.inside_source_zone,
+        environmental_compatibility=env_sum.wind_regime,
+        trajectory_quality="SPARSE" if data_quality_summary.sparse_track else ("ADEQUATE" if data_quality_summary.observed_positions_count > 1 else "NONE"),
+    )
+
+    # Availability profile
+    avail_dims: list[str] = []
+    unavail_dims: list[str] = []
+    missing_reasons: dict[str, str] = {}
+
+    for sig in primary_signals:
+        if sig.status == SignalStatus.VALID:
+            avail_dims.append(sig.channel_name)
+        else:
+            unavail_dims.append(sig.channel_name)
+            missing_reasons[sig.channel_name] = sig.rationale
+
+    if env_sum.wind_speed_ms is not None:
+        avail_dims.append("environmental_context")
+    else:
+        unavail_dims.append("environmental_context")
+        missing_reasons["environmental_context"] = "Environmental context not supplied or incomplete."
+
+    if spill_sum.spill_id:
+        avail_dims.append("spill_detection")
+    else:
+        unavail_dims.append("spill_detection")
+        missing_reasons["spill_detection"] = "Spill detection metadata unavailable."
+
+    availability_profile = EvidenceAvailabilityProfile(
+        available_dimensions=avail_dims,
+        unavailable_dimensions=unavail_dims,
+        missing_reasons=missing_reasons,
+    )
+
+    # Uncertainty profile
+    uncertainty_profile = MultiSourceUncertainty(
+        source_uncertainty_km=r_zone_km,
+        source_fallback_applied=src_sum.current_fallback_applied or src_sum.shoreline_terminated,
+        trajectory_uncertainty=(
+            "Sparse trajectory (1 observation ping); kinematic and course continuity cannot be confirmed."
+            if data_quality_summary.sparse_track
+            else (
+                f"Observed {data_quality_summary.observed_positions_count} AIS pings; track quality adequate."
+                if data_quality_summary.observed_positions_count > 1
+                else "No AIS positions observed within spatio-temporal candidate window."
+            )
+        ),
+        environmental_uncertainty=(
+            f"Metocean conditions: wind={env_sum.wind_speed_ms} m/s ({env_sum.wind_regime}), current={env_sum.current_speed_ms} m/s. "
+            "ERA5/CMEMS resolution and interpolation caveats apply."
+            if env_sum.wind_speed_ms is not None
+            else "Environmental metocean context was not supplied; lookalike risk and drift certainty unassessed."
+        ),
+        detection_uncertainty=(
+            f"B3 detection confidence={spill_sum.detection_confidence}. Uncalibrated dark-spot feature score; not a calibrated probability."
+            if spill_sum.detection_confidence is not None
+            else "Spill detection confidence not recorded."
+        ),
+        geospatial_uncertainty="Subject to SAR geocoding / terrain distortion accuracy (~10-20 m).",
+    )
+
+    # Provenance record
+    prov_record = EvidenceProvenanceRecord(
+        source_assets={
+            "D3_source_estimate": "source_estimate" if src_sum.source_point_lon is not None else "none",
+            "E1_candidate_generation": candidate.candidate_id,
+            "E2_trajectory_analysis": trajectory_analysis.candidate_id if trajectory_analysis else "none",
+        },
+        data_source_type=ais_summary.data_source_type,
+        is_real_observation=ais_summary.is_real_observation,
+        timestamps={
+            "source_time": source_time.isoformat(),
+            "candidate_cpa_time": spatial_summary.cpa_time.isoformat() if spatial_summary.cpa_time else "none",
+        },
+        fallback_flags={
+            "current_fallback_applied": src_sum.current_fallback_applied,
+            "shoreline_terminated": src_sum.shoreline_terminated,
+        },
+    )
+
+    # Warnings
+    cand_warnings: list[str] = []
+    if data_quality_summary.sparse_track:
+        cand_warnings.append("Single AIS observation ping: velocity and heading vectors cannot be verified independently.")
+    if src_sum.current_fallback_applied:
+        cand_warnings.append("D3 drift used wind-only current fallback: hydrodynamic drift advection may be underestimated.")
+    if src_sum.shoreline_terminated:
+        cand_warnings.append("D3 drift reached shoreline boundary: backward integration was prematurely terminated.")
+    if env_sum.wind_regime == "CALM_WATER_LOOKALIKE":
+        cand_warnings.append("Low wind regime (< 2.5 m/s): high risk of calm-water natural lookalike ambiguity.")
+    elif env_sum.wind_regime == "HIGH_WIND_DISPERSION":
+        cand_warnings.append("High wind regime (> 12.0 m/s): surface slick dispersion risk.")
+
     return VesselFusedEvidence(
         mmsi=candidate.mmsi,
         vessel_name=candidate.vessel_name,
@@ -502,6 +825,12 @@ def _fuse_vessel_evidence(
         primary_signals=primary_signals,
         behavioral_context=behavioral_ctx,
         forward_drift_cross_check=fwd_check,
+        evidence=evidence_detail,
+        normalized_evidence=normalized_profile,
+        availability=availability_profile,
+        uncertainty=uncertainty_profile,
+        provenance=prov_record,
+        warnings=cand_warnings,
         metadata={
             "zero_fabrication": True,
             "observed_positions_count": candidate.observed_positions_count,
@@ -590,6 +919,16 @@ def export_evidence_fusion_geojson(
             "trajectory_score": next(
                 (s.score for s in fev.primary_signals if s.channel_name == "trajectory_consistency"), None
             ),
+            # Normalized representations
+            "spatial_proximity_score": fev.normalized_evidence.spatial_proximity,
+            "temporal_proximity_score": fev.normalized_evidence.temporal_proximity,
+            "trajectory_alignment_score": fev.normalized_evidence.trajectory_alignment,
+            "source_zone_membership": fev.normalized_evidence.source_zone_membership,
+            "environmental_compatibility": fev.normalized_evidence.environmental_compatibility,
+            "trajectory_quality": fev.normalized_evidence.trajectory_quality,
+            # Provenance and classification
+            "data_source_type": fev.provenance.data_source_type,
+            "is_real_observation": fev.provenance.is_real_observation,
             # Behavioral context (factual, not scoring)
             "behavioral_total_anomalies": fev.behavioral_context.total_anomalies_count,
             "behavioral_loitering_detected": fev.behavioral_context.loitering_detected,
@@ -601,6 +940,11 @@ def export_evidence_fusion_geojson(
             "forward_drift_min_distance_km": fev.forward_drift_cross_check.min_distance_to_forward_track_km,
             "forward_drift_score_contribution": 0.0,  # Always 0 — explicit provenance
             "zero_fabrication": True,
+            "warnings": fev.warnings,
+            "caveat": (
+                "Composite concordance index in [0, 1]. "
+                "NOT a probability of responsibility, guilt, causation, or legal evidence."
+            ),
             "stage": "F1",
         }
 
@@ -651,6 +995,8 @@ def fuse_evidence(
     drift_result: DriftResult | None = None,
     output_dir: str | Path | None = None,
     registry: AssetRegistry | None = None,
+    spill_detection: SpillDetection | None = None,
+    environmental_context: CandidateEnvironment | None = None,
 ) -> tuple[EvidenceFusionResult, Asset]:
     """Execute Stage F1 multi-source spatio-temporal evidence fusion.
 
@@ -658,6 +1004,8 @@ def fuse_evidence(
     - source_estimate, candidate_result, trajectory_result, behavioral_result
       are validated upstream products.
     - drift_result is optional (D1 forward drift cross-check only).
+    - spill_detection is optional (B3 spill detection context).
+    - environmental_context is optional (C2 candidate-level metocean context).
     - Candidate order from candidate_result.candidates is strictly preserved.
 
     Returns:
@@ -677,6 +1025,11 @@ def fuse_evidence(
 
     source_time: datetime = _utc(source_estimate.source_time)
 
+    # ---- Build domain summaries ----
+    spill_sum = _build_spill_summary(spill_detection, spill_id)
+    env_sum = _build_environmental_summary(environmental_context)
+    src_sum = _build_source_summary(source_estimate)
+
     # ---- Build lookup maps for E2 and E3 by MMSI / candidate_id ----
     traj_map: dict[str, VesselTrajectoryAnalysis] = {}
     for ta in trajectory_result.analyses:
@@ -694,6 +1047,14 @@ def fuse_evidence(
 
     # ---- Iterate candidates in STRICT E1 input order ----
     fused_candidates: list[VesselFusedEvidence] = []
+    inv_warnings: list[str] = []
+
+    if src_sum.current_fallback_applied:
+        inv_warnings.append("D3 backward drift used wind-only current fallback (missing or land-masked CMEMS currents).")
+    if src_sum.shoreline_terminated:
+        inv_warnings.append("D3 backward drift reached shoreline boundary; source zone integration was truncated.")
+    if env_sum.missing_data_status != "NONE":
+        inv_warnings.append(f"Environmental context status: {env_sum.missing_data_status}.")
 
     for idx, candidate in enumerate(candidate_result.candidates):
         # Resolve E2 trajectory analysis for this candidate
@@ -719,6 +1080,9 @@ def fuse_evidence(
             tau_scale_hours=tau_scale_hours,
             source_time=source_time,
             drift_result=drift_result,
+            spill_summary=spill_sum,
+            env_summary=env_sum,
+            source_summary=src_sum,
         )
         fused_candidates.append(fev)
 
@@ -739,6 +1103,9 @@ def fuse_evidence(
         nominal_weights=dict(_NOMINAL_WEIGHTS),
         candidate_count=len(fused_candidates),
         fused_candidates=fused_candidates,
+        spill_evidence_summary=spill_sum,
+        environmental_evidence_summary=env_sum,
+        warnings=inv_warnings,
         metadata={
             "zero_fabrication": True,
             "behavioral_contribution_to_score": 0.0,
@@ -751,6 +1118,12 @@ def fuse_evidence(
                 "High score indicates physical consistency with the estimated spill source zone."
             ),
             "candidate_ordering": "Strict E1 input order. No ranking or sorting by F1.",
+            "data_source_type": (
+                fused_candidates[0].provenance.data_source_type if fused_candidates else "curated_historical_reconstruction"
+            ),
+            "is_real_observation": (
+                fused_candidates[0].provenance.is_real_observation if fused_candidates else False
+            ),
         },
     )
 
@@ -803,6 +1176,12 @@ def fuse_evidence(
                 "zero_fabrication": True,
                 "behavioral_contribution_to_score": 0.0,
                 "forward_drift_contribution_to_score": 0.0,
+                "data_source_type": (
+                    fused_candidates[0].provenance.data_source_type if fused_candidates else "curated_historical_reconstruction"
+                ),
+                "is_real_observation": (
+                    fused_candidates[0].provenance.is_real_observation if fused_candidates else False
+                ),
             },
         ),
         metadata={
@@ -816,6 +1195,12 @@ def fuse_evidence(
             "forward_drift_id": drift_result.id if drift_result else None,
             "fused_candidate_count": len(fused_candidates),
             "zero_fabrication": True,
+            "data_source_type": (
+                fused_candidates[0].provenance.data_source_type if fused_candidates else "curated_historical_reconstruction"
+            ),
+            "is_real_observation": (
+                fused_candidates[0].provenance.is_real_observation if fused_candidates else False
+            ),
         },
     )
 

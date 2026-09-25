@@ -105,12 +105,11 @@ def generate_synthetic_scenario(
 
     scenario_id = f"syn_{seed}_{uuid.uuid4().hex[:6]}"
 
-    # 1. Spatial Origin (Satellite observation centroid)
-    # Default within Ligurian Sea / Mediterranean corridor (42.5°N - 44.0°N, 8.0°E - 10.5°E)
+    # Default within open Ligurian Sea maritime corridor (43.3°N - 43.6°N, 8.95°E - 9.45°E)
     if origin_lat is None:
-        origin_lat = 43.0 + rng.uniform(-0.5, 0.5)
+        origin_lat = 43.45 + rng.uniform(-0.15, 0.15)
     if origin_lon is None:
-        origin_lon = 9.5 + rng.uniform(-0.5, 0.5)
+        origin_lon = 9.2 + rng.uniform(-0.25, 0.25)
 
     # 2. Observation Time (UTC)
     if observation_time is None:

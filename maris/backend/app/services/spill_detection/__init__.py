@@ -17,6 +17,7 @@ from app.services.spill_detection.geometry import (
     extract_spill_geometries,
     to_geojson_feature_collection,
 )
+from app.services.maritime_mask import MaritimeMaskError, MaritimeMasker
 from app.services.spill_detection.service import (
     detect_spills_from_sar_scene,
     select_polarization_band,
@@ -26,6 +27,8 @@ __all__ = [
     "AdaptiveThresholdSpillDetector",
     "BaseSpillDetector",
     "DetectorResult",
+    "MaritimeMaskError",
+    "MaritimeMasker",
     "SpillDetectionError",
     "SpillDetectionResult",
     "SpillRegionStats",

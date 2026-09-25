@@ -183,6 +183,117 @@ class AdaptiveSpillDetectorUnitTests(unittest.TestCase):
         self.assertEqual(int(np.sum(result.mask)), 0)
         self.assertEqual(result.metadata["candidate_pixel_count"], 0)
 
+    def test_detector_tile_size_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            AdaptiveThresholdSpillDetector(tile_size=0)
+        with self.assertRaises(ValueError):
+            AdaptiveThresholdSpillDetector(tile_size=-50)
+
+    def test_tiled_vs_reference_local_stats_and_detection_equivalence(self) -> None:
+        """Verify tiled computation produces identical local background stats and detection results."""
+        np.random.seed(12345)
+        h, w = 128, 128
+        raster = np.random.normal(-12.0, 2.0, (h, w)).astype(np.float32)
+        # Inject candidate oil spill slick
+        raster[40:55, 40:55] = -22.0
+        valid_mask = np.ones((h, w), dtype=bool)
+
+        # Single-tile reference (tile_size=256 >= scene size)
+        det_ref = AdaptiveThresholdSpillDetector(
+            damping_threshold_db=3.5,
+            k_sigma=1.5,
+            window_size_pixels=15,
+            border_margin_pixels=1,
+            tile_size=256,
+        )
+        # Multi-tile processor (tile_size=32 creates a 4x4 grid of 16 tiles)
+        det_tiled = AdaptiveThresholdSpillDetector(
+            damping_threshold_db=3.5,
+            k_sigma=1.5,
+            window_size_pixels=15,
+            border_margin_pixels=1,
+            tile_size=32,
+        )
+
+        # 1. Background stats equivalence
+        sample_mask = valid_mask & (raster >= -14.5)
+        mu_ref, sig_ref = det_ref._compute_local_background_stats(
+            raster=raster, valid_mask=valid_mask, sample_mask=sample_mask, window_size=15
+        )
+        mu_tiled, sig_tiled = det_tiled._compute_local_background_stats(
+            raster=raster, valid_mask=valid_mask, sample_mask=sample_mask, window_size=15
+        )
+
+        np.testing.assert_allclose(mu_tiled, mu_ref, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(sig_tiled, sig_ref, rtol=1e-5, atol=1e-5)
+
+        # 2. End-to-end detection equivalence
+        res_ref = det_ref.detect(raster, valid_mask, "VV", (10.0, 10.0))
+        res_tiled = det_tiled.detect(raster, valid_mask, "VV", (10.0, 10.0))
+
+        np.testing.assert_array_equal(res_tiled.mask, res_ref.mask)
+        np.testing.assert_allclose(res_tiled.probability, res_ref.probability, rtol=1e-5, atol=1e-5)
+        self.assertEqual(res_tiled.metadata["candidate_pixel_count"], res_ref.metadata["candidate_pixel_count"])
+
+    def test_tiled_processing_tile_boundary_continuity(self) -> None:
+        """Verify seamless detection across tile boundaries when a slick straddles the seam."""
+        h, w = 96, 96
+        raster = np.full((h, w), -10.0, dtype=np.float32)
+        # Place slick squarely across the seam at row=32, col=32 (for tile_size=32)
+        raster[27:37, 27:37] = -20.0
+        valid_mask = np.ones((h, w), dtype=bool)
+
+        det_ref = AdaptiveThresholdSpillDetector(
+            damping_threshold_db=3.5,
+            k_sigma=1.5,
+            window_size_pixels=11,
+            border_margin_pixels=0,
+            tile_size=200,
+        )
+        det_tiled = AdaptiveThresholdSpillDetector(
+            damping_threshold_db=3.5,
+            k_sigma=1.5,
+            window_size_pixels=11,
+            border_margin_pixels=0,
+            tile_size=32,
+        )
+
+        res_ref = det_ref.detect(raster, valid_mask, "VV", (10.0, 10.0))
+        res_tiled = det_tiled.detect(raster, valid_mask, "VV", (10.0, 10.0))
+
+        # Check that the slick pixels along the tile seam are detected identically
+        np.testing.assert_array_equal(res_tiled.mask[27:37, 27:37], res_ref.mask[27:37, 27:37])
+        np.testing.assert_allclose(
+            res_tiled.probability[27:37, 27:37],
+            res_ref.probability[27:37, 27:37],
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+    def test_tiled_processing_with_nodata_and_nans(self) -> None:
+        """Verify nodata/NaN handling with tiled integral images matching reference."""
+        h, w = 80, 80
+        raster = np.full((h, w), -11.0, dtype=np.float32)
+        # Nodata block intersecting boundary
+        raster[15:25, 15:25] = np.nan
+        # Add spill slick
+        raster[35:45, 35:45] = -21.0
+        valid_mask = np.isfinite(raster)
+
+        det_ref = AdaptiveThresholdSpillDetector(window_size_pixels=11, border_margin_pixels=1, tile_size=200)
+        det_tiled = AdaptiveThresholdSpillDetector(window_size_pixels=11, border_margin_pixels=1, tile_size=25)
+
+        res_ref = det_ref.detect(raster, valid_mask, "VV", (10.0, 10.0))
+        res_tiled = det_tiled.detect(raster, valid_mask, "VV", (10.0, 10.0))
+
+        # NaN regions must remain False and 0.0 prob
+        self.assertFalse(np.any(res_tiled.mask[15:25, 15:25]))
+        self.assertEqual(float(np.max(res_tiled.probability[15:25, 15:25])), 0.0)
+
+        # Masks and probabilities match reference exactly
+        np.testing.assert_array_equal(res_tiled.mask, res_ref.mask)
+        np.testing.assert_allclose(res_tiled.probability, res_ref.probability, rtol=1e-5, atol=1e-5)
+
 
 class GeometryExtractionUnitTests(unittest.TestCase):
     """Unit tests for connected-component analysis and vector geometry generation."""
@@ -277,6 +388,209 @@ class GeometryExtractionUnitTests(unittest.TestCase):
         )
         self.assertFalse(result.detected)
         self.assertEqual(result.spill_count, 0)
+
+    def test_multiple_connected_components_and_confidence_propagation(self) -> None:
+        """Verify extraction of multiple disjoint candidate slicks and confidence weighting."""
+        h, w = 80, 80
+        transform = from_origin(8.0, 43.0, 0.001, 0.001)
+        crs = CRS.from_epsg(4326)
+
+        mask = np.zeros((h, w), dtype=bool)
+        # Slick 1: 10x10 at (10, 10), prob=0.9
+        mask[10:20, 10:20] = True
+        # Slick 2: 10x10 at (40, 40), prob=0.6
+        mask[40:50, 40:50] = True
+
+        prob = np.zeros((h, w), dtype=np.float32)
+        prob[10:20, 10:20] = 0.90
+        prob[40:50, 40:50] = 0.60
+        raster = np.full((h, w), -22.0, dtype=np.float32)
+
+        result = extract_spill_geometries(
+            mask=mask,
+            probability=prob,
+            raster=raster,
+            transform=transform,
+            crs=crs,
+            background_mean_db=-10.0,
+            min_area_m2=100.0,
+            min_pixels=5,
+        )
+
+        self.assertTrue(result.detected)
+        self.assertEqual(result.spill_count, 2)
+        self.assertEqual(result.geometry["type"], "MultiPolygon")
+        self.assertEqual(len(result.geometry["coordinates"]), 2)
+        # Average of 0.90 and 0.60 with equal area = 0.75
+        self.assertAlmostEqual(result.confidence, 0.75, places=2)
+
+    def test_components_touching_image_boundaries(self) -> None:
+        """Verify sub-window padding correctly handles components touching all 4 edges."""
+        h, w = 60, 60
+        transform = from_origin(8.0, 43.0, 0.001, 0.001)
+        crs = CRS.from_epsg(4326)
+
+        mask = np.zeros((h, w), dtype=bool)
+        mask[0:8, 0:8] = True       # Top-Left corner
+        mask[0:8, 52:60] = True     # Top-Right corner
+        mask[52:60, 0:8] = True     # Bottom-Left corner
+        mask[52:60, 52:60] = True   # Bottom-Right corner
+
+        prob = np.full((h, w), 0.8, dtype=np.float32)
+        raster = np.full((h, w), -20.0, dtype=np.float32)
+
+        result = extract_spill_geometries(
+            mask=mask,
+            probability=prob,
+            raster=raster,
+            transform=transform,
+            crs=crs,
+            background_mean_db=-10.0,
+            min_area_m2=10.0,
+            min_pixels=5,
+        )
+
+        self.assertTrue(result.detected)
+        self.assertEqual(result.spill_count, 4)
+        for r in result.regions:
+            self.assertEqual(r.geometry["type"], "Polygon")
+            # Closed ring
+            self.assertEqual(r.geometry["coordinates"][0][0], r.geometry["coordinates"][0][-1])
+
+    def test_min_and_max_area_filtering(self) -> None:
+        """Verify both minimum and maximum area constraints filter components appropriately."""
+        h, w = 60, 60
+        transform = from_origin(8.0, 43.0, 0.001, 0.001)
+        crs = CRS.from_epsg(4326)
+
+        mask = np.zeros((h, w), dtype=bool)
+        # Small component (6 pixels)
+        mask[5:7, 5:8] = True
+        # Large component (20x20 = 400 pixels)
+        mask[20:40, 20:40] = True
+
+        prob = np.full((h, w), 0.8, dtype=np.float32)
+        raster = np.full((h, w), -22.0, dtype=np.float32)
+
+        # Upper bound filtering: max_area_m2 smaller than the 400-pixel component (~3.6M m2)
+        # but larger than the 6-pixel component (~54,000 m2)
+        result = extract_spill_geometries(
+            mask=mask,
+            probability=prob,
+            raster=raster,
+            transform=transform,
+            crs=crs,
+            background_mean_db=-10.0,
+            min_area_m2=10.0,
+            max_area_m2=100_000.0,
+            min_pixels=5,
+        )
+
+        # 400px component rejected by max_area_m2, 6px component accepted
+        self.assertTrue(result.detected)
+        self.assertEqual(result.spill_count, 1)
+        self.assertEqual(result.regions[0].pixel_count, 6)
+
+    def test_nan_nodata_handling_in_slick_values(self) -> None:
+        """Verify non-finite raster pixels in candidate slick do not crash min/mean calculation."""
+        h, w = 40, 40
+        transform = from_origin(8.0, 43.0, 0.001, 0.001)
+        crs = CRS.from_epsg(4326)
+
+        mask = np.zeros((h, w), dtype=bool)
+        mask[10:20, 10:20] = True
+
+        prob = np.full((h, w), 0.85, dtype=np.float32)
+        raster = np.full((h, w), -20.0, dtype=np.float32)
+        # Inject NaNs within the candidate mask
+        raster[12:15, 12:15] = np.nan
+
+        result = extract_spill_geometries(
+            mask=mask,
+            probability=prob,
+            raster=raster,
+            transform=transform,
+            crs=crs,
+            background_mean_db=-10.0,
+            min_area_m2=100.0,
+            min_pixels=5,
+        )
+
+        self.assertTrue(result.detected)
+        self.assertEqual(result.spill_count, 1)
+        reg = result.regions[0]
+        self.assertFalse(np.isnan(reg.min_db))
+        self.assertFalse(np.isnan(reg.mean_db))
+        self.assertEqual(reg.min_db, -20.0)
+
+    def test_geojson_feature_collection_structure(self) -> None:
+        """Verify standard GeoJSON FeatureCollection serialization."""
+        from app.services.spill_detection.geometry import to_geojson_feature_collection
+
+        h, w = 30, 30
+        transform = from_origin(8.0, 43.0, 0.001, 0.001)
+        mask = np.zeros((h, w), dtype=bool)
+        mask[10:18, 10:18] = True
+        prob = np.full((h, w), 0.85, dtype=np.float32)
+        raster = np.full((h, w), -22.0, dtype=np.float32)
+
+        result = extract_spill_geometries(
+            mask=mask,
+            probability=prob,
+            raster=raster,
+            transform=transform,
+            crs=CRS.from_epsg(4326),
+            background_mean_db=-10.0,
+            min_area_m2=10.0,
+            min_pixels=5,
+        )
+
+        fc = to_geojson_feature_collection(result)
+        self.assertEqual(fc["type"], "FeatureCollection")
+        self.assertEqual(len(fc["features"]), 1)
+        feat = fc["features"][0]
+        self.assertEqual(feat["type"], "Feature")
+        self.assertEqual(feat["geometry"]["type"], "Polygon")
+        self.assertIn("area_m2", feat["properties"])
+        self.assertIn("confidence", feat["properties"])
+        self.assertIn("bbox", feat["properties"])
+
+    def test_scalability_subwindow_complexity_no_full_scene_scan(self) -> None:
+        """Verify geometry extraction does not perform full-scene scans per component."""
+        import time
+
+        h, w = 2000, 2000
+        transform = from_origin(8.0, 43.0, 0.001, 0.001)
+        crs = CRS.from_epsg(4326)
+
+        mask = np.zeros((h, w), dtype=bool)
+        # Place 25 small disjoint components across the 4M pixel array
+        for i in range(25):
+            r = 50 + i * 75
+            c = 50 + i * 75
+            mask[r:r + 4, c:c + 4] = True  # 16 pixels each
+
+        prob = np.full((h, w), 0.8, dtype=np.float32)
+        raster = np.full((h, w), -20.0, dtype=np.float32)
+
+        t0 = time.time()
+        result = extract_spill_geometries(
+            mask=mask,
+            probability=prob,
+            raster=raster,
+            transform=transform,
+            crs=crs,
+            background_mean_db=-10.0,
+            min_area_m2=10.0,
+            min_pixels=5,
+        )
+        elapsed = time.time() - t0
+
+        self.assertTrue(result.detected)
+        self.assertEqual(result.spill_count, 25)
+        # Sub-window processing must complete in < 2.0s (a full-scene scan per component would take much longer)
+        self.assertLess(elapsed, 2.0)
+
 
 
 

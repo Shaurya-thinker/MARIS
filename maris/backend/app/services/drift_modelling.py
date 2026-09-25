@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from rasterio.transform import from_bounds
+import rasterio.features
 import xarray as xr
 from scipy.interpolate import RegularGridInterpolator
 
@@ -50,6 +52,7 @@ from app.models.asset import Asset
 from app.models.common import AssetType, Provenance
 from app.models.drift import DriftResult, DriftStep
 from app.models.satellite import SpillDetection
+from app.services.maritime_mask import MaritimeMasker
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -76,6 +79,131 @@ _UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 class DriftModellingError(Exception):
     """Raised when drift modelling fails due to invalid inputs or insufficient data."""
+
+
+class MaritimeDomainError(DriftModellingError):
+    """Raised when trajectory origin is outside the maritime domain (on land)."""
+
+
+# ---------------------------------------------------------------------------
+# Trajectory container & Domain Checker
+# ---------------------------------------------------------------------------
+
+class DriftTrajectory(list):
+    """List of trajectory steps with attached metadata for termination and forcing provenance."""
+
+    def __init__(
+        self,
+        steps: list[Any] | None = None,
+        termination_status: str = "completed",
+        forcing_modes: list[str] | None = None,
+        current_fallback_used: bool = False,
+        termination_reason: str | None = None,
+    ) -> None:
+        super().__init__(steps or [])
+        self.termination_status = termination_status
+        self.forcing_modes = list(forcing_modes or (["current_plus_windage"] if steps else []))
+        self.current_fallback_used = current_fallback_used
+        self.termination_reason = termination_reason
+
+    @property
+    def forcing_mode(self) -> str:
+        return self.forcing_modes[0] if self.forcing_modes else "current_plus_windage"
+
+
+class MaritimeDomainChecker:
+    """Fast spatial domain checker verifying whether geographic points fall within ocean water.
+
+    Reuses the authoritative Natural Earth 10m ocean dataset via B2.75 MaritimeMasker.
+    Caches the parsed geometry and generates a local rasterized boolean mask for the region of interest
+    to achieve sub-millisecond point evaluation per trajectory step.
+    """
+
+    _cached_masker: MaritimeMasker | None = None
+
+    @classmethod
+    def get_masker(cls, dataset_path: Path | str | None = None) -> MaritimeMasker:
+        if cls._cached_masker is None or (dataset_path is not None and cls._cached_masker.dataset_path != Path(dataset_path)):
+            cls._cached_masker = MaritimeMasker(dataset_path=dataset_path, coastal_buffer_m=0.0)
+            cls._cached_masker.load_dataset()
+        return cls._cached_masker
+
+    def __init__(
+        self,
+        bbox: tuple[float, float, float, float] | None = None,
+        masker: MaritimeMasker | None = None,
+        resolution_deg: float = 0.002,
+        margin_deg: float = 0.5,
+    ) -> None:
+        """Initialize domain checker for a geographic bounding box (west, south, east, north)."""
+        self.masker = masker or self.get_masker()
+        self.resolution_deg = resolution_deg
+        self.margin_deg = margin_deg
+        self.mask: np.ndarray | None = None
+        self.transform = None
+        self.inv_transform = None
+        self.width = 0
+        self.height = 0
+        self._all_land = False
+        self.bbox = bbox
+
+        if bbox is not None:
+            self._build_mask(bbox)
+
+    def _build_mask(self, bbox: tuple[float, float, float, float]) -> None:
+        west, south, east, north = bbox
+        padded_bbox = (
+            west - self.margin_deg,
+            south - self.margin_deg,
+            east + self.margin_deg,
+            north + self.margin_deg,
+        )
+        self.bbox = padded_bbox
+        clipped = self.masker.get_scene_clipped_ocean_geometry(padded_bbox, margin_deg=0.2)
+        if clipped is None:
+            self._all_land = True
+            return
+
+        w, s, e, n = padded_bbox
+        self.width = max(int(round((e - w) / self.resolution_deg)), 10)
+        self.height = max(int(round((n - s) / self.resolution_deg)), 10)
+        self.transform = from_bounds(w, s, e, n, self.width, self.height)
+        self.inv_transform = ~self.transform
+        self.mask = rasterio.features.rasterize(
+            [(clipped, 1)],
+            out_shape=(self.height, self.width),
+            transform=self.transform,
+            fill=0,
+            dtype=np.uint8,
+        )
+
+    def is_maritime(self, lon: float, lat: float) -> bool:
+        """Return True if (lon, lat) is within valid maritime ocean domain, False if land or outside."""
+        if self._all_land:
+            return False
+        if self.mask is None or self.inv_transform is None:
+            self._build_mask((lon - 1.0, lat - 1.0, lon + 1.0, lat + 1.0))
+            if self._all_land or self.mask is None:
+                return False
+
+        col, row = self.inv_transform @ (lon, lat)
+        c_i = int(round(col))
+        r_i = int(round(row))
+        if 0 <= r_i < self.height and 0 <= c_i < self.width:
+            return bool(self.mask[r_i, c_i] == 1)
+
+        # Coordinate is outside current rasterized bbox: check dynamically
+        if self.bbox is not None:
+            w, s, e, n = self.bbox
+            if lon < w or lon > e or lat < s or lat > n:
+                local_clipped = self.masker.get_scene_clipped_ocean_geometry((lon - 0.5, lat - 0.5, lon + 0.5, lat + 0.5), margin_deg=0.1)
+                if local_clipped is None:
+                    return False
+                loc_t = from_bounds(lon - 0.1, lat - 0.1, lon + 0.1, lat + 0.1, 50, 50)
+                loc_mask = rasterio.features.rasterize([(local_clipped, 1)], out_shape=(50, 50), transform=loc_t, fill=0, dtype=np.uint8)
+                lc, lr = (~loc_t) @ (lon, lat)
+                return bool(loc_mask[int(round(lr)), int(round(lc))] == 1)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -285,26 +413,21 @@ def run_forward_drift(
     drift_hours: float = DEFAULT_DRIFT_HOURS,
     step_hours: float = DEFAULT_STEP_HOURS,
     leeway_fraction: float = DEFAULT_LEEWAY_FRACTION,
-) -> list[DriftStep]:
-    """Execute the Leeway-Euler forward integration.
+    domain_checker: Any | None = None,
+) -> DriftTrajectory:
+    """Execute the Leeway-Euler forward integration with coastal robustness.
 
     Builds RegularGridInterpolators once per (variable, time-index) pair, caching
     them across steps to avoid unnecessary reconstruction when the nearest time index
     does not change.
 
-    The integration uses the exact requested duration:
-        remaining = drift_hours
-        while remaining > epsilon:
-            dt = min(step_hours, remaining)
-            integrate dt
-            remaining -= dt
-
-    This ensures the final step is shortened rather than discarded or over-extended
-    when drift_hours is not an exact multiple of step_hours.
+    Handles nearshore CMEMS NaN cells by falling back to wind-only leeway (drift = leeway * wind)
+    while recording provenance. Checks each tentative step position against the B2.75 Natural Earth
+    maritime mask; terminates cleanly with 'shoreline_reached' without appending invalid land positions.
 
     Raises:
-        DriftModellingError: if origin is outside grid bounds, observation_time is
-            outside data range, or an interpolated value is NaN (e.g., land fill).
+        DriftModellingError: if origin is outside grid bounds or temporal range.
+        MaritimeDomainError: if origin is outside the maritime domain (on land).
     """
     # --- Extract coordinate arrays ---
     wind_lats = wind_ds["latitude"].values.astype(np.float64)
@@ -368,12 +491,32 @@ def run_forward_drift(
             f"temporal range [{curr_times_ns.min()}, {curr_times_ns.max()}]."
         )
 
+    # --- Validate origin within maritime domain ---
+    if domain_checker is None:
+        grid_bbox = (
+            min(w_lon_min, c_lon_min),
+            min(w_lat_min, c_lat_min),
+            max(w_lon_max, c_lon_max),
+            max(w_lat_max, c_lat_max),
+        )
+        domain_checker = MaritimeDomainChecker(bbox=grid_bbox)
+
+    if not domain_checker.is_maritime(origin_lon, origin_lat):
+        raise MaritimeDomainError(
+            f"Starting position (lon={origin_lon:.4f}, lat={origin_lat:.4f}) is outside "
+            "the maritime domain (on land). Structured domain failure: trajectory cannot drift through land."
+        )
+
     # --- Euler integration loop ---
     steps: list[DriftStep] = []
     lon = float(origin_lon)
     lat = float(origin_lat)
     current_time = obs_utc
     cumulative_dist = 0.0
+    termination_status = "completed"
+    termination_reason = None
+    forcing_modes: list[str] = []
+    current_fallback_used = False
 
     # Per-step interpolator cache keyed by (variable_name, time_index)
     _wind_cache: dict[tuple[str, int], RegularGridInterpolator] = {}
@@ -385,8 +528,13 @@ def run_forward_drift(
         dt_h = min(step_hours, remaining)
         dt_s = dt_h * 3600.0
 
-        # Use start-of-step time for nearest-time selection (forward Euler convention)
         query_time = current_time
+
+        # Spatial bounds check before interpolation: catch domain exit
+        if not (w_lat_min <= lat <= w_lat_max and w_lon_min <= lon <= w_lon_max and
+                c_lat_min <= lat <= c_lat_max and c_lon_min <= lon <= c_lon_max):
+            termination_status = "domain_exit"
+            break
 
         # --- Find nearest time indices ---
         wind_t_idx = _nearest_time_index(wind_times, query_time)
@@ -408,46 +556,81 @@ def run_forward_drift(
 
         # --- Spatial bilinear interpolation at current position ---
         query_point = np.array([[lat, lon]])
+
+        # 1. ERA5 wind interpolation
         try:
             u_wind = float(_wind_cache[("u10", wind_t_idx)](query_point)[0])
             v_wind = float(_wind_cache[("v10", wind_t_idx)](query_point)[0])
-            u_curr = float(_curr_cache[("uo", curr_t_idx)](query_point)[0])
-            v_curr = float(_curr_cache[("vo", curr_t_idx)](query_point)[0])
-        except ValueError as exc:
-            raise DriftModellingError(
-                f"Spatial interpolation failed at step t={current_time.isoformat()}, "
-                f"position (lon={lon:.4f}, lat={lat:.4f}). "
-                f"The trajectory may have drifted outside the data coverage area. "
-                f"Details: {exc}"
-            ) from exc
+        except ValueError:
+            termination_status = "domain_exit"
+            break
 
-        # Fail-closed on NaN (e.g. land fill-value region)
-        if not all(math.isfinite(v) for v in (u_wind, v_wind, u_curr, v_curr)):
-            raise DriftModellingError(
-                f"Non-finite interpolated forcing at step t={current_time.isoformat()}, "
-                f"(lon={lon:.4f}, lat={lat:.4f}). "
-                "The origin or a later trajectory position may be in a land fill-value region."
+        if not (math.isfinite(u_wind) and math.isfinite(v_wind)):
+            termination_status = "environmental_failure"
+            termination_reason = (
+                f"ERA5 wind forcing is non-finite at t={current_time.isoformat()}, "
+                f"position (lon={lon:.4f}, lat={lat:.4f})"
             )
+            break
 
-        # --- Net drift velocity ---
-        drift_u = u_curr + leeway_fraction * u_wind
-        drift_v = v_curr + leeway_fraction * v_wind
+        # 2. CMEMS current interpolation
+        cmems_finite = False
+        u_curr = 0.0
+        v_curr = 0.0
+        try:
+            u_c = float(_curr_cache[("uo", curr_t_idx)](query_point)[0])
+            v_c = float(_curr_cache[("vo", curr_t_idx)](query_point)[0])
+            if math.isfinite(u_c) and math.isfinite(v_c):
+                cmems_finite = True
+                u_curr = u_c
+                v_curr = v_c
+        except ValueError:
+            termination_status = "domain_exit"
+            break
 
-        # --- Flat-Earth position update ---
+        # 3. Forcing evaluation with nearshore CMEMS NaN fallback
+        if cmems_finite:
+            drift_u = u_curr + leeway_fraction * u_wind
+            drift_v = v_curr + leeway_fraction * v_wind
+            step_forcing_mode = "current_plus_windage"
+            step_current_source = "CMEMS"
+            step_current_fallback = False
+            step_u_curr = round(u_curr, 6)
+            step_v_curr = round(v_curr, 6)
+        else:
+            # Fall back to wind-only leeway: drift = leeway * wind
+            drift_u = leeway_fraction * u_wind
+            drift_v = leeway_fraction * v_wind
+            step_forcing_mode = "wind_only_leeway"
+            step_current_source = "unavailable"
+            step_current_fallback = True
+            current_fallback_used = True
+            step_u_curr = None
+            step_v_curr = None
+
+        if step_forcing_mode not in forcing_modes:
+            forcing_modes.append(step_forcing_mode)
+
+        # 4. Position update (flat-Earth)
         lat_rad = math.radians(lat)
         cos_lat = math.cos(lat_rad)
         if abs(cos_lat) < 1e-10:
-            # Exactly at pole — longitude undefined; hold fixed
             new_lon = lon
         else:
             new_lon = lon + (drift_u * dt_s) / (cos_lat * _M_PER_DEG_LAT)
         new_lat = lat + (drift_v * dt_s) / _M_PER_DEG_LAT
 
-        # Clamp to WGS84 range (no wrapping: flag if truly out of range)
+        # Clamp to WGS84 range
         new_lon = max(-180.0, min(180.0, new_lon))
         new_lat = max(-90.0, min(90.0, new_lat))
 
-        # --- Cumulative arc distance ---
+        # 5. Maritime domain check before accepting new position
+        if not domain_checker.is_maritime(new_lon, new_lat):
+            termination_status = "shoreline_reached"
+            # DO NOT append the invalid land position to the trajectory
+            break
+
+        # Position is maritime: accept step
         step_dist = _haversine_m(lon, lat, new_lon, new_lat)
         cumulative_dist += step_dist
 
@@ -459,11 +642,14 @@ def run_forward_drift(
             lat=round(new_lat, 6),
             u_wind_ms=round(u_wind, 6),
             v_wind_ms=round(v_wind, 6),
-            u_current_ms=round(u_curr, 6),
-            v_current_ms=round(v_curr, 6),
+            u_current_ms=step_u_curr,
+            v_current_ms=step_v_curr,
             drift_u_ms=round(drift_u, 6),
-            drift_v_ms=round(v_curr + leeway_fraction * v_wind, 6),
+            drift_v_ms=round(drift_v, 6),
             cumulative_distance_m=round(cumulative_dist, 2),
+            forcing_mode=step_forcing_mode,
+            current_fallback=step_current_fallback,
+            current_source=step_current_source,
         ))
 
         lon = new_lon
@@ -471,7 +657,13 @@ def run_forward_drift(
         current_time = step_time
         remaining -= dt_h
 
-    return steps
+    return DriftTrajectory(
+        steps=steps,
+        termination_status=termination_status,
+        forcing_modes=forcing_modes,
+        current_fallback_used=current_fallback_used,
+        termination_reason=termination_reason,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -606,14 +798,15 @@ def compute_drift_for_spill(
         if curr_raw is not None:
             curr_raw.close()
 
-    if not steps:
+    if not steps and steps.termination_status == "completed":
         raise DriftModellingError(
             "Forward integration produced no steps. "
             "Check that drift_hours and step_hours are both positive."
         )
 
-    endpoint_lon = steps[-1].lon
-    endpoint_lat = steps[-1].lat
+    endpoint_lon = steps[-1].lon if steps else origin_lon
+    endpoint_lat = steps[-1].lat if steps else origin_lat
+    total_distance_m = steps[-1].cumulative_distance_m if steps else 0.0
 
     # --- Determine output directory ---
     if output_dir is not None:
@@ -633,6 +826,8 @@ def compute_drift_for_spill(
     # --- Build GeoJSON LineString: origin + all step positions ---
     obs_utc = _utc(observation_time)
     coordinates = [[origin_lon, origin_lat]] + [[s.lon, s.lat] for s in steps]
+    if len(coordinates) == 1:
+        coordinates.append([origin_lon, origin_lat])
 
     geojson_feature: dict[str, Any] = {
         "type": "Feature",
@@ -655,13 +850,21 @@ def compute_drift_for_spill(
             "step_hours": step_hours,
             "leeway_fraction": leeway_fraction,
             "step_count": len(steps),
-            "total_distance_m": steps[-1].cumulative_distance_m,
+            "total_distance_m": total_distance_m,
+            "termination_status": steps.termination_status,
+            "forcing_mode": steps.forcing_mode,
+            "forcing_modes": steps.forcing_modes,
+            "current_fallback_used": steps.current_fallback_used,
             "scientific_note": (
                 "Deterministic Leeway-Euler baseline model. "
                 "α=0.035 is not calibrated. Not an operational forecast."
             ),
         },
     }
+    if steps.current_fallback_used:
+        geojson_feature["properties"]["degraded_forcing_note"] = "Current unavailable; wind-only leeway used."
+    if steps.termination_reason:
+        geojson_feature["properties"]["termination_reason"] = steps.termination_reason
 
     geojson_path = target_dir / "drift_trajectory.geojson"
     with open(geojson_path, "w", encoding="utf-8") as fp:
@@ -679,6 +882,10 @@ def compute_drift_for_spill(
         "current_asset_id": current_asset.id,
         "spill_detection_id": spill_detection_id,
         "trajectory_path": str(geojson_path.resolve()),
+        "termination_status": steps.termination_status,
+        "forcing_mode": steps.forcing_mode,
+        "forcing_modes": steps.forcing_modes,
+        "current_fallback_used": steps.current_fallback_used,
         "scientific_limitations": [
             (
                 "α = 0.035 is a documented operational baseline (ITOPF / NOAA GNOME / "
@@ -709,6 +916,13 @@ def compute_drift_for_spill(
             ),
         ],
     }
+    if steps.current_fallback_used:
+        drift_metadata["degraded_forcing_note"] = (
+            "Current unavailable; wind-only leeway used. "
+            "This is an operational robustness fallback mode, not physical equivalence."
+        )
+    if steps.termination_reason:
+        drift_metadata["termination_reason"] = steps.termination_reason
 
     # --- Register DRIFT_PRODUCT asset in AssetRegistry ---
     retrieved_at = datetime.now(timezone.utc)
@@ -724,6 +938,7 @@ def compute_drift_for_spill(
             notes=(
                 f"Leeway-Euler forward drift trajectory. "
                 f"α={leeway_fraction}, dt={step_hours}h, T={drift_hours}h. "
+                f"Status: {steps.termination_status}. "
                 "Deterministic D1 baseline; not an operational forecast."
             ),
             extra={
@@ -734,6 +949,10 @@ def compute_drift_for_spill(
                 "leeway_fraction": leeway_fraction,
                 "drift_hours": drift_hours,
                 "step_hours": step_hours,
+                "termination_status": steps.termination_status,
+                "forcing_mode": steps.forcing_mode,
+                "forcing_modes": steps.forcing_modes,
+                "current_fallback_used": steps.current_fallback_used,
             },
         ),
         metadata={"investigation_id": investigation_id, "model_version": MODEL_VERSION},
@@ -768,6 +987,10 @@ def compute_drift_for_spill(
         endpoint_lon=endpoint_lon,
         endpoint_lat=endpoint_lat,
         endpoint_uncertainty_km=None,
+        termination_status=steps.termination_status,
+        forcing_mode=steps.forcing_mode,
+        forcing_modes=steps.forcing_modes,
+        current_fallback_used=steps.current_fallback_used,
         metadata=drift_metadata,
     )
 

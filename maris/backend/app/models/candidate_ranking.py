@@ -98,6 +98,12 @@ class RankedCandidate(BaseModel):
         le=1.0,
         description="Normalised trajectory consistency channel score in [0.0, 1.0]. None if unavailable.",
     )
+    source_zone_score: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Normalised source zone membership score in [0.0, 1.0]. None if unavailable.",
+    )
 
     valid_primary_channels: int = Field(
         ge=0,
@@ -134,6 +140,48 @@ class RankedCandidate(BaseModel):
         description="Detailed execution metadata, weights applied, and channel metric origins.",
     )
 
+    raw_score_components: dict[str, float | None] = Field(
+        default_factory=dict,
+        description="Raw normalized channel scores: spatial, temporal, trajectory.",
+    )
+    active_weights: dict[str, float] = Field(
+        default_factory=dict,
+        description="Normalized weights applied to available channels (sum = 1.0).",
+    )
+    active_weight_sum: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Sum of nominal weights for active channels.",
+    )
+    available_dimensions: list[str] = Field(
+        default_factory=list,
+        description="Available primary evidence dimensions.",
+    )
+    unavailable_dimensions: list[str] = Field(
+        default_factory=list,
+        description="Unavailable primary evidence dimensions.",
+    )
+    uncertainty_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Propagated multi-source uncertainty details (source radius, track sparsity, fallbacks).",
+    )
+    ranking_explanation_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Deterministic ranking rationale and discrepancy metrics.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Observational caveats, sparse track flags, and data quality warnings.",
+    )
+    is_tied_score: bool = Field(
+        default=False,
+        description="True if candidate achieved an identical Evidence Consistency Score with another candidate.",
+    )
+    tie_break_resolution: str | None = Field(
+        default=None,
+        description="Deterministic tie-break rationale used to resolve identical scores.",
+    )
+
     @property
     def vessel_name(self) -> str | None:
         """Alias for name to ensure seamless compatibility."""
@@ -147,6 +195,10 @@ class CandidateRankingRequest(BaseModel):
         default=None,
         description="ID of the Stage F1 EvidenceFusionResult or its registered asset. If omitted, auto-discovered.",
     )
+    weights: dict[str, float] | None = Field(
+        default=None,
+        description="Optional custom nominal weights for primary channels. Must be non-negative with sum > 0.",
+    )
 
 
 class CandidateRanking(BaseModel):
@@ -158,6 +210,18 @@ class CandidateRanking(BaseModel):
     evidence_fusion_id: str
     generated_at: datetime
     methodology_version: str = "F2-1.0.0"
+    ranking_method: str = Field(
+        default="availability_weighted_concordance",
+        description="Methodology used for computing the consistency score.",
+    )
+    score_version: str = Field(
+        default="F2-1.0.0",
+        description="Version identifier of the scoring algorithm.",
+    )
+    deterministic_tie_break_rule: str = Field(
+        default="score_desc -> availability_ratio_desc -> spatial_disp_asc -> temporal_disp_asc -> vessel_id_asc -> candidate_id_asc",
+        description="Exact deterministic tie-breaking hierarchy.",
+    )
     asset_id: str | None = Field(
         default=None,
         description="AssetType.DOCUMENT asset registered in AssetRegistry for this ranking.",
@@ -179,9 +243,17 @@ class CandidateRanking(BaseModel):
     candidates: list[RankedCandidate] = Field(
         description="Candidate vessels sorted by descending evidence consistency score with deterministic tie-breaking.",
     )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Investigation-level warnings and observational caveats.",
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def ranked_candidates(self) -> list[RankedCandidate]:
         """Alias for candidates to ensure seamless compatibility."""
         return self.candidates
+
+
+# Stage F2 Type Alias for strict semantic compatibility
+CandidateRankingResult = CandidateRanking

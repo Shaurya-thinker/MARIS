@@ -1010,6 +1010,13 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                 Sums to 100% across all eligible candidate vessels to represent relative likelihood within the incident envelope.
               </span>
             </div>
+            <div className="eval-explainer-item">
+              <strong>Scientific &amp; Legal Disclaimer</strong>
+              <span>
+                Attribution scores indicate physical consistency with modeled backward drift and AIS telemetry.
+                Results do not establish causation, legal responsibility, or culpability.
+              </span>
+            </div>
           </div>
 
           {/* Interactive Map Section */}

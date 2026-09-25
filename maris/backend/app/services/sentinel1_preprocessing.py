@@ -211,6 +211,8 @@ def preprocess_sentinel1_scene(
 
         geo_crs: CRS | None = None
         geo_transform = None
+        geo_gcps = None
+        geo_gcp_crs: CRS | None = None
         geo_width: int | None = None
         geo_height: int | None = None
         geo_bounds = None
@@ -251,12 +253,42 @@ def preprocess_sentinel1_scene(
 
             with rasterio.open(BytesIO(tiff_bytes)) as src:
                 dn_array = src.read(1)
-                if geo_crs is None:
-                    geo_crs = src.crs or CRS.from_epsg(4326)
-                    geo_transform = src.transform
+                if geo_width is None:
                     geo_width = src.width
                     geo_height = src.height
-                    geo_bounds = src.bounds
+
+                    gcps, gcp_crs = src.gcps
+                    if gcps and len(gcps) > 0:
+                        geo_gcps = gcps
+                        geo_gcp_crs = gcp_crs or CRS.from_epsg(4326)
+                        geo_crs = None
+                        geo_transform = None
+                        geo_bounds = {
+                            "west": float(min(g.x for g in gcps)),
+                            "south": float(min(g.y for g in gcps)),
+                            "east": float(max(g.x for g in gcps)),
+                            "north": float(max(g.y for g in gcps)),
+                        }
+                    else:
+                        if src.crs is None:
+                            raise Sentinel1PreprocessingError(
+                                "Measurement raster lacks CRS metadata. Geospatial CRS cannot be silently omitted or assumed."
+                            )
+                        if src.transform is None or src.transform.is_identity:
+                            raise Sentinel1PreprocessingError(
+                                "Measurement raster has an identity transform without Ground Control Points (GCPs). "
+                                "Ungeoreferenced rasters cannot be processed."
+                            )
+                        geo_crs = src.crs
+                        geo_transform = src.transform
+                        geo_gcps = None
+                        geo_gcp_crs = None
+                        geo_bounds = {
+                            "west": float(src.bounds.left),
+                            "south": float(src.bounds.bottom),
+                            "east": float(src.bounds.right),
+                            "north": float(src.bounds.top),
+                        }
 
             lut_1d = build_calibration_lut_1d(cal_vectors, dn_array.shape[1])
             sigma0_db, stats = compute_sigma0_db(dn_array, lut_1d)
@@ -266,9 +298,10 @@ def preprocess_sentinel1_scene(
             source_files.append(Path(entry_name).name)
             combined_stats.append(stats)
 
-    # Validate output spatial bounds
+    # Validate output spatial dimensions and georeferencing
     assert geo_width is not None and geo_height is not None
-    assert geo_transform is not None and geo_bounds is not None
+    assert geo_bounds is not None
+    assert (geo_transform is not None) or (geo_gcps is not None and len(geo_gcps) > 0)
 
     # Construct output derived raster path
     if output_dir is not None:
@@ -279,22 +312,27 @@ def preprocess_sentinel1_scene(
         target_dir = Path(settings.data_dir) / "derived" / safe_inv / "sar" / safe_scene
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    derived_raster_path = target_dir / "sentinel1_sigma0_db.tif"
+    out_filename = "sentinel1_sigma0_db_native.tif" if geo_gcps else "sentinel1_sigma0_db.tif"
+    derived_raster_path = target_dir / out_filename
 
     # Write derived multi-band GeoTIFF raster using rasterio
     num_bands = len(band_arrays)
-    with rasterio.open(
-        derived_raster_path,
-        "w",
-        driver="GTiff",
-        height=geo_height,
-        width=geo_width,
-        count=num_bands,
-        dtype=np.float32,
-        crs=geo_crs,
-        transform=geo_transform,
-        nodata=np.nan,
-    ) as dst:
+    write_kwargs: dict[str, Any] = {
+        "driver": "GTiff",
+        "height": geo_height,
+        "width": geo_width,
+        "count": num_bands,
+        "dtype": np.float32,
+        "nodata": np.nan,
+    }
+    if geo_gcps is not None and len(geo_gcps) > 0:
+        write_kwargs["gcps"] = geo_gcps
+        write_kwargs["crs"] = geo_gcp_crs
+    else:
+        write_kwargs["crs"] = geo_crs
+        write_kwargs["transform"] = geo_transform
+
+    with rasterio.open(derived_raster_path, "w", **write_kwargs) as dst:
         for idx, (arr, pol) in enumerate(zip(band_arrays, output_pols), start=1):
             dst.write(arr.astype(np.float32), idx)
             dst.set_band_description(idx, f"sigma0_db_{pol}")
@@ -312,8 +350,8 @@ def preprocess_sentinel1_scene(
     overall_mean = float(np.mean(valid_means)) if valid_means else float("nan")
 
     # Assemble derived Asset metadata
-    pixel_size_x = abs(geo_transform.a)
-    pixel_size_y = abs(geo_transform.e)
+    pixel_size_x = abs(geo_transform.a) if geo_transform is not None else float("nan")
+    pixel_size_y = abs(geo_transform.e) if geo_transform is not None else float("nan")
 
     derived_metadata: dict[str, Any] = {
         "parent_asset_id": asset.id,
@@ -328,14 +366,10 @@ def preprocess_sentinel1_scene(
         "output_units": "dB",
         "width": geo_width,
         "height": geo_height,
-        "crs": str(geo_crs),
+        "crs": str(geo_gcp_crs if geo_gcps else geo_crs),
+        "georeferencing": "native_gcp" if geo_gcps else "affine",
         "pixel_size": [pixel_size_x, pixel_size_y],
-        "bounds": {
-            "west": geo_bounds.left,
-            "south": geo_bounds.bottom,
-            "east": geo_bounds.right,
-            "north": geo_bounds.top,
-        },
+        "bounds": geo_bounds,
         "source_measurement_files": source_files,
         "preprocessing_steps": [
             "measurement_raster_reading",

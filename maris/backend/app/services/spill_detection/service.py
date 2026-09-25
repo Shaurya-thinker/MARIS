@@ -22,6 +22,7 @@ from rasterio.crs import CRS
 from app.acquisition.registry import AssetRegistry, default_asset_registry
 from app.acquisition.schemas import AcquiredArtifact
 from app.core.config import settings
+from app.services.maritime_mask import MaritimeMaskError, MaritimeMasker
 from app.models.asset import Asset
 from app.models.common import AssetType, Provenance
 from app.models.satellite import SatelliteScene, SpillDetection
@@ -105,16 +106,21 @@ def detect_spills_from_sar_scene(
     min_pixels: int = 10,
     output_dir: str | Path | None = None,
     registry: AssetRegistry | None = None,
+    enable_maritime_mask: bool = True,
+    coastal_buffer_m: float | None = None,
+    ocean_dataset_path: Path | str | None = None,
+    maritime_masker: MaritimeMasker | None = None,
 ) -> tuple[SpillDetection, Asset]:
     """Run the Stage B3 spill detection and geometry pipeline on a calibrated SAR GeoTIFF.
 
     1. Validates and opens B2 calibrated SAR GeoTIFF in read-only mode (source unchanged).
     2. Identifies and selects appropriate polarization band (VV prioritized, VH separate).
-    3. Executes the spill detector (defaults to AdaptiveThresholdSpillDetector).
-    4. Performs connected-component analysis and extracts geospatial vector geometries.
-    5. Saves deterministic output artifacts (GeoTIFF mask and GeoJSON vector).
-    6. Assembles and registers derived Asset in AssetRegistry.
-    7. Returns domain SpillDetection object and registered Asset.
+    3. Stage B2.75: Applies out-of-core maritime domain mask with seaward coastal buffer.
+    4. Executes the spill detector (defaults to AdaptiveThresholdSpillDetector).
+    5. Performs connected-component analysis and extracts geospatial vector geometries.
+    6. Saves deterministic output artifacts (GeoTIFF mask and GeoJSON vector).
+    7. Assembles and registers derived Asset in AssetRegistry.
+    8. Returns domain SpillDetection object and registered Asset.
     """
     source_path = Path(sar_asset.location)
     if not source_path.exists():
@@ -152,6 +158,25 @@ def detect_spills_from_sar_scene(
     center_lat = float(scene.footprint.coordinates[0][0][1]) if hasattr(scene.footprint, "coordinates") else 0.0
     pixel_area_m2 = compute_pixel_area_m2(geo_transform, geo_crs, center_lat=center_lat)
     pixel_size_m = (math.sqrt(pixel_area_m2), math.sqrt(pixel_area_m2))
+
+    # Stage B2.75: Maritime Domain Masker (Applied strictly BEFORE detector so local stats are ocean-only)
+    mask_diagnostics: dict[str, Any] | None = None
+    if enable_maritime_mask:
+        try:
+            buf_m = coastal_buffer_m if coastal_buffer_m is not None else settings.coastal_buffer_m
+            ds_path = ocean_dataset_path or settings.ocean_dataset_path
+            masker = maritime_masker or MaritimeMasker(dataset_path=ds_path, coastal_buffer_m=buf_m)
+            valid_mask, mask_diagnostics = masker.apply_maritime_mask_streaming(
+                raster=raster_band,
+                transform=geo_transform,
+                crs=geo_crs,
+                base_valid_mask=valid_mask,
+                block_size=active_detector.tile_size,
+            )
+        except MaritimeMaskError:
+            raise
+        except Exception as exc:
+            raise MaritimeMaskError(f"Failed to apply maritime domain mask: {exc}") from exc
 
     # Run detection
     det_result = active_detector.detect(
@@ -244,6 +269,7 @@ def detect_spills_from_sar_scene(
         "parent_scene_id": scene.id,
         "polarization_used": chosen_pol,
         "model_version": active_detector.model_version,
+        "maritime_domain_mask": mask_diagnostics,
         "bounding_box": bbox_dict,
         "centroid": centroid_dict,
         "spill_count": detection_summary.spill_count,

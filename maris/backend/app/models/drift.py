@@ -25,11 +25,29 @@ class DriftStep(BaseModel):
     lat: float = Field(ge=-90.0, le=90.0, description="WGS84 latitude after this step")
     u_wind_ms: float = Field(description="ERA5 u10 (eastward 10 m wind) at (lon, lat, t) — m/s")
     v_wind_ms: float = Field(description="ERA5 v10 (northward 10 m wind) at (lon, lat, t) — m/s")
-    u_current_ms: float = Field(description="CMEMS uo (eastward near-surface current) at (lon, lat, t) — m/s")
-    v_current_ms: float = Field(description="CMEMS vo (northward near-surface current) at (lon, lat, t) — m/s")
+    u_current_ms: float | None = Field(
+        default=None,
+        description="CMEMS uo (eastward near-surface current) at (lon, lat, t) — m/s, or None if unavailable",
+    )
+    v_current_ms: float | None = Field(
+        default=None,
+        description="CMEMS vo (northward near-surface current) at (lon, lat, t) — m/s, or None if unavailable",
+    )
     drift_u_ms: float = Field(description="Net drift U = u_current + α·u_wind (m/s)")
     drift_v_ms: float = Field(description="Net drift V = v_current + α·v_wind (m/s)")
     cumulative_distance_m: float = Field(ge=0.0, description="Great-circle arc distance from origin (m)")
+    forcing_mode: str = Field(
+        default="current_plus_windage",
+        description="Forcing mode used at this step: 'current_plus_windage' or 'wind_only_leeway'",
+    )
+    current_fallback: bool = Field(
+        default=False,
+        description="True if CMEMS current was unavailable and wind-only leeway was used",
+    )
+    current_source: str = Field(
+        default="CMEMS",
+        description="Source of ocean current forcing: 'CMEMS' or 'unavailable'",
+    )
 
 
 class DriftResult(BaseModel):
@@ -115,5 +133,24 @@ class DriftResult(BaseModel):
             "Spatial uncertainty at the endpoint (km). "
             "Not computed in D1 (no stochastic ensemble). Reserved for D2+."
         ),
+    )
+    termination_status: str = Field(
+        default="completed",
+        description=(
+            "Trajectory termination status: 'completed', 'shoreline_reached', "
+            "'environmental_failure', or 'domain_exit'"
+        ),
+    )
+    forcing_mode: str = Field(
+        default="current_plus_windage",
+        description="Dominant or initial forcing mode: 'current_plus_windage' or 'wind_only_leeway'",
+    )
+    forcing_modes: list[str] = Field(
+        default_factory=lambda: ["current_plus_windage"],
+        description="All distinct forcing modes encountered during trajectory integration",
+    )
+    current_fallback_used: bool = Field(
+        default=False,
+        description="True if CMEMS current was unavailable and wind-only leeway fallback was used",
     )
     metadata: dict[str, Any] = Field(default_factory=dict)

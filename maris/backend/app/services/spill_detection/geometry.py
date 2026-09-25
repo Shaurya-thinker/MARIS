@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import rasterio.features
+import rasterio.windows
 from rasterio.crs import CRS
 from rasterio.transform import Affine
 
@@ -27,6 +28,40 @@ try:
     _HAS_SCIPY = True
 except ImportError:
     _HAS_SCIPY = False
+
+
+def _get_component_slices(
+    labeled: np.ndarray, num_features: int
+) -> list[tuple[slice, slice] | None]:
+    """Return bounding box slices for each labeled component (1-indexed)."""
+    if _HAS_SCIPY:
+        return ndi.find_objects(labeled)
+
+    # Pure NumPy/Python fallback if scipy is not installed
+    slices: list[list[int] | None] = [None] * num_features
+    height, width = labeled.shape
+    for y in range(height):
+        for x in range(width):
+            val = int(labeled[y, x])
+            if val > 0:
+                idx = val - 1
+                curr = slices[idx]
+                if curr is None:
+                    slices[idx] = [y, y + 1, x, x + 1]
+                else:
+                    if y < curr[0]:
+                        curr[0] = y
+                    if y + 1 > curr[1]:
+                        curr[1] = y + 1
+                    if x < curr[2]:
+                        curr[2] = x
+                    if x + 1 > curr[3]:
+                        curr[3] = x + 1
+
+    return [
+        (slice(c[0], c[1]), slice(c[2], c[3])) if c is not None else None
+        for c in slices
+    ]
 
 
 def _label_connected_components(mask: np.ndarray) -> tuple[np.ndarray, int]:
@@ -157,23 +192,48 @@ def extract_spill_geometries(
             detector_metadata=detector_meta,
         )
 
-    # 2. Extract vector geometries and filter regions by size
+    # 2. Extract bounding-box slices and pixel counts for all components in O(N) single-pass
+    counts = np.bincount(labeled.ravel())
+    slices = _get_component_slices(labeled, num_features)
+
+    # 3. Extract vector geometries and filter regions by size
     surviving_regions: list[SpillRegionStats] = []
     region_id_counter = 1
+    height, width = mask.shape
 
     for feature_idx in range(1, num_features + 1):
-        reg_mask = labeled == feature_idx
-        pixel_count = int(np.sum(reg_mask))
-
+        pixel_count = int(counts[feature_idx])
         if pixel_count < min_pixels:
             continue
 
-        # Extract polygon vectors using rasterio.features.shapes
+        obj_slice = slices[feature_idx - 1] if (feature_idx - 1) < len(slices) else None
+        if obj_slice is None:
+            continue
+
+        sy, sx = obj_slice
+        ymin, ymax = sy.start, sy.stop
+        xmin, xmax = sx.start, sx.stop
+
+        # Pad bounding box by 1 pixel to preserve full exterior topological boundary for GDAL polygonization
+        ymin_pad = max(0, ymin - 1)
+        ymax_pad = min(height, ymax + 1)
+        xmin_pad = max(0, xmin - 1)
+        xmax_pad = min(width, xmax + 1)
+
+        sub_labeled = labeled[ymin_pad:ymax_pad, xmin_pad:xmax_pad]
+        sub_mask = (sub_labeled == feature_idx)
+
+        # Local window affine transform
+        win_transform = rasterio.windows.transform(
+            rasterio.windows.Window(xmin_pad, ymin_pad, xmax_pad - xmin_pad, ymax_pad - ymin_pad),
+            transform,
+        )
+
         shapes = list(
             rasterio.features.shapes(
-                reg_mask.astype(np.uint8),
-                mask=reg_mask,
-                transform=transform,
+                sub_mask.astype(np.uint8),
+                mask=sub_mask,
+                transform=win_transform,
             )
         )
         if not shapes:
@@ -205,8 +265,9 @@ def extract_spill_geometries(
         if max_area_m2 is not None and area_m2 > max_area_m2:
             continue
 
-        # Raster statistics within region
-        slick_vals = raster[reg_mask]
+        # Raster statistics within region (extracted from local sub-window)
+        sub_raster = raster[ymin_pad:ymax_pad, xmin_pad:xmax_pad]
+        slick_vals = sub_raster[sub_mask]
         valid_vals = slick_vals[np.isfinite(slick_vals)]
         if len(valid_vals) > 0:
             min_db = float(np.min(valid_vals))
@@ -217,7 +278,8 @@ def extract_spill_geometries(
         damping_contrast = float(background_mean_db - mean_db) if not math.isnan(mean_db) else 0.0
 
         # Region confidence score: mean probability weighted by damping
-        reg_probs = probability[reg_mask]
+        sub_prob = probability[ymin_pad:ymax_pad, xmin_pad:xmax_pad]
+        reg_probs = sub_prob[sub_mask]
         mean_prob = float(np.mean(reg_probs)) if len(reg_probs) > 0 else 0.5
         reg_confidence = float(np.clip(mean_prob, 0.0, 1.0))
 

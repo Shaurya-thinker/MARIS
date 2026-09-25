@@ -60,6 +60,9 @@ from app.services.drift_modelling import (
     _validate_required_dims,
     _validate_required_vars,
     extract_centroid,
+    DriftTrajectory,
+    MaritimeDomainChecker,
+    MaritimeDomainError,
 )
 
 # ---------------------------------------------------------------------------
@@ -149,8 +152,9 @@ def run_backward_drift(
     leeway_fraction: float = DEFAULT_LEEWAY_FRACTION,
     spill_area_m2: float | None = None,
     uncertainty_growth_m_per_h: float = DEFAULT_UNCERTAINTY_GROWTH_M_PER_H,
-) -> list[BackwardDriftStep]:
-    """Execute time-reversed Leeway-Euler backward integration.
+    domain_checker: Any | None = None,
+) -> DriftTrajectory:
+    """Execute time-reversed Leeway-Euler backward integration with coastal robustness.
 
     Steps backward in time:
         v_drift = v_current(lon, lat, t) + α · v_wind(lon, lat, t)
@@ -158,18 +162,13 @@ def run_backward_drift(
         lat_prev = lat - (drift_v · dt_s) / 111320
         t_prev   = t - dt
 
-    The integration uses the exact requested duration:
-        remaining = lookback_hours
-        while remaining > _STEP_EPSILON:
-            dt = min(step_hours, remaining)
-            integrate dt backward
-            remaining -= dt
-
-    Fails closed if the historical time window [observation_time - lookback_hours, observation_time]
-    falls outside the available environmental datasets.
+    Handles nearshore CMEMS NaN cells by falling back to wind-only leeway (drift = leeway * wind)
+    while recording provenance. Checks each tentative historical position against the B2.75 Natural Earth
+    maritime mask; terminates cleanly with 'shoreline_boundary_reached' without appending invalid land positions.
 
     Raises:
         SourceEstimationError: on validation failure, out-of-bounds coordinate, or data gap.
+        MaritimeDomainError: if origin is outside the maritime domain (on land).
     """
     if lookback_hours <= 0.0:
         raise SourceEstimationError(f"lookback_hours must be > 0, got {lookback_hours}")
@@ -258,6 +257,22 @@ def run_backward_drift(
             "Cannot estimate historical source zone without complete environmental coverage."
         )
 
+    # Validate origin within maritime domain
+    if domain_checker is None:
+        grid_bbox = (
+            min(w_lon_min, c_lon_min),
+            min(w_lat_min, c_lat_min),
+            max(w_lon_max, c_lon_max),
+            max(w_lat_max, c_lat_max),
+        )
+        domain_checker = MaritimeDomainChecker(bbox=grid_bbox)
+
+    if not domain_checker.is_maritime(origin_lon, origin_lat):
+        raise MaritimeDomainError(
+            f"Starting position (lon={origin_lon:.4f}, lat={origin_lat:.4f}) is outside "
+            "the maritime domain (on land). Structured domain failure: backward trajectory cannot trace through land."
+        )
+
     # Interpolator caches: (var_name, time_index) -> RegularGridInterpolator
     wind_cache: dict[tuple[str, int], Any] = {}
     curr_cache: dict[tuple[str, int], Any] = {}
@@ -291,10 +306,20 @@ def run_backward_drift(
     current_time = obs_utc
     cumulative_dist = 0.0
     elapsed_hours = 0.0
+    termination_status = "completed"
+    termination_reason = None
+    forcing_modes: list[str] = []
+    current_fallback_used = False
 
     while remaining > _STEP_EPSILON:
         dt_h = min(step_hours, remaining)
         dt_s = dt_h * 3600.0
+
+        # Spatial bounds check before interpolation: catch domain exit
+        if not (w_lat_min <= current_lat <= w_lat_max and w_lon_min <= current_lon <= w_lon_max and
+                c_lat_min <= current_lat <= c_lat_max and c_lon_min <= current_lon <= c_lon_max):
+            termination_status = "domain_exit"
+            break
 
         # Find nearest time index in each dataset for current_time
         wind_t_idx = _nearest_time_index(wind_times, current_time)
@@ -302,36 +327,61 @@ def run_backward_drift(
 
         query_pt = np.array([[current_lat, current_lon]], dtype=np.float64)
 
+        # 1. Wind interpolation
         try:
             u_wind = float(get_wind_interp("u10", wind_t_idx)(query_pt)[0])
             v_wind = float(get_wind_interp("v10", wind_t_idx)(query_pt)[0])
-        except Exception as exc:
-            raise SourceEstimationError(
-                f"Spatial interpolation failed for ERA5 wind at t={current_time.isoformat()}, "
-                f"position (lon={current_lon:.4f}, lat={current_lat:.4f}): {exc}"
-            ) from exc
+        except ValueError:
+            termination_status = "domain_exit"
+            break
 
-        try:
-            u_curr = float(get_curr_interp("uo", curr_t_idx)(query_pt)[0])
-            v_curr = float(get_curr_interp("vo", curr_t_idx)(query_pt)[0])
-        except Exception as exc:
-            raise SourceEstimationError(
-                f"Spatial interpolation failed for CMEMS current at t={current_time.isoformat()}, "
-                f"position (lon={current_lon:.4f}, lat={current_lat:.4f}): {exc}"
-            ) from exc
-
-        if not all(math.isfinite(v) for v in (u_wind, v_wind, u_curr, v_curr)):
-            raise SourceEstimationError(
-                f"Interpolated non-finite forcing at t={current_time.isoformat()}, "
-                f"position (lon={current_lon:.4f}, lat={current_lat:.4f}). "
-                "The backward trajectory may have hit land or nodata."
+        if not (math.isfinite(u_wind) and math.isfinite(v_wind)):
+            termination_status = "environmental_failure"
+            termination_reason = (
+                f"ERA5 wind forcing is non-finite at t={current_time.isoformat()}, "
+                f"position (lon={current_lon:.4f}, lat={current_lat:.4f})"
             )
+            break
 
-        # Net drift velocity vector
-        drift_u = u_curr + leeway_fraction * u_wind
-        drift_v = v_curr + leeway_fraction * v_wind
+        # 2. Current interpolation
+        cmems_finite = False
+        u_curr = 0.0
+        v_curr = 0.0
+        try:
+            u_c = float(get_curr_interp("uo", curr_t_idx)(query_pt)[0])
+            v_c = float(get_curr_interp("vo", curr_t_idx)(query_pt)[0])
+            if math.isfinite(u_c) and math.isfinite(v_c):
+                cmems_finite = True
+                u_curr = u_c
+                v_curr = v_c
+        except ValueError:
+            termination_status = "domain_exit"
+            break
 
-        # Step BACKWARD: subtract displacement
+        # 3. Forcing evaluation with nearshore CMEMS NaN fallback
+        if cmems_finite:
+            drift_u = u_curr + leeway_fraction * u_wind
+            drift_v = v_curr + leeway_fraction * v_wind
+            step_forcing_mode = "current_plus_windage"
+            step_current_source = "CMEMS"
+            step_current_fallback = False
+            step_u_curr = round(u_curr, 6)
+            step_v_curr = round(v_curr, 6)
+        else:
+            # Fall back to wind-only leeway: drift = leeway * wind
+            drift_u = leeway_fraction * u_wind
+            drift_v = leeway_fraction * v_wind
+            step_forcing_mode = "wind_only_leeway"
+            step_current_source = "unavailable"
+            step_current_fallback = True
+            current_fallback_used = True
+            step_u_curr = None
+            step_v_curr = None
+
+        if step_forcing_mode not in forcing_modes:
+            forcing_modes.append(step_forcing_mode)
+
+        # 4. Step BACKWARD: subtract displacement
         cos_lat = math.cos(math.radians(current_lat))
         if abs(cos_lat) < 1e-6:
             cos_lat = 1e-6
@@ -341,6 +391,16 @@ def run_backward_drift(
 
         new_lon = current_lon + dlon
         new_lat = current_lat + dlat
+        new_lon = max(-180.0, min(180.0, new_lon))
+        new_lat = max(-90.0, min(90.0, new_lat))
+
+        # 5. Maritime domain check: D3 backward status is "shoreline_boundary_reached"
+        if not domain_checker.is_maritime(new_lon, new_lat):
+            termination_status = "shoreline_boundary_reached"
+            # DO NOT append invalid land position to backward trajectory
+            break
+
+        # Position is maritime: accept step
         step_time = current_time - timedelta(seconds=dt_s)
         elapsed_hours += dt_h
 
@@ -353,16 +413,19 @@ def run_backward_drift(
         steps.append(
             BackwardDriftStep(
                 timestamp=step_time,
-                lon=new_lon,
-                lat=new_lat,
-                u_wind_ms=u_wind,
-                v_wind_ms=v_wind,
-                u_current_ms=u_curr,
-                v_current_ms=v_curr,
-                drift_u_ms=drift_u,
-                drift_v_ms=drift_v,
-                cumulative_backward_distance_m=cumulative_dist,
-                uncertainty_radius_m=uncertainty_r,
+                lon=round(new_lon, 6),
+                lat=round(new_lat, 6),
+                u_wind_ms=round(u_wind, 6),
+                v_wind_ms=round(v_wind, 6),
+                u_current_ms=step_u_curr,
+                v_current_ms=step_v_curr,
+                drift_u_ms=round(drift_u, 6),
+                drift_v_ms=round(drift_v, 6),
+                cumulative_backward_distance_m=round(cumulative_dist, 2),
+                uncertainty_radius_m=round(uncertainty_r, 2),
+                forcing_mode=step_forcing_mode,
+                current_fallback=step_current_fallback,
+                current_source=step_current_source,
             )
         )
 
@@ -371,7 +434,13 @@ def run_backward_drift(
         current_time = step_time
         remaining -= dt_h
 
-    return steps
+    return DriftTrajectory(
+        steps=steps,
+        termination_status=termination_status,
+        forcing_modes=forcing_modes,
+        current_fallback_used=current_fallback_used,
+        termination_reason=termination_reason,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +460,7 @@ def compute_source_estimate_for_spill(
     leeway_fraction: float = DEFAULT_LEEWAY_FRACTION,
     spill_area_m2: float | None = None,
     uncertainty_growth_m_per_h: float = DEFAULT_UNCERTAINTY_GROWTH_M_PER_H,
+    domain_checker: MaritimeDomainChecker | None = None,
     output_dir: str | Path | None = None,
     registry: AssetRegistry | None = None,
 ) -> tuple[SourceEstimateResult, Asset]:
@@ -435,6 +505,8 @@ def compute_source_estimate_for_spill(
     if not (-90.0 <= origin_lat <= 90.0):
         raise SourceEstimationError(f"origin_lat {origin_lat} is outside WGS84 [-90, 90]")
 
+    obs_utc = _utc(observation_time)
+
     wind_path = Path(wind_asset.location)
     if not wind_path.exists():
         raise SourceEstimationError(f"ERA5 wind asset does not exist at '{wind_asset.location}'")
@@ -474,7 +546,7 @@ def compute_source_estimate_for_spill(
         steps = run_backward_drift(
             origin_lon=origin_lon,
             origin_lat=origin_lat,
-            observation_time=observation_time,
+            observation_time=obs_utc,
             wind_ds=wind_ds,
             curr_ds=curr_ds,
             lookback_hours=lookback_hours,
@@ -482,6 +554,7 @@ def compute_source_estimate_for_spill(
             leeway_fraction=leeway_fraction,
             spill_area_m2=spill_area_m2,
             uncertainty_growth_m_per_h=uncertainty_growth_m_per_h,
+            domain_checker=domain_checker,
         )
     finally:
         if wind_ds is not None:
@@ -489,20 +562,31 @@ def compute_source_estimate_for_spill(
         if curr_raw is not None:
             curr_raw.close()
 
-    if not steps:
+    if not steps and steps.termination_status == "completed":
         raise SourceEstimationError("Backward integration produced no steps.")
 
-    source_step = steps[-1]
-    source_point_lon = source_step.lon
-    source_point_lat = source_step.lat
-    source_time = source_step.timestamp
-    source_uncertainty_km = source_step.uncertainty_radius_m / 1000.0
+    if steps:
+        source_step = steps[-1]
+        source_point_lon = source_step.lon
+        source_point_lat = source_step.lat
+        source_time = source_step.timestamp
+        source_uncertainty_km = source_step.uncertainty_radius_m / 1000.0
+        source_radius_m = source_step.uncertainty_radius_m
+        total_backward_dist_m = source_step.cumulative_backward_distance_m
+    else:
+        source_point_lon = origin_lon
+        source_point_lat = origin_lat
+        source_time = obs_utc
+        r0 = max(math.sqrt((spill_area_m2 or 0.0) / math.pi), MIN_INITIAL_RADIUS_M)
+        source_radius_m = r0
+        source_uncertainty_km = r0 / 1000.0
+        total_backward_dist_m = 0.0
 
     # Construct 32-vertex analytical candidate zone Polygon
     source_polygon = generate_source_candidate_polygon(
         center_lon=source_point_lon,
         center_lat=source_point_lat,
-        radius_m=source_step.uncertainty_radius_m,
+        radius_m=source_radius_m,
         num_vertices=POLYGON_VERTICES,
     )
 
@@ -524,8 +608,28 @@ def compute_source_estimate_for_spill(
     # Build GeoJSON FeatureCollection with:
     # 1. Backward trajectory LineString (from origin back to source)
     # 2. Source candidate zone Polygon
-    obs_utc = _utc(observation_time)
     trajectory_coords = [[origin_lon, origin_lat]] + [[s.lon, s.lat] for s in steps]
+    if len(trajectory_coords) == 1:
+        trajectory_coords.append([origin_lon, origin_lat])
+
+    centerline_props: dict[str, Any] = {
+        "feature_kind": "backward_drift_centerline",
+        "investigation_id": investigation_id,
+        "spill_detection_id": spill_detection_id,
+        "observation_time": obs_utc.isoformat(),
+        "source_time": source_time.isoformat(),
+        "lookback_hours": lookback_hours,
+        "step_count": len(steps),
+        "total_backward_distance_m": total_backward_dist_m,
+        "termination_status": steps.termination_status,
+        "forcing_mode": steps.forcing_mode,
+        "forcing_modes": steps.forcing_modes,
+        "current_fallback_used": steps.current_fallback_used,
+    }
+    if steps.current_fallback_used:
+        centerline_props["degraded_forcing_note"] = "Current unavailable; wind-only leeway used."
+    if steps.termination_reason:
+        centerline_props["termination_reason"] = steps.termination_reason
 
     feature_collection: dict[str, Any] = {
         "type": "FeatureCollection",
@@ -536,16 +640,7 @@ def compute_source_estimate_for_spill(
                     "type": "LineString",
                     "coordinates": trajectory_coords,
                 },
-                "properties": {
-                    "feature_kind": "backward_drift_centerline",
-                    "investigation_id": investigation_id,
-                    "spill_detection_id": spill_detection_id,
-                    "observation_time": obs_utc.isoformat(),
-                    "source_time": source_time.isoformat(),
-                    "lookback_hours": lookback_hours,
-                    "step_count": len(steps),
-                    "total_backward_distance_m": source_step.cumulative_backward_distance_m,
-                },
+                "properties": centerline_props,
             },
             {
                 "type": "Feature",
@@ -558,6 +653,7 @@ def compute_source_estimate_for_spill(
                     "center_lon": source_point_lon,
                     "center_lat": source_point_lat,
                     "uncertainty_radius_km": source_uncertainty_km,
+                    "termination_status": steps.termination_status,
                     "scientific_framing": (
                         "Heuristic analytical uncertainty envelope. "
                         "NOT a 95% confidence region, probability distribution, "
@@ -586,6 +682,10 @@ def compute_source_estimate_for_spill(
         "current_asset_id": current_asset.id,
         "spill_detection_id": spill_detection_id,
         "artifact_path": str(geojson_path.resolve()),
+        "termination_status": steps.termination_status,
+        "forcing_mode": steps.forcing_mode,
+        "forcing_modes": steps.forcing_modes,
+        "current_fallback_used": steps.current_fallback_used,
         "scientific_limitations": [
             (
                 "Estimates a physically plausible historical source candidate zone from oceanographic/meteorological "
@@ -608,6 +708,13 @@ def compute_source_estimate_for_spill(
             ),
         ],
     }
+    if steps.current_fallback_used:
+        metadata["degraded_forcing_note"] = (
+            "Current unavailable; wind-only leeway used. "
+            "This is an operational robustness fallback mode, not physical equivalence."
+        )
+    if steps.termination_reason:
+        metadata["termination_reason"] = steps.termination_reason
 
     # Register DRIFT_PRODUCT asset
     retrieved_at = datetime.now(timezone.utc)
@@ -623,6 +730,7 @@ def compute_source_estimate_for_spill(
             notes=(
                 f"Historical source candidate zone derived via time-reversed Leeway-Euler backtracking. "
                 f"Lookback={lookback_hours}h, dt={step_hours}h, α={leeway_fraction}. "
+                f"Status: {steps.termination_status}. "
                 f"Source radius={source_uncertainty_km:.2f}km. Heuristic analytical search envelope."
             ),
             extra={
@@ -634,6 +742,10 @@ def compute_source_estimate_for_spill(
                 "step_hours": step_hours,
                 "leeway_fraction": leeway_fraction,
                 "source_uncertainty_radius_km": source_uncertainty_km,
+                "termination_status": steps.termination_status,
+                "forcing_mode": steps.forcing_mode,
+                "forcing_modes": steps.forcing_modes,
+                "current_fallback_used": steps.current_fallback_used,
             },
         ),
         metadata={"investigation_id": investigation_id, "model_version": MODEL_VERSION},
@@ -666,6 +778,10 @@ def compute_source_estimate_for_spill(
         source_uncertainty_radius_km=source_uncertainty_km,
         steps=steps,
         source_zone_geometry=source_polygon,
+        termination_status=steps.termination_status,
+        forcing_mode=steps.forcing_mode,
+        forcing_modes=steps.forcing_modes,
+        current_fallback_used=steps.current_fallback_used,
         metadata=metadata,
     )
 

@@ -95,8 +95,8 @@ def _make_cmems_nc(path: Path, obs_time: datetime, lons: list[float], lats: list
 def synthetic_netcdf(tmp_path):
     """Return (era5_path, cmems_path, obs_time, origin_lon, origin_lat)."""
     obs_time = datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc)
-    origin_lon = 3.5
-    origin_lat = 43.5
+    origin_lon = 4.0
+    origin_lat = 42.5
     lons = [float(i) for i in range(-5, 15)]   # 20 points, 1° spacing
     lats = [float(i) for i in range(35, 55)]   # 20 points, 1° spacing
 

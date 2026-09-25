@@ -38,8 +38,16 @@ backend/.venv/
 
 # Acquired scientific data (Sentinel-1 products, ERA5 NetCDF, etc.)
 backend/data/acquisitions/
+backend/acquisitions/
+acquisitions/
 backend/data/models/
 backend/data/synthetic/
+models/
+derived/
+backend/derived/
 *.joblib
 *.pkl
+*.SAFE.zip
+/ais_vessels.db
+/real_experiments.db
 !**/.env.example

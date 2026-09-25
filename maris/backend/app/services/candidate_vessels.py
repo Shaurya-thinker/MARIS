@@ -603,6 +603,16 @@ def generate_candidate_vessels_for_spill(
         first_mmsi = next((str(x["mmsi"]).strip() for x in obs_list if x.get("mmsi") is not None), None)
         first_imo = next((str(x["imo"]).strip() for x in obs_list if x.get("imo") is not None), None)
         first_name = next((str(x["vessel_name"]).strip() for x in obs_list if x.get("vessel_name") is not None), None)
+        first_type = next((str(x["vessel_type"]).strip() for x in obs_list if x.get("vessel_type") is not None), None)
+        if not first_type:
+            first_type = next(
+                (str(x["source_attributes"]["vessel_type"]).strip()
+                 for x in obs_list
+                 if isinstance(x.get("source_attributes"), dict) and x["source_attributes"].get("vessel_type")),
+                None
+            )
+        first_call_sign = next((str(x["call_sign"]).strip() for x in obs_list if x.get("call_sign") is not None), None)
+        first_flag = next((str(x["flag_country"]).strip() for x in obs_list if x.get("flag_country") is not None), None)
 
         primary_vessel_id = first_mmsi or first_imo or first_name or v_key
         cand_id = f"cand-{_sanitize(primary_vessel_id, 'vessel')}"
@@ -697,6 +707,9 @@ def generate_candidate_vessels_for_spill(
             mmsi=first_mmsi,
             imo=first_imo,
             vessel_name=first_name,
+            vessel_type=first_type,
+            call_sign=first_call_sign,
+            flag_country=first_flag,
             inside_source_zone=inside_any,
             min_distance_to_source_center_km=round(min_dist_km, 4),
             distance_to_zone_boundary_km=round(dist_to_boundary, 4),
@@ -769,6 +782,7 @@ def generate_candidate_vessels_for_spill(
                 "mmsi": c.mmsi,
                 "imo": c.imo,
                 "vessel_name": c.vessel_name,
+                "vessel_type": c.vessel_type,
                 "inside_source_zone": c.inside_source_zone,
                 "min_distance_to_source_center_km": c.min_distance_to_source_center_km,
                 "distance_to_zone_boundary_km": c.distance_to_zone_boundary_km,
