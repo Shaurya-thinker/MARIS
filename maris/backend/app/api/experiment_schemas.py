@@ -101,6 +101,7 @@ class VesselSummaryItem(BaseModel):
     first_timestamp: str
     last_timestamp: str
     source_adapter: str
+    positions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AisSearchResponse(BaseModel):
@@ -111,6 +112,21 @@ class AisSearchResponse(BaseModel):
     search_window_end: str
     adapter_id: str
     configured: bool
+
+
+class AisPositionsRequest(BaseModel):
+    mmsis: list[str] = Field(description="MMSIs or vessel IDs to fetch positions for")
+    west: float | None = Field(default=None, ge=-180.0, le=180.0)
+    south: float | None = Field(default=None, ge=-90.0, le=90.0)
+    east: float | None = Field(default=None, ge=-180.0, le=180.0)
+    north: float | None = Field(default=None, ge=-90.0, le=90.0)
+    start: datetime
+    end: datetime
+
+
+class AisPositionsResponse(BaseModel):
+    vessel_positions: dict[str, list[dict[str, Any]]]
+    total_positions: int
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +158,10 @@ class ExperimentRunRequest(BaseModel):
         default_factory=list,
         description="Vessels to score against the reconstructed source zone"
     )
+    search_bbox: dict[str, float] | None = Field(
+        default=None,
+        description="Optional spatial search bounding box {west, south, east, north}"
+    )
 
 
 class VesselFeaturesItem(BaseModel):
@@ -158,6 +178,10 @@ class VesselFeaturesItem(BaseModel):
     evidence_consistency_score: float
     rank: int
     has_meaningful_support: bool
+    positions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Authentic AIS positions for this candidate: [{timestamp, lat, lon, speed?, heading?}]"
+    )
 
 
 class ExperimentRunResponse(BaseModel):
@@ -177,6 +201,9 @@ class ExperimentRunResponse(BaseModel):
     cmems_path: str
     created_at: str
     scientific_disclaimer: str
+    observation_lon: float | None = None
+    observation_lat: float | None = None
+    status: str = "completed"
 
 
 class ExperimentRunSummary(BaseModel):
@@ -189,6 +216,10 @@ class ExperimentRunSummary(BaseModel):
     source_lat: float
     source_radius_m: float
     created_at: str
+    observation_lon: float | None = None
+    observation_lat: float | None = None
+    candidate_count: int = 0
+    status: str = "completed"
 
 
 class ExperimentListResponse(BaseModel):

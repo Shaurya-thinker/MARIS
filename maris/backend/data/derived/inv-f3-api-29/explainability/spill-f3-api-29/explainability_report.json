@@ -3,7 +3,7 @@
   "investigation_id": "inv-f3-api-29",
   "spill_id": "spill-f3-api-29",
   "candidate_ranking_id": "ranking-f3-test",
-  "generated_at": "2026-09-20T06:42:09.292559Z",
+  "generated_at": "2026-09-26T04:53:22.609540Z",
   "methodology_version": "F3-1.0.0",
   "asset_id": null,
   "candidate_count": 1,
@@ -74,10 +74,320 @@
         "f2_score": 0.88,
         "spatial_discrepancy_km": 1.2,
         "temporal_discrepancy_hours": 0.5,
-        "zero_fabrication": true
-      }
+        "zero_fabrication": true,
+        "candidate_id": "c1",
+        "vessel_id": "v1"
+      },
+      "candidate_summary": {
+        "rank": 1,
+        "candidate_id": "c1",
+        "vessel_id": "v1",
+        "vessel_name": "Nordic Star",
+        "vessel_type": "Crude Oil Tanker",
+        "mmsi": "111222333",
+        "imo": "9123456",
+        "flag": null,
+        "evidence_consistency_score": 0.88,
+        "evidence_consistency_level": "HIGH"
+      },
+      "evidence_breakdown": {
+        "spatial_score": 0.9,
+        "spatial_explanation": "Spatial evidence indicates HIGH consistency (score: 0.90). Vessel closest point of approach was 1.20 km from estimated source candidate center.",
+        "temporal_score": 0.8,
+        "temporal_explanation": "Temporal evidence indicates HIGH consistency (score: 0.80). Vessel closest approach occurred 0.50 hours from estimated spill release time.",
+        "trajectory_score": 0.8,
+        "trajectory_explanation": "Trajectory evidence indicates HIGH consistency (score: 0.80) based on centerline proximity and observed heading alignment.",
+        "source_zone_score": null,
+        "source_zone_explanation": "Source zone membership evidence was unavailable; channel excluded from scoring.",
+        "data_quality_score": null,
+        "data_quality_explanation": null,
+        "active_weights": {},
+        "active_weight_sum": 0.0,
+        "available_dimensions": [],
+        "unavailable_dimensions": []
+      },
+      "uncertainty": {
+        "source_uncertainty_km": null,
+        "source_uncertainty_explanation": "Source candidate zone search uncertainty radius was not quantitatively modeled.",
+        "ais_sparsity": "nominal",
+        "is_sparse_track": false,
+        "environmental_fallback": false,
+        "environmental_fallback_explanation": "Surface-current data was available; no fallback required.",
+        "shoreline_termination": false,
+        "shoreline_termination_explanation": "Backward drift remained within open sea waters.",
+        "interpolation_status": "NOMINAL_GRID_RESOLUTION",
+        "raw_uncertainty": {}
+      },
+      "provenance_details": {
+        "ais_source": "curated_historical_reconstruction",
+        "satellite_source": "Sentinel-1 SAR",
+        "environmental_source": "Copernicus Marine / ERA5",
+        "source_estimation_source": "Stage D3 backward-drift model",
+        "is_real_observation": false,
+        "data_source_type": "curated_historical_reconstruction",
+        "provenance_summary": "AIS observations in this benchmark are curated historical reconstructions and are not operational raw AIS observations.",
+        "raw_provenance": {
+          "candidate_id": "c1",
+          "vessel_id": "v1",
+          "spatial_discrepancy_km": 1.2,
+          "temporal_discrepancy_hours": 0.5,
+          "zero_fabrication": true
+        }
+      },
+      "ranking_context": {
+        "rank": 1,
+        "total_candidates": 1,
+        "evidence_consistency_score": 0.88,
+        "evidence_availability_ratio": 1.0,
+        "is_tied_score": false,
+        "tie_break_rule": "score_desc -> availability_ratio_desc -> spatial_disp_asc -> temporal_disp_asc -> vessel_id_asc -> candidate_id_asc",
+        "tie_break_resolution": null,
+        "explanation": "Rank #1 of 1 reflects the configured Evidence Consistency Score (0.88) under the deterministic ranking model."
+      },
+      "score_explanation": {
+        "score": 0.88,
+        "formula": "S_candidate = sum(w_i * S_i) / sum(w_i) for active available dimensions",
+        "active_dimensions": [],
+        "unavailable_dimensions": [],
+        "active_weights": {},
+        "active_weight_sum": 0.0,
+        "explanation_text": "Evidence Consistency Score = 0.8800. Formula: S = sum(w_i * S_i) / sum(w_i) for active available dimensions."
+      },
+      "narrative": "Candidate Nordic Star (MMSI: 111222333) ranked #1 of 1 with an Evidence Consistency Score of 0.88 (HIGH). Spatial evidence was available and contributed 0.90. Temporal evidence was available and contributed 0.80. Trajectory evidence was available and contributed 0.80. The candidate was approximately 1.20 km from the estimated source center. Temporal closest approach occurred 0.50 hours (30.0 minutes) from estimated spill release time. AIS observations in this benchmark are curated historical reconstructions and are not operational raw AIS observations. These measurements describe consistency with the modeled spill source. They do not establish vessel responsibility or causation.",
+      "traceability": [
+        {
+          "statement_type": "consistency_score",
+          "source_stage": "F2",
+          "source_field": "evidence_consistency_score",
+          "value": 0.88,
+          "statement": "Candidate ranked #1 with Evidence Consistency Score of 0.8800."
+        },
+        {
+          "statement_type": "spatial_proximity",
+          "source_stage": "E2",
+          "source_field": "spatial_discrepancy_km",
+          "value": 1.2,
+          "statement": "Vessel closest point of approach was 1.200 km from estimated source candidate center."
+        },
+        {
+          "statement_type": "temporal_proximity",
+          "source_stage": "E2",
+          "source_field": "temporal_discrepancy_hours",
+          "value": 0.5,
+          "statement": "Vessel closest approach occurred 0.5000 hours from estimated spill release time."
+        },
+        {
+          "statement_type": "provenance_status",
+          "source_stage": "E1",
+          "source_field": "is_real_observation",
+          "value": false,
+          "statement": "AIS observations are curated historical reconstructions and not operational raw AIS."
+        }
+      ],
+      "warnings": []
     }
   ],
+  "candidate_explanations": [
+    {
+      "rank": 1,
+      "vessel_id": "v1",
+      "candidate_id": "c1",
+      "mmsi": "111222333",
+      "imo": "9123456",
+      "name": "Nordic Star",
+      "vessel_type": "Crude Oil Tanker",
+      "evidence_consistency_score": 0.88,
+      "evidence_consistency_level": "HIGH",
+      "evidence_availability_ratio": 1.0,
+      "valid_primary_channels": 3,
+      "total_primary_channels": 3,
+      "evidence_availability_summary": "All three primary evidence channels were available.",
+      "evidence_availability_band": "HIGH evidence availability",
+      "spatial_score": 0.9,
+      "spatial_explanation": "Spatial evidence indicates HIGH consistency (score: 0.90). Vessel closest point of approach was 1.20 km from estimated source candidate center.",
+      "temporal_score": 0.8,
+      "temporal_explanation": "Temporal evidence indicates HIGH consistency (score: 0.80). Vessel closest approach occurred 0.50 hours from estimated spill release time.",
+      "trajectory_score": 0.8,
+      "trajectory_explanation": "Trajectory evidence indicates HIGH consistency (score: 0.80) based on centerline proximity and observed heading alignment.",
+      "behavioral_context": {
+        "label": "Contextual behavioral observations",
+        "observations": [
+          "No anomalous behavioral patterns observed in genuine AIS observations."
+        ],
+        "numerical_contribution_statement": "Contextual behavioral observations do not contribute numerically to the evidence_consistency_score.",
+        "raw_summary": {
+          "total_anomalies_count": 0,
+          "anomalies_in_zone_count": 0,
+          "loitering_detected": false,
+          "transmission_gaps_count": 0,
+          "gaps_spanning_zone_count": 0,
+          "speed_drop_in_zone": false,
+          "speed_surge_near_zone": false,
+          "nav_status_mismatch": false,
+          "anchor_swing_observed": false,
+          "notable_anomaly_types": []
+        }
+      },
+      "drift_cross_check": {
+        "label": "Forward drift cross-check",
+        "status": "UNAVAILABLE",
+        "min_distance_km": null,
+        "explanation": "Forward drift cross-check was unavailable; D1 forward drift simulation was not provided for this investigation. This does not affect the primary consistency score.",
+        "non_additive_statement": "Forward drift cross-check is non-additive contextual evidence and does not modify the consistency score.",
+        "raw_cross_check": {
+          "evaluated": false,
+          "min_distance_to_forward_track_km": null,
+          "closest_forward_step_time": null,
+          "cross_check_note": ""
+        }
+      },
+      "limitations": [
+        "Forward drift cross-check was unavailable.",
+        "AIS observations are discrete reported observations and do not establish continuous vessel position between observations.",
+        "The source zone is an analytical search envelope, not a statistical confidence region.",
+        "Results are subject to the data coverage and model assumptions documented by upstream processing stages."
+      ],
+      "scientific_disclaimer": "This analysis ranks vessels by consistency with the available satellite, environmental, and AIS evidence. It does not establish causation, legal responsibility, or culpability. Results are subject to data coverage, measurement uncertainty, model assumptions, and the limitations listed for each candidate.",
+      "provenance": {
+        "candidate_ranking_id": "ranking-f3-test",
+        "f2_rank": 1,
+        "f2_score": 0.88,
+        "spatial_discrepancy_km": 1.2,
+        "temporal_discrepancy_hours": 0.5,
+        "zero_fabrication": true,
+        "candidate_id": "c1",
+        "vessel_id": "v1"
+      },
+      "candidate_summary": {
+        "rank": 1,
+        "candidate_id": "c1",
+        "vessel_id": "v1",
+        "vessel_name": "Nordic Star",
+        "vessel_type": "Crude Oil Tanker",
+        "mmsi": "111222333",
+        "imo": "9123456",
+        "flag": null,
+        "evidence_consistency_score": 0.88,
+        "evidence_consistency_level": "HIGH"
+      },
+      "evidence_breakdown": {
+        "spatial_score": 0.9,
+        "spatial_explanation": "Spatial evidence indicates HIGH consistency (score: 0.90). Vessel closest point of approach was 1.20 km from estimated source candidate center.",
+        "temporal_score": 0.8,
+        "temporal_explanation": "Temporal evidence indicates HIGH consistency (score: 0.80). Vessel closest approach occurred 0.50 hours from estimated spill release time.",
+        "trajectory_score": 0.8,
+        "trajectory_explanation": "Trajectory evidence indicates HIGH consistency (score: 0.80) based on centerline proximity and observed heading alignment.",
+        "source_zone_score": null,
+        "source_zone_explanation": "Source zone membership evidence was unavailable; channel excluded from scoring.",
+        "data_quality_score": null,
+        "data_quality_explanation": null,
+        "active_weights": {},
+        "active_weight_sum": 0.0,
+        "available_dimensions": [],
+        "unavailable_dimensions": []
+      },
+      "uncertainty": {
+        "source_uncertainty_km": null,
+        "source_uncertainty_explanation": "Source candidate zone search uncertainty radius was not quantitatively modeled.",
+        "ais_sparsity": "nominal",
+        "is_sparse_track": false,
+        "environmental_fallback": false,
+        "environmental_fallback_explanation": "Surface-current data was available; no fallback required.",
+        "shoreline_termination": false,
+        "shoreline_termination_explanation": "Backward drift remained within open sea waters.",
+        "interpolation_status": "NOMINAL_GRID_RESOLUTION",
+        "raw_uncertainty": {}
+      },
+      "provenance_details": {
+        "ais_source": "curated_historical_reconstruction",
+        "satellite_source": "Sentinel-1 SAR",
+        "environmental_source": "Copernicus Marine / ERA5",
+        "source_estimation_source": "Stage D3 backward-drift model",
+        "is_real_observation": false,
+        "data_source_type": "curated_historical_reconstruction",
+        "provenance_summary": "AIS observations in this benchmark are curated historical reconstructions and are not operational raw AIS observations.",
+        "raw_provenance": {
+          "candidate_id": "c1",
+          "vessel_id": "v1",
+          "spatial_discrepancy_km": 1.2,
+          "temporal_discrepancy_hours": 0.5,
+          "zero_fabrication": true
+        }
+      },
+      "ranking_context": {
+        "rank": 1,
+        "total_candidates": 1,
+        "evidence_consistency_score": 0.88,
+        "evidence_availability_ratio": 1.0,
+        "is_tied_score": false,
+        "tie_break_rule": "score_desc -> availability_ratio_desc -> spatial_disp_asc -> temporal_disp_asc -> vessel_id_asc -> candidate_id_asc",
+        "tie_break_resolution": null,
+        "explanation": "Rank #1 of 1 reflects the configured Evidence Consistency Score (0.88) under the deterministic ranking model."
+      },
+      "score_explanation": {
+        "score": 0.88,
+        "formula": "S_candidate = sum(w_i * S_i) / sum(w_i) for active available dimensions",
+        "active_dimensions": [],
+        "unavailable_dimensions": [],
+        "active_weights": {},
+        "active_weight_sum": 0.0,
+        "explanation_text": "Evidence Consistency Score = 0.8800. Formula: S = sum(w_i * S_i) / sum(w_i) for active available dimensions."
+      },
+      "narrative": "Candidate Nordic Star (MMSI: 111222333) ranked #1 of 1 with an Evidence Consistency Score of 0.88 (HIGH). Spatial evidence was available and contributed 0.90. Temporal evidence was available and contributed 0.80. Trajectory evidence was available and contributed 0.80. The candidate was approximately 1.20 km from the estimated source center. Temporal closest approach occurred 0.50 hours (30.0 minutes) from estimated spill release time. AIS observations in this benchmark are curated historical reconstructions and are not operational raw AIS observations. These measurements describe consistency with the modeled spill source. They do not establish vessel responsibility or causation.",
+      "traceability": [
+        {
+          "statement_type": "consistency_score",
+          "source_stage": "F2",
+          "source_field": "evidence_consistency_score",
+          "value": 0.88,
+          "statement": "Candidate ranked #1 with Evidence Consistency Score of 0.8800."
+        },
+        {
+          "statement_type": "spatial_proximity",
+          "source_stage": "E2",
+          "source_field": "spatial_discrepancy_km",
+          "value": 1.2,
+          "statement": "Vessel closest point of approach was 1.200 km from estimated source candidate center."
+        },
+        {
+          "statement_type": "temporal_proximity",
+          "source_stage": "E2",
+          "source_field": "temporal_discrepancy_hours",
+          "value": 0.5,
+          "statement": "Vessel closest approach occurred 0.5000 hours from estimated spill release time."
+        },
+        {
+          "statement_type": "provenance_status",
+          "source_stage": "E1",
+          "source_field": "is_real_observation",
+          "value": false,
+          "statement": "AIS observations are curated historical reconstructions and not operational raw AIS."
+        }
+      ],
+      "warnings": []
+    }
+  ],
+  "summary": "Stage F3 Explainability evaluation for investigation 'inv-f3-api-29' and spill detection 'spill-f3-api-29'. Evaluated 1 candidate vessels under the deterministic Evidence Consistency Model. F2 rankings, ranks, and scores are strictly preserved.",
+  "comparison_summary": [],
+  "methodology": {
+    "scoring_method": "availability_weighted_concordance",
+    "score_version": "F2-1.0.0",
+    "nominal_weights": {
+      "spatial": 0.5,
+      "temporal": 0.25,
+      "trajectory": 0.25
+    },
+    "tie_break_rule": "score_desc -> availability_ratio_desc -> spatial_disp_asc -> temporal_disp_asc -> vessel_id_asc -> candidate_id_asc",
+    "formula": "S = sum(w_i * S_i) / sum(w_i) over available dimensions",
+    "zero_fabrication": true
+  },
+  "data_quality_summary": {
+    "total_candidates": 1,
+    "is_real_observation": false,
+    "curated_benchmark": false,
+    "uncertainty_policy": "Explicit availability and physical bounds; no fabricated statistical values generated."
+  },
+  "warnings": [],
   "scientific_disclaimer": "This analysis ranks vessels by consistency with the available satellite, environmental, and AIS evidence. It does not establish causation, legal responsibility, or culpability. Results are subject to data coverage, measurement uncertainty, model assumptions, and the limitations listed for each candidate.",
   "metadata": {
     "stage": "F3",

@@ -191,6 +191,10 @@
         "mmsi": "555555555",
         "imo": null,
         "vessel_name": "ApiCarrier",
+        "vessel_type": null,
+        "call_sign": null,
+        "flag_country": null,
+        "status": "completed",
         "observed_positions_count": 2,
         "total_track_distance_m": 3428.81,
         "total_track_duration_seconds": 0.0,
@@ -198,6 +202,7 @@
         "points_inside_zone": 2,
         "observed_transit_duration_seconds": 0.0,
         "min_distance_to_center_km": 0.131,
+        "min_distance_to_polygon_km": 0.0,
         "min_distance_to_centerline_km": 0.044,
         "course_drift_angle_diff_deg": 38.58,
         "zero_fabrication": true
@@ -235,7 +240,25 @@
         "feature_kind": "centerline_closest_point",
         "candidate_id": "cand-api-01",
         "vessel_id": "VESSEL-API",
-        "min_distance_to_centerline_km": 0.044
+        "min_distance_to_centerline_km": 0.044,
+        "closest_observation_time": "2024-06-02T00:00:00+00:00"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          2.001,
+          51.001
+        ]
+      },
+      "properties": {
+        "feature_kind": "polygon_closest_point",
+        "candidate_id": "cand-api-01",
+        "vessel_id": "VESSEL-API",
+        "cpa_to_polygon_distance_km": 0.0,
+        "cpa_to_polygon_time": "2024-06-02T00:00:00+00:00"
       }
     }
   ]

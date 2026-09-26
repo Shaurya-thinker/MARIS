@@ -110,6 +110,7 @@ export interface VesselSummary {
   first_timestamp: string;
   last_timestamp: string;
   source_adapter: string;
+  positions?: AisPosition[];
 }
 
 export interface AisSearchResponse {
@@ -120,6 +121,21 @@ export interface AisSearchResponse {
   search_window_end: string;
   adapter_id: string;
   configured: boolean;
+}
+
+export interface AisPositionsRequest {
+  mmsis: string[];
+  west?: number;
+  south?: number;
+  east?: number;
+  north?: number;
+  start: string;
+  end: string;
+}
+
+export interface AisPositionsResponse {
+  vessel_positions: Record<string, AisPosition[]>;
+  total_positions: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +188,7 @@ export interface VesselFeatures {
   evidence_consistency_score: number;
   rank: number;
   has_meaningful_support: boolean;
+  positions?: AisPosition[];
 }
 
 export interface BackwardStep {
@@ -180,12 +197,20 @@ export interface BackwardStep {
   lat: number;
   timestamp: string | null;
   uncertainty_radius_m: number;
+  u_wind_ms?: number | null;
+  v_wind_ms?: number | null;
+  u_current_ms?: number | null;
+  v_current_ms?: number | null;
 }
 
 export interface ExperimentRunResult {
   run_id: string;
   satellite_product_id: string;
   observation_time: string;
+  observation_lon?: number | null;
+  observation_lat?: number | null;
+  candidate_count?: number;
+  status?: string;
   backtrack_hours: number;
   step_hours: number;
   model_version: string;
@@ -205,6 +230,10 @@ export interface ExperimentRunSummary {
   run_id: string;
   satellite_product_id: string;
   observation_time: string;
+  observation_lon?: number | null;
+  observation_lat?: number | null;
+  candidate_count?: number;
+  status?: string;
   backtrack_hours: number;
   model_version: string;
   source_lon: number;
@@ -222,7 +251,7 @@ export interface ExperimentListResponse {
 // Wizard state
 // ---------------------------------------------------------------------------
 
-export type WizardStep = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type WizardStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export interface ExperimentWizardState {
   step: WizardStep;
@@ -239,6 +268,8 @@ export interface ExperimentWizardState {
   // Step 3 — Drift configuration
   stepHours: number;
   spillAreaM2: number | null;
+  observationLat: number | null;
+  observationLon: number | null;
   // Step 4 — Vessel selection
   aisSearchResult: AisSearchResponse | null;
   selectedVessels: VesselInput[];

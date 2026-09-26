@@ -14,7 +14,10 @@
 
 import React, { useState } from 'react'
 import { useExperiment } from '../../real-experiment/useExperiment'
-import type { SentinelProduct, VesselFeatures } from '../../real-experiment/experimentTypes'
+import type { AisPosition, SentinelProduct, VesselFeatures } from '../../real-experiment/experimentTypes'
+import AttributionMap from './AttributionMap'
+import HistoryView from './HistoryView'
+import ScientificReportView from './ScientificReportView'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,6 +43,7 @@ function stepLabel(step: number): string {
     5: 'Run',
     6: 'Results',
     7: 'History',
+    8: 'Report',
   }
   return labels[step] ?? `Step ${step}`
 }
@@ -48,13 +52,15 @@ function stepLabel(step: number): string {
 // Wizard Progress Bar
 // ---------------------------------------------------------------------------
 
-function WizardProgress({ currentStep }: { currentStep: number }) {
+function WizardProgress({ currentStep, onStepClick }: { currentStep: number; onStepClick?: (step: any) => void }) {
   return (
     <div className="re-wizard-progress">
-      {[1, 2, 3, 4, 5, 6, 7].map(s => (
+      {[1, 2, 3, 4, 5, 6, 7, 8].map(s => (
         <div
           key={s}
           className={`re-wizard-step ${s === currentStep ? 're-active' : ''} ${s < currentStep ? 're-done' : ''}`}
+          onClick={() => onStepClick?.(s)}
+          style={{ cursor: onStepClick ? 'pointer' : 'default' }}
         >
           <div className="re-step-dot">{s < currentStep ? '✓' : s}</div>
           <div className="re-step-label">{stepLabel(s)}</div>
@@ -338,7 +344,7 @@ function Step2Environment({
 // ---------------------------------------------------------------------------
 
 function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExperiment> }) {
-  const { state, setStepHours, setSpillArea, goToStep } = experiment
+  const { state, setStepHours, setSpillArea, setObservationCoords, goToStep } = experiment
 
   return (
     <div className="re-step-panel">
@@ -368,6 +374,28 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
       </div>
 
       <div className="re-field-grid">
+        <label className="re-label">
+          Observed Spill Latitude (°N)
+          <input
+            className="re-input"
+            type="number"
+            step="0.0001"
+            value={state.observationLat ?? ''}
+            onChange={e => setObservationCoords(e.target.value ? Number(e.target.value) : null, state.observationLon)}
+          />
+          <span className="re-field-hint">Initial location of observed slick detection (WGS84)</span>
+        </label>
+        <label className="re-label">
+          Observed Spill Longitude (°E)
+          <input
+            className="re-input"
+            type="number"
+            step="0.0001"
+            value={state.observationLon ?? ''}
+            onChange={e => setObservationCoords(state.observationLat, e.target.value ? Number(e.target.value) : null)}
+          />
+          <span className="re-field-hint">Initial location of observed slick detection (WGS84)</span>
+        </label>
         <label className="re-label">
           Integration Step (hours)
           <select
@@ -512,7 +540,7 @@ function Step4VesselSearch({ experiment }: { experiment: ReturnType<typeof useEx
                           onChange={() => toggleVessel({
                             mmsi: v.mmsi,
                             vessel_name: v.vessel_name,
-                            positions: [],
+                            positions: v.positions ?? [],
                           })}
                         />
                       </td>
@@ -560,6 +588,7 @@ function Step5Run({ experiment }: { experiment: ReturnType<typeof useExperiment>
       <div className="re-run-summary">
         <div className="re-info-card">
           <div className="re-info-row"><span>Observation:</span><strong>{state.selectedProduct?.title.slice(0, 30) ?? '—'}</strong></div>
+          <div className="re-info-row"><span>Spill Origin:</span><strong>{state.observationLat != null && state.observationLon != null ? `${state.observationLat.toFixed(4)}°N, ${state.observationLon.toFixed(4)}°E` : '—'}</strong></div>
           <div className="re-info-row"><span>Backtrack:</span><strong>{state.backtrackHours} h, step {state.stepHours} h</strong></div>
           <div className="re-info-row"><span>ERA5 acquired:</span><strong>{state.environment?.era5_netcdf_path ? '✓' : '✗'}</strong></div>
           <div className="re-info-row"><span>CMEMS acquired:</span><strong>{state.environment?.cmems_netcdf_path ? '✓' : '✗'}</strong></div>
@@ -610,7 +639,36 @@ function Step5Run({ experiment }: { experiment: ReturnType<typeof useExperiment>
 function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperiment> }) {
   const { state, goToStep } = experiment
   const result = state.runResult
+  const [selectedVesselId, setSelectedVesselId] = useState<string | null>(null)
+
   if (!result) return <div className="re-step-panel"><p>No results yet.</p></div>
+
+  // Create lookup for vessel positions from state.selectedVessels or result.vessels
+  const vesselPositionsMap: Record<string, AisPosition[]> = {}
+  state.selectedVessels.forEach((sv) => {
+    const key = sv.mmsi ?? sv.id ?? sv.vessel_name ?? ''
+    if (key && sv.positions && sv.positions.length > 0) {
+      vesselPositionsMap[key] = sv.positions
+      if (sv.mmsi) vesselPositionsMap[sv.mmsi] = sv.positions
+      if (sv.id) vesselPositionsMap[sv.id] = sv.positions
+    }
+  })
+  result.vessels.forEach((v) => {
+    if (v.positions && v.positions.length > 0) {
+      vesselPositionsMap[v.vessel_id] = v.positions
+      if (v.mmsi) vesselPositionsMap[v.mmsi] = v.positions
+    }
+  })
+
+  // Observation coordinate determination (prefer explicit observationLat/Lon or product centroid)
+  const observationLat =
+    state.observationLat != null
+      ? state.observationLat
+      : (state.selectedProduct?.centroid_lat ?? result.source_lat)
+  const observationLon =
+    state.observationLon != null
+      ? state.observationLon
+      : (state.selectedProduct?.centroid_lon ?? result.source_lon)
 
   return (
     <div className="re-step-panel">
@@ -627,11 +685,34 @@ function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperim
         </div>
       </div>
 
+      {/* 1. Interactive Attribution Map */}
+      <AttributionMap
+        observation={{
+          lat: observationLat,
+          lon: observationLon,
+          timestamp: result.observation_time,
+          title: state.selectedProduct?.title,
+          footprint: state.selectedProduct?.footprint,
+        }}
+        reconstructedSource={{
+          lat: result.source_lat,
+          lon: result.source_lon,
+          radiusM: result.source_radius_m,
+          geojson: result.source_zone_geojson,
+        }}
+        backwardSteps={result.backward_steps}
+        vessels={result.vessels}
+        selectedVesselId={selectedVesselId}
+        onSelectVessel={setSelectedVesselId}
+        vesselPositionsMap={vesselPositionsMap}
+      />
+
+      {/* 2. Reconstructed Source Candidate Zone Metrics */}
       <div className="re-source-zone-card">
         <h4>Reconstructed Source Candidate Zone</h4>
         <div className="re-source-grid">
           <div>
-            <div className="re-source-label">Estimated source position</div>
+            <div className="re-source-label">Source</div>
             <div className="re-source-value">{fmt(result.source_lat, 4)}°N, {fmt(result.source_lon, 4)}°E</div>
           </div>
           <div>
@@ -649,71 +730,212 @@ function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperim
         </div>
       </div>
 
-      <h4 className="re-section-heading">Vessel Evidence Consistency</h4>
+      {/* 3. Candidate Comparison Table (Authoritative Ranking from Backend) */}
+      <h4 className="re-section-heading">Candidate Vessel Comparison</h4>
       <p className="re-section-desc">
-        Ranked by evidence consistency score [0–1]. Higher = more spatially and temporally
-        consistent with the reconstructed source zone. This is NOT a probability of guilt.
+        Authoritative candidate ranking produced by the backward drift attribution pipeline. Ranked by Evidence Consistency Score.
       </p>
 
       {result.vessels.length === 0 ? (
-        <p className="re-empty">No vessels were included in this experiment.</p>
+        <p className="re-empty">No eligible AIS vessel tracks were available for this experiment.</p>
       ) : (
-        <div className="re-vessel-cards">
-          {result.vessels.map((v: VesselFeatures) => (
-            <div key={v.vessel_id} className="re-vessel-card">
-              <div className="re-vessel-header">
-                <div className="re-vessel-rank">#{v.rank}</div>
-                <div className="re-vessel-name">{v.vessel_name ?? v.mmsi ?? v.vessel_id}</div>
-                <div
-                  className="re-vessel-score"
-                  style={{ color: scoreColor(v.evidence_consistency_score) }}
-                >
-                  {(v.evidence_consistency_score * 100).toFixed(1)}%
-                </div>
-              </div>
-              <div className="re-vessel-features">
-                <div className="re-feature">
-                  <span>Min dist to source</span>
-                  <strong>{v.min_source_distance_km != null ? `${v.min_source_distance_km.toFixed(1)} km` : '—'}</strong>
-                </div>
-                <div className="re-feature">
-                  <span>Temporal overlap</span>
-                  <strong>{v.temporal_overlap_hours.toFixed(1)} h</strong>
-                </div>
-                <div className="re-feature">
-                  <span>Trajectory overlap</span>
-                  <strong>{(v.trajectory_overlap_fraction * 100).toFixed(0)}%</strong>
-                </div>
-                <div className="re-feature">
-                  <span>AIS positions</span>
-                  <strong>{v.ais_position_count}</strong>
-                </div>
-                <div className="re-feature">
-                  <span>AIS coverage</span>
-                  <strong>{(v.ais_coverage_fraction * 100).toFixed(0)}%</strong>
-                </div>
-                {v.heading_consistency != null && (
-                  <div className="re-feature">
-                    <span>Heading consistency</span>
-                    <strong>{(v.heading_consistency * 100).toFixed(0)}%</strong>
-                  </div>
-                )}
-              </div>
-              {!v.has_meaningful_support && (
-                <div className="re-no-support">No meaningful spatial/temporal overlap with source zone</div>
-              )}
-            </div>
-          ))}
+        <div className="re-results-table-wrap">
+          <table className="re-table" data-testid="candidate-comparison-table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Vessel</th>
+                <th>MMSI</th>
+                <th>Evidence Consistency</th>
+                <th>Distance</th>
+                <th>AIS Coverage</th>
+                <th>Track Status</th>
+                <th>Map View</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.vessels.map((v) => {
+                const pos = vesselPositionsMap[v.vessel_id] || vesselPositionsMap[v.mmsi ?? ''] || v.positions || []
+                const isSelected = selectedVesselId === v.vessel_id
+                return (
+                  <tr
+                    key={v.vessel_id}
+                    className={isSelected ? 're-row-vessel-selected' : ''}
+                    onClick={() => setSelectedVesselId(v.vessel_id)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td className="re-td-mono"><strong>#{v.rank}</strong></td>
+                    <td><strong>{v.vessel_name ?? v.mmsi ?? v.vessel_id}</strong></td>
+                    <td className="re-td-mono">{v.mmsi ?? '—'}</td>
+                    <td>
+                      <span
+                        style={{
+                          color: scoreColor(v.evidence_consistency_score),
+                          fontWeight: 800,
+                          fontFamily: 'monospace',
+                        }}
+                      >
+                        {(v.evidence_consistency_score * 100).toFixed(1)}%
+                      </span>
+                    </td>
+                    <td className="re-td-mono">
+                      {v.min_source_distance_km != null ? `${v.min_source_distance_km.toFixed(1)} km` : '—'}
+                    </td>
+                    <td className="re-td-mono">
+                      {(v.ais_coverage_fraction * 100).toFixed(0)}% ({v.ais_position_count} pos)
+                    </td>
+                    <td>
+                      {pos.length > 0 ? (
+                        <span style={{ color: '#4ade80', fontSize: '0.75rem' }}>✓ {pos.length} pts</span>
+                      ) : (
+                        <span style={{ color: '#f87171', fontSize: '0.75rem' }}>AIS trajectory unavailable</span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="re-btn-small"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedVesselId(isSelected ? null : v.vessel_id)
+                        }}
+                      >
+                        {isSelected ? 'Deselect' : 'Inspect'}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
+      {/* 4. Structured Evidence Breakdown Panel for Each Candidate */}
+      <h4 className="re-section-heading">Detailed Evidence Breakdown</h4>
+      <p className="re-section-desc">
+        Granular multi-factor physical and temporal consistency metrics matching backend evaluator results.
+      </p>
+
+      {result.vessels.length === 0 ? (
+        <p className="re-empty">No eligible AIS vessel tracks were available for this experiment.</p>
+      ) : (
+        <div className="re-vessel-cards" data-testid="evidence-breakdown-panel">
+          {result.vessels.map((v: VesselFeatures) => {
+            const pos = vesselPositionsMap[v.vessel_id] || vesselPositionsMap[v.mmsi ?? ''] || v.positions || []
+            const isSelected = selectedVesselId === v.vessel_id
+
+            return (
+              <div
+                key={v.vessel_id}
+                className={`re-vessel-card ${isSelected ? 're-vessel-card-selected' : ''}`}
+                style={isSelected ? { borderColor: 'var(--color-accent)', boxShadow: '0 0 12px rgba(56, 189, 248, 0.2)' } : {}}
+              >
+                <div className="re-vessel-header">
+                  <div className="re-vessel-rank">#{v.rank}</div>
+                  <div className="re-vessel-name">
+                    {v.vessel_name ?? v.mmsi ?? v.vessel_id}
+                    {v.mmsi && <span className="vessel-tag" style={{ marginLeft: '0.5rem' }}>MMSI: {v.mmsi}</span>}
+                  </div>
+                  <div
+                    className="re-vessel-score"
+                    style={{ color: scoreColor(v.evidence_consistency_score) }}
+                  >
+                    {(v.evidence_consistency_score * 100).toFixed(1)}%
+                  </div>
+                </div>
+
+                <div className="re-vessel-features">
+                  <div className="re-feature">
+                    <span>Spatial Proximity</span>
+                    <strong>{v.min_source_distance_km != null ? `${v.min_source_distance_km.toFixed(1)} km` : '—'}</strong>
+                  </div>
+                  <div className="re-feature">
+                    <span>Temporal Overlap</span>
+                    <strong>{v.temporal_overlap_hours.toFixed(1)} h</strong>
+                  </div>
+                  <div className="re-feature">
+                    <span>Trajectory Evidence</span>
+                    <strong>{(v.trajectory_overlap_fraction * 100).toFixed(0)}%</strong>
+                  </div>
+                  <div className="re-feature">
+                    <span>AIS positions</span>
+                    <strong>{v.ais_position_count}</strong>
+                  </div>
+                  <div className="re-feature">
+                    <span>AIS Track Density</span>
+                    <strong>{(v.ais_coverage_fraction * 100).toFixed(0)}%</strong>
+                  </div>
+                  {v.heading_consistency != null && (
+                    <div className="re-feature">
+                      <span>Heading Consistency</span>
+                      <strong>{(v.heading_consistency * 100).toFixed(0)}%</strong>
+                    </div>
+                  )}
+                  {v.speed_consistency != null && (
+                    <div className="re-feature">
+                      <span>Speed Consistency</span>
+                      <strong>{(v.speed_consistency * 100).toFixed(0)}%</strong>
+                    </div>
+                  )}
+                </div>
+
+                {pos.length === 0 ? (
+                  <div className="re-no-support" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171' }}>
+                    AIS trajectory unavailable
+                  </div>
+                ) : !v.has_meaningful_support ? (
+                  <div className="re-no-support">No meaningful spatial/temporal overlap with source zone</div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 5. Scientific Provenance & Pipeline Lineage */}
+      <h4 className="re-section-heading">Data Provenance &amp; System Lineage</h4>
+      <div className="re-provenance-grid">
+        <div className="re-provenance-item">
+          <span className="re-prov-label">Satellite Observation (SAR)</span>
+          <span className="re-prov-val">Sentinel-1 {state.selectedProduct?.platform ?? 'SAR'}</span>
+          <span className="re-prov-badge re-prov-badge-real">Copernicus CDSE Real Data</span>
+        </div>
+        <div className="re-provenance-item">
+          <span className="re-prov-label">Atmospheric Reanalysis (Wind)</span>
+          <span className="re-prov-val">ECMWF ERA5 10m Wind</span>
+          <span className="re-prov-badge re-prov-badge-real">Real Metocean NetCDF</span>
+        </div>
+        <div className="re-provenance-item">
+          <span className="re-prov-label">Ocean Hydrodynamics (Currents)</span>
+          <span className="re-prov-val">Copernicus Marine CMEMS</span>
+          <span className="re-prov-badge re-prov-badge-real">Real Oceanic NetCDF</span>
+        </div>
+        <div className="re-provenance-item">
+          <span className="re-prov-label">AIS Telemetry Provider</span>
+          <span className="re-prov-val">Curated Historical SQLite Database</span>
+          <span className="re-prov-badge re-prov-badge-curated">ais_vessels.db Benchmark</span>
+        </div>
+      </div>
+
+      {/* 6. Scientific / Legal Disclaimer */}
       <div className="re-disclaimer re-result-disclaimer">
-        {result.scientific_disclaimer}
+        <strong>Scientific Assessment Disclaimer:</strong> This analysis is an evidence-consistency assessment and is not a legal determination of responsibility or causation.
+        {result.scientific_disclaimer && ` ${result.scientific_disclaimer}`}
       </div>
 
       <div className="re-btn-row">
         <button className="re-btn-ghost" onClick={() => goToStep(5)}>← Back</button>
         <button className="re-btn-secondary" onClick={() => goToStep(7)}>View History →</button>
+        {result.run_id && (
+          <button
+            className="re-btn-primary"
+            onClick={() => goToStep(8)}
+            data-testid="step6-generate-report-btn"
+          >
+            Generate Scientific Report →
+          </button>
+        )}
       </div>
     </div>
   )
@@ -724,71 +946,39 @@ function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperim
 // ---------------------------------------------------------------------------
 
 function Step7History({ experiment }: { experiment: ReturnType<typeof useExperiment> }) {
-  const { state, loadRun, goToStep } = experiment
-  const [loading, setLoading] = useState<string | null>(null)
+  return <HistoryView experiment={experiment} />
+}
 
-  const handleLoad = async (runId: string) => {
-    setLoading(runId)
-    try {
-      await loadRun(runId)
-    } finally {
-      setLoading(null)
-    }
+// ---------------------------------------------------------------------------
+// Step 8 — Scientific Report & Export
+// ---------------------------------------------------------------------------
+
+function Step8Report({ experiment }: { experiment: ReturnType<typeof useExperiment> }) {
+  const { state, goToStep, loadRun } = experiment
+  const runId = state.runResult?.run_id || (state.runHistory[0]?.run_id)
+
+  if (!runId) {
+    return (
+      <div className="re-step-panel re-empty-history" data-testid="empty-report-state">
+        <h4>No experiment selected for report</h4>
+        <p>Please select a completed experiment from History or run a new experiment to generate a scientific report.</p>
+        <button className="re-btn-primary" onClick={() => goToStep(7)} style={{ marginTop: '0.75rem' }}>
+          ← View History
+        </button>
+      </div>
+    )
   }
 
   return (
-    <div className="re-step-panel">
-      <h3 className="re-step-title">
-        <span className="re-step-num">7</span>
-        Previous Experiment Runs
-      </h3>
-
-      {state.runHistory.length === 0 ? (
-        <p className="re-empty">No persisted runs yet. Complete an experiment to save results.</p>
-      ) : (
-        <div className="re-results-table-wrap">
-          <table className="re-table">
-            <thead>
-              <tr>
-                <th>Run ID</th>
-                <th>Observation</th>
-                <th>Backtrack</th>
-                <th>Source Position</th>
-                <th>Created</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.runHistory.map(run => (
-                <tr key={run.run_id}>
-                  <td className="re-td-mono re-td-truncate" title={run.run_id}>{run.run_id.slice(0, 8)}…</td>
-                  <td className="re-td-mono re-td-truncate" title={run.satellite_product_id}>{run.satellite_product_id.slice(0, 20)}</td>
-                  <td>{run.backtrack_hours} h</td>
-                  <td>{fmt(run.source_lat, 3)}°N, {fmt(run.source_lon, 3)}°E</td>
-                  <td>{run.created_at.slice(0, 16).replace('T', ' ')}</td>
-                  <td>
-                    <button
-                      className="re-btn-small"
-                      onClick={() => handleLoad(run.run_id)}
-                      disabled={loading === run.run_id}
-                    >
-                      {loading === run.run_id ? '…' : 'Load'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <div className="re-btn-row">
-        <button className="re-btn-ghost" onClick={() => goToStep(1)}>← Start New Experiment</button>
-        {state.runResult && (
-          <button className="re-btn-secondary" onClick={() => goToStep(6)}>Back to Results</button>
-        )}
-      </div>
-    </div>
+    <ScientificReportView
+      runId={runId}
+      initialRun={state.runResult && state.runResult.run_id === runId ? state.runResult : null}
+      onBack={() => goToStep(7)}
+      onLoadIntoEvaluator={async (id) => {
+        await loadRun(id)
+        goToStep(6)
+      }}
+    />
   )
 }
 
@@ -806,7 +996,7 @@ export interface RealExperimentViewProps {
 
 export default function RealExperimentView({ initialMode = 'real', initialInvestigationId }: RealExperimentViewProps) {
   const experiment = useExperiment()
-  const { state } = experiment
+  const { state, goToStep } = experiment
   const [experimentMode, setExperimentMode] = useState<'real' | 'evaluator' | 'synthetic'>(initialMode)
   const [prevInitialMode, setPrevInitialMode] = useState(initialMode)
   if (prevInitialMode !== initialMode) {
@@ -877,7 +1067,7 @@ export default function RealExperimentView({ initialMode = 'real', initialInvest
             <ConfigBanner warnings={state.config.warnings} />
           )}
 
-          <WizardProgress currentStep={state.step} />
+          <WizardProgress currentStep={state.step} onStepClick={goToStep} />
 
           <div className="re-step-content">
             {state.step === 1 && <Step1Observation experiment={experiment} />}
@@ -887,6 +1077,7 @@ export default function RealExperimentView({ initialMode = 'real', initialInvest
             {state.step === 5 && <Step5Run experiment={experiment} />}
             {state.step === 6 && <Step6Results experiment={experiment} />}
             {state.step === 7 && <Step7History experiment={experiment} />}
+            {state.step === 8 && <Step8Report experiment={experiment} />}
           </div>
         </>
       )}

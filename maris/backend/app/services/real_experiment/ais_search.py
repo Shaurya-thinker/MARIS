@@ -61,6 +61,7 @@ class VesselTrackSummary:
     first_timestamp: datetime
     last_timestamp: datetime
     source_adapter: str
+    positions: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +72,7 @@ class VesselTrackSummary:
             "first_timestamp": self.first_timestamp.isoformat(),
             "last_timestamp": self.last_timestamp.isoformat(),
             "source_adapter": self.source_adapter,
+            "positions": self.positions,
         }
 
 
@@ -203,6 +205,36 @@ class AisSearchService:
             adapter_id=getattr(self._cfg, "ais_adapter_id", "unknown"),
         )
 
+    def get_vessel_positions(
+        self,
+        *,
+        mmsis: list[str],
+        west: float | None = None,
+        south: float | None = None,
+        east: float | None = None,
+        north: float | None = None,
+        start: datetime,
+        end: datetime,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Retrieve authentic historical AIS position records for specific MMSIs.
+
+        Strictly bounded by time window and optional geographic bbox.
+        """
+        if not self.is_configured():
+            raise ConfigurationUnavailable("AIS data source not configured.")
+        from app.services.real_experiment.ais_database import query_positions_for_mmsis
+        start_utc = self._utc(start)
+        end_utc = self._utc(end)
+        return query_positions_for_mmsis(
+            mmsis=mmsis,
+            t_start=start_utc,
+            t_end=end_utc,
+            lat_min=south,
+            lat_max=north,
+            lon_min=west,
+            lon_max=east,
+        )
+
     @staticmethod
     def _group_by_vessel(
         records: list[AisPositionRecord],
@@ -223,6 +255,18 @@ class AisSearchService:
         for key, positions in groups.items():
             sorted_pos = sorted(positions, key=lambda p: p.timestamp)
             sample = sorted_pos[0]
+            v_positions = [
+                {
+                    "timestamp": p.timestamp.isoformat().replace("+00:00", "Z") if isinstance(p.timestamp, datetime) else str(p.timestamp),
+                    "lat": p.lat,
+                    "lon": p.lon,
+                    "speed": p.speed_over_ground,
+                    "heading": p.heading,
+                    "cog": p.course_over_ground,
+                    "nav_status": p.navigation_status,
+                }
+                for p in sorted_pos
+            ]
             summaries.append(
                 VesselTrackSummary(
                     mmsi=sample.mmsi,
@@ -232,6 +276,7 @@ class AisSearchService:
                     first_timestamp=sorted_pos[0].timestamp,
                     last_timestamp=sorted_pos[-1].timestamp,
                     source_adapter=adapter_id,
+                    positions=v_positions,
                 )
             )
 

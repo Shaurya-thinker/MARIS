@@ -14,6 +14,8 @@ import type {
   SentinelDiscoverResponse,
   EnvironmentSelectRequest,
   SelectedEnvironment,
+  AisPositionsRequest,
+  AisPositionsResponse,
   AisSearchRequest,
   AisSearchResponse,
   ExperimentRunRequest,
@@ -132,6 +134,19 @@ export async function searchAisVessels(
 }
 
 /**
+ * Step 4b — Retrieve authentic AIS positions for specific MMSIs.
+ */
+export async function fetchAisPositions(
+  body: AisPositionsRequest
+): Promise<AisPositionsResponse> {
+  return experimentRequest<AisPositionsResponse>('/ais/positions', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    timeoutMs: 30_000,
+  })
+}
+
+/**
  * Step 5 — Execute the full attribution experiment.
  * Runs backward drift + vessel scoring + ranking.
  */
@@ -157,6 +172,74 @@ export async function listExperimentRuns(limit = 50): Promise<ExperimentListResp
  */
 export async function getExperimentRun(runId: string): Promise<ExperimentRunResult> {
   return experimentRequest<ExperimentRunResult>(`/runs/${encodeURIComponent(runId)}`)
+}
+
+/**
+ * Step 8 — Retrieve structured scientific report data (JSON) from the backend.
+ * Uses getApiBaseUrl() to target port 8000, not the Vite dev server.
+ */
+export async function fetchScientificReport(runId: string): Promise<Record<string, any>> {
+  return experimentRequest<Record<string, any>>(`/runs/${encodeURIComponent(runId)}/report?format=json`)
+}
+
+/**
+ * Step 8 — Download publication-grade PDF report via fetch+blob.
+ * MUST use fetch+blob — direct anchor href would resolve against the Vite dev
+ * server origin (port 5173) and return the SPA HTML instead of real PDF bytes.
+ */
+export async function downloadReportPdf(runId: string): Promise<void> {
+  const baseUrl = getApiBaseUrl()
+  const url = `${baseUrl}/api/experiment/runs/${encodeURIComponent(runId)}/report?format=pdf`
+  const response = await fetch(url, { headers: { Accept: 'application/pdf' } })
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`
+    try { const body = await response.json(); if (body?.detail) detail = String(body.detail) } catch { /* ignore */ }
+    throw new ApiError(response.status, detail)
+  }
+  const blob = await response.blob()
+  const blobUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.download = `MARIS_Scientific_Report_${runId.slice(0, 8)}.pdf`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+}
+
+/**
+ * Step 8 — Download the full experiment record as structured JSON via fetch+blob.
+ * MUST use fetch+blob — direct anchor href would resolve against the Vite dev
+ * server origin (port 5173) and return the SPA HTML instead of real JSON data.
+ */
+export async function downloadExportJson(runId: string): Promise<void> {
+  const baseUrl = getApiBaseUrl()
+  const url = `${baseUrl}/api/experiment/runs/${encodeURIComponent(runId)}/export`
+  const response = await fetch(url, { headers: { Accept: 'application/json' } })
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`
+    try { const body = await response.json(); if (body?.detail) detail = String(body.detail) } catch { /* ignore */ }
+    throw new ApiError(response.status, detail)
+  }
+  const blob = await response.blob()
+  const blobUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.download = `MARIS_Experiment_${runId.slice(0, 8)}.json`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+}
+
+/** @deprecated Use downloadReportPdf() instead. */
+export function getReportPdfUrl(runId: string): string {
+  return `${getApiBaseUrl()}/api/experiment/runs/${encodeURIComponent(runId)}/report?format=pdf`
+}
+
+/** @deprecated Use downloadExportJson() instead. */
+export function getExportJsonUrl(runId: string): string {
+  return `${getApiBaseUrl()}/api/experiment/runs/${encodeURIComponent(runId)}/export`
 }
 
 // ---------------------------------------------------------------------------
