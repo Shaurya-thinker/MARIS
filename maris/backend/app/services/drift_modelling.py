@@ -120,6 +120,7 @@ class MaritimeDomainChecker:
     """
 
     _cached_masker: MaritimeMasker | None = None
+    _mask_cache: dict[tuple, tuple[np.ndarray | None, Any, Any, int, int, bool, tuple[float, float, float, float]]] = {}
 
     @classmethod
     def get_masker(cls, dataset_path: Path | str | None = None) -> MaritimeMasker:
@@ -159,9 +160,38 @@ class MaritimeDomainChecker:
             north + self.margin_deg,
         )
         self.bbox = padded_bbox
+
+        cache_key = (
+            round(padded_bbox[0], 2),
+            round(padded_bbox[1], 2),
+            round(padded_bbox[2], 2),
+            round(padded_bbox[3], 2),
+            self.resolution_deg,
+        )
+        if cache_key in self._mask_cache:
+            (
+                self.mask,
+                self.transform,
+                self.inv_transform,
+                self.width,
+                self.height,
+                self._all_land,
+                self.bbox,
+            ) = self._mask_cache[cache_key]
+            return
+
         clipped = self.masker.get_scene_clipped_ocean_geometry(padded_bbox, margin_deg=0.2)
         if clipped is None:
             self._all_land = True
+            self._mask_cache[cache_key] = (
+                None,
+                None,
+                None,
+                0,
+                0,
+                True,
+                self.bbox,
+            )
             return
 
         w, s, e, n = padded_bbox
@@ -175,6 +205,15 @@ class MaritimeDomainChecker:
             transform=self.transform,
             fill=0,
             dtype=np.uint8,
+        )
+        self._mask_cache[cache_key] = (
+            self.mask,
+            self.transform,
+            self.inv_transform,
+            self.width,
+            self.height,
+            self._all_land,
+            self.bbox,
         )
 
     def is_maritime(self, lon: float, lat: float) -> bool:

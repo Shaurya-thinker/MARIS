@@ -1,18 +1,19 @@
-import { useState } from 'react'
-import { ArrowRight, ChevronDown, ChevronUp, Compass, FlaskConical, Plus, Search, Target } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowRight, ChevronDown, ChevronUp, Search } from 'lucide-react'
 import type { InvestigationListItem } from '../../types/investigationApi'
 import type { SimulationScenario } from '../../simulation/simulationTypes'
 import type { MarisView } from '../layout/Header'
 import { incidentData as demoIncident } from '../../data/demoData'
-import RealExperimentView from './RealExperimentView'
+import { listExperimentRuns } from '../../real-experiment/experimentApi'
 
 interface InvestigationsViewProps {
   investigations: InvestigationListItem[]
   activeId: string
   onSelectInvestigation: (id: string) => void
-  onNavigateToView: (view: MarisView) => void
+  onNavigateToView: (view: MarisView, opts?: { runId?: string; investigationId?: string }) => void
   onOpenCreateModal: () => void
   simulationScenarios: SimulationScenario[]
+  isBackendUnavailable?: boolean
 }
 
 export function InvestigationsView({
@@ -22,11 +23,26 @@ export function InvestigationsView({
   onNavigateToView,
   onOpenCreateModal,
   simulationScenarios,
+  isBackendUnavailable = false,
 }: InvestigationsViewProps) {
-  const [viewMode, setViewMode] = useState<'CATALOG' | 'EXPERIMENT' | 'EVALUATOR'>('CATALOG')
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'LIVE' | 'SIMULATION' | 'HISTORICAL'>('ALL')
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'REAL' | 'LIVE' | 'SIMULATION' | 'HISTORICAL'>('ALL')
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null)
+  const [realRuns, setRealRuns] = useState<any[]>([])
+
+  useEffect(() => {
+    let isMounted = true
+    listExperimentRuns(15)
+      .then((res) => {
+        if (isMounted && res?.runs) {
+          setRealRuns(res.runs)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const allItems = [
     {
@@ -70,6 +86,18 @@ export function InvestigationsView({
         image: demoIncident.satelliteImage,
       }
     }),
+    ...realRuns.map((run) => ({
+      id: run.run_id,
+      name: `Authoritative Run: ${run.run_id?.slice(0, 16)}`,
+      type: 'REAL' as const,
+      badgeClass: 'status-badge--completed',
+      status: run.status || 'COMPLETED',
+      region: run.observation?.platform ? `${run.observation.platform} Sentinel-1 Scene` : 'Mediterranean Sea AOI',
+      created: run.created_at || 'Recent',
+      bbox: run.observation?.center ? `${run.observation.center[1]?.toFixed(2)}°E, ${run.observation.center[0]?.toFixed(2)}°N` : 'Authoritative Bounds',
+      description: `Authoritative persistent run from real_experiments.db. Evaluated ${run.candidate_count ?? 0} vessels from ais_vessels.db.`,
+      image: demoIncident.satelliteImage,
+    })),
   ]
 
   const filteredItems = allItems.filter((item) => {
@@ -86,7 +114,11 @@ export function InvestigationsView({
     return item.type === statusFilter
   })
 
-  function handleSelectAndOpen(id: string) {
+  function handleSelectAndOpen(id: string, type?: string) {
+    if (type === 'REAL') {
+      onNavigateToView('evaluator', { runId: id })
+      return
+    }
     onSelectInvestigation(id)
     onNavigateToView('workspace')
   }
@@ -102,67 +134,38 @@ export function InvestigationsView({
             Access active investigations, synthetic scenario benchmarks, and historical incident reconstructions.
           </p>
         </div>
-        <button className="primary-button" type="button" onClick={onOpenCreateModal}>
-          <Plus size={14} /> New Investigation
-        </button>
       </div>
 
-      {/* Mode Switcher: Case Catalog vs Real-Data Experiment */}
-      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0.75rem', marginBottom: '1.25rem' }}>
-        <button
-          type="button"
-          className={viewMode === 'CATALOG' ? 'primary-button' : 'secondary-button'}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', padding: '0.45rem 0.95rem', fontSize: '0.8rem' }}
-          onClick={() => setViewMode('CATALOG')}
-        >
-          <Compass size={14} /> Catalog & Benchmarks
-        </button>
-        <button
-          type="button"
-          className={viewMode === 'EVALUATOR' ? 'primary-button' : 'secondary-button'}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', padding: '0.45rem 0.95rem', fontSize: '0.8rem' }}
-          onClick={() => setViewMode('EVALUATOR')}
-        >
-          <Target size={14} /> 🎯 Evaluator Investigation
-          <span style={{
-            fontSize: '0.65rem',
-            padding: '0.1rem 0.4rem',
-            borderRadius: 'var(--radius-xs)',
-            background: viewMode === 'EVALUATOR' ? 'rgba(0,0,0,0.25)' : 'var(--color-accent-soft)',
-            color: viewMode === 'EVALUATOR' ? '#fff' : 'var(--color-accent)',
-            fontWeight: 700,
-            letterSpacing: '0.04em'
-          }}>
-            6-STEP FLOW
+      {/* 4 Clean Key Operational Metrics (Consolidated from Overview) */}
+      <div className="telemetry-hero-grid" style={{ marginBottom: '1.25rem' }}>
+        <div className="telemetry-hero-card">
+          <span className="telemetry-hero-label">Active Investigations</span>
+          <span className="telemetry-hero-value telemetry-hero-value--accent">{investigations.length}</span>
+          <span className="telemetry-hero-caption">Registered live cases</span>
+        </div>
+
+        <div className="telemetry-hero-card">
+          <span className="telemetry-hero-label">Simulation Cases</span>
+          <span className="telemetry-hero-value telemetry-hero-value--info">{simulationScenarios.length}</span>
+          <span className="telemetry-hero-caption">Synthetic scenarios</span>
+        </div>
+
+        <div className="telemetry-hero-card">
+          <span className="telemetry-hero-label">Historical Cases</span>
+          <span className="telemetry-hero-value">1</span>
+          <span className="telemetry-hero-caption">Corsica 2018 benchmark</span>
+        </div>
+
+        <div className="telemetry-hero-card">
+          <span className="telemetry-hero-label">Pipeline Status</span>
+          <span className={`telemetry-hero-value ${isBackendUnavailable ? '' : 'telemetry-hero-value--accent'}`} style={{ fontSize: '1.4rem' }}>
+            {isBackendUnavailable ? 'Offline' : 'Operational'}
           </span>
-        </button>
-        <button
-          type="button"
-          className={viewMode === 'EXPERIMENT' ? 'primary-button' : 'secondary-button'}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', padding: '0.45rem 0.95rem', fontSize: '0.8rem' }}
-          onClick={() => setViewMode('EXPERIMENT')}
-        >
-          <FlaskConical size={14} /> Interactive Real-Data Experiment
-          <span style={{
-            fontSize: '0.65rem',
-            padding: '0.1rem 0.4rem',
-            borderRadius: 'var(--radius-xs)',
-            background: viewMode === 'EXPERIMENT' ? 'rgba(0,0,0,0.25)' : 'var(--color-accent-soft)',
-            color: viewMode === 'EXPERIMENT' ? '#fff' : 'var(--color-accent)',
-            fontWeight: 700,
-            letterSpacing: '0.04em'
-          }}>
-            7-STEP WIZARD
-          </span>
-        </button>
+          <span className="telemetry-hero-caption">B1 → F3 pipeline ready</span>
+        </div>
       </div>
 
-      {viewMode === 'EVALUATOR' ? (
-        <RealExperimentView initialMode="evaluator" />
-      ) : viewMode === 'EXPERIMENT' ? (
-        <RealExperimentView initialMode="real" />
-      ) : (
-        <>
+      <>
           {/* Filter and Search Bar */}
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
             <div style={{ position: 'relative', flex: 1, minWidth: '16rem', maxWidth: '420px' }}>
@@ -186,7 +189,7 @@ export function InvestigationsView({
 
             {/* Filter Pills */}
             <div style={{ display: 'flex', gap: '0.35rem' }}>
-              {(['ALL', 'LIVE', 'SIMULATION', 'HISTORICAL'] as const).map((filter) => (
+              {(['ALL', 'REAL', 'LIVE', 'SIMULATION', 'HISTORICAL'] as const).map((filter) => (
                 <button
                   key={filter}
                   type="button"
@@ -194,7 +197,7 @@ export function InvestigationsView({
                   style={{ padding: '0.35rem 0.75rem', fontSize: '0.72rem' }}
                   onClick={() => setStatusFilter(filter)}
                 >
-                  {filter === 'ALL' ? 'All Cases' : filter === 'LIVE' ? 'Live G1' : filter === 'SIMULATION' ? 'Simulation' : 'Historical'}
+                  {filter === 'ALL' ? 'All Cases' : filter === 'REAL' ? 'Real Runs' : filter === 'LIVE' ? 'Live G1' : filter === 'SIMULATION' ? 'Simulation' : 'Historical'}
                 </button>
               ))}
             </div>
@@ -271,7 +274,7 @@ export function InvestigationsView({
                         type="button"
                         className={isSelected ? 'primary-button' : 'secondary-button'}
                         style={{ padding: '0.4rem 0.85rem', fontSize: '0.75rem' }}
-                        onClick={() => handleSelectAndOpen(item.id)}
+                        onClick={() => handleSelectAndOpen(item.id, item.type)}
                       >
                         <span>Open Workspace</span>
                         <ArrowRight size={13} />
@@ -298,8 +301,7 @@ export function InvestigationsView({
               </button>
             </div>
           )}
-        </>
-      )}
+      </>
     </div>
   )
 }

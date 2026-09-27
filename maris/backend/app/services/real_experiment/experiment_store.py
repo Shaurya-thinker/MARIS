@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     era5_path               TEXT NOT NULL,
     cmems_path              TEXT NOT NULL,
     created_at              TEXT NOT NULL,
-    scientific_disclaimer   TEXT NOT NULL
+    scientific_disclaimer   TEXT NOT NULL,
+    slick_characterization_json TEXT,
+    forward_prediction_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS experiment_run_tags (
@@ -152,14 +154,16 @@ class ExperimentStore:
                         backtrack_hours, step_hours, model_version,
                         source_lon, source_lat, source_radius_m,
                         source_zone_geojson, backward_steps, vessels_json,
-                        era5_path, cmems_path, created_at, scientific_disclaimer
+                        era5_path, cmems_path, created_at, scientific_disclaimer,
+                        slick_characterization_json, forward_prediction_json
                     ) VALUES (
                         :run_id, :satellite_product_id, :observation_time,
                         :observation_lon, :observation_lat,
                         :backtrack_hours, :step_hours, :model_version,
                         :source_lon, :source_lat, :source_radius_m,
                         :source_zone_geojson, :backward_steps, :vessels_json,
-                        :era5_path, :cmems_path, :created_at, :scientific_disclaimer
+                        :era5_path, :cmems_path, :created_at, :scientific_disclaimer,
+                        :slick_characterization_json, :forward_prediction_json
                     )
                     """,
                     row,
@@ -435,9 +439,14 @@ class ExperimentStore:
         try:
             conn.executescript(_DDL)
             conn.commit()
-            for col in ("observation_lon", "observation_lat"):
+            for col, col_type in (
+                ("observation_lon", "REAL"),
+                ("observation_lat", "REAL"),
+                ("slick_characterization_json", "TEXT"),
+                ("forward_prediction_json", "TEXT"),
+            ):
                 try:
-                    conn.execute(f"ALTER TABLE experiment_runs ADD COLUMN {col} REAL")
+                    conn.execute(f"ALTER TABLE experiment_runs ADD COLUMN {col} {col_type}")
                     conn.commit()
                 except sqlite3.OperationalError:
                     pass
@@ -472,6 +481,17 @@ class ExperimentStore:
                 obs_lon = result.backward_steps[0].get("lon", 0.0)
                 obs_lat = result.backward_steps[0].get("lat", 0.0)
 
+        slick_char_json = (
+            json.dumps(result.slick_characterization)
+            if getattr(result, "slick_characterization", None)
+            else None
+        )
+        fwd_pred_json = (
+            json.dumps(result.forward_prediction)
+            if getattr(result, "forward_prediction", None)
+            else None
+        )
+
         return {
             "run_id": result.run_id,
             "satellite_product_id": result.satellite_product_id,
@@ -491,6 +511,8 @@ class ExperimentStore:
             "cmems_path": result.cmems_path,
             "created_at": created_at,
             "scientific_disclaimer": result.scientific_disclaimer,
+            "slick_characterization_json": slick_char_json,
+            "forward_prediction_json": fwd_pred_json,
         }
 
     @staticmethod
@@ -519,6 +541,9 @@ class ExperimentStore:
                 rank=v.get("rank", 0),
                 has_meaningful_support=v.get("has_meaningful_support", True),
                 positions=v.get("positions", []),
+                model_probability=v.get("model_probability"),
+                ml_feature_vector=v.get("ml_feature_vector"),
+                behavioral_intelligence=v.get("behavioral_intelligence"),
             )
             for v in vessels_data
         ]
@@ -532,6 +557,20 @@ class ExperimentStore:
             else:
                 obs_lon = backward_steps[0].get("lon", 0.0)
                 obs_lat = backward_steps[0].get("lat", 0.0)
+
+        slick_char = None
+        if row.get("slick_characterization_json"):
+            try:
+                slick_char = json.loads(row["slick_characterization_json"])
+            except Exception:
+                slick_char = None
+
+        fwd_pred = None
+        if row.get("forward_prediction_json"):
+            try:
+                fwd_pred = json.loads(row["forward_prediction_json"])
+            except Exception:
+                fwd_pred = None
 
         return ExperimentResult(
             run_id=row["run_id"],
@@ -553,6 +592,8 @@ class ExperimentStore:
             observation_lon=obs_lon or 0.0,
             observation_lat=obs_lat or 0.0,
             status="completed",
+            slick_characterization=slick_char,
+            forward_prediction=fwd_pred,
         )
 
 

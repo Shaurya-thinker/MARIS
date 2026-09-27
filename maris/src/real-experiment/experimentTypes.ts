@@ -59,6 +59,49 @@ export interface SentinelDiscoverResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Step 1b — Slick Detection & Characterization (Step 10)
+// ---------------------------------------------------------------------------
+
+export interface SlickCharacterization {
+  detected: boolean;
+  status: string;
+  centroid_lon: number | null;
+  centroid_lat: number | null;
+  area_km2: number | null;
+  area_m2: number | null;
+  bbox: { west: number; south: number; east: number; north: number } | null;
+  slick_geometry: Record<string, unknown> | null;
+  observation_time: string;
+  satellite_product_id: string;
+  platform: string;
+  sensor: string;
+  mode: string | null;
+  polarisation: string | null;
+  confidence: number | null;
+  damping_contrast_db: number | null;
+  estimated_age_hours: number | null;
+  detection_method: string;
+  provenance: string;
+  data_fidelity: string;
+}
+
+export interface SentinelCharacterizeRequest {
+  product_id: string;
+  title?: string | null;
+  sensing_start?: string | null;
+  centroid_lon?: number | null;
+  centroid_lat?: number | null;
+  mode?: string | null;
+  polarisation?: string | null;
+  footprint?: Record<string, unknown> | null;
+  backtrack_hours?: number;
+}
+
+export interface SentinelCharacterizeResponse {
+  characterization: SlickCharacterization;
+}
+
+// ---------------------------------------------------------------------------
 // Step 2 — Environment Selection
 // ---------------------------------------------------------------------------
 
@@ -168,6 +211,37 @@ export interface ExperimentRunRequest {
   step_hours?: number;
   spill_area_m2?: number | null;
   selected_vessels: VesselInput[];
+  slick_characterization?: SlickCharacterization | null;
+  forward_prediction_hours?: number;
+  forward_step_hours?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Step 12 — ML Attribution + AIS Behavioral Intelligence types
+// ---------------------------------------------------------------------------
+
+export interface BehavioralAnomalyItem {
+  anomaly_type: string;
+  severity: string;           // 'info' | 'notable' | 'anomalous'
+  description: string;
+  timestamp: string;
+  location_lon: number;
+  location_lat: number;
+  inside_source_zone: boolean;
+  observed_value: number | null;
+  baseline_or_threshold_value: number | null;
+  details: Record<string, unknown>;
+}
+
+export interface VesselBehavioralIntelligence {
+  anomalies: BehavioralAnomalyItem[];
+  transmission_gap_count: number;
+  loitering_detected: boolean;
+  observed_loitering_duration_seconds: number;
+  nav_status_consistent: boolean;
+  summary_flags: string[];
+  /** Contextual-only note: findings do NOT modify evidence_consistency_score */
+  analysis_note: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +263,16 @@ export interface VesselFeatures {
   rank: number;
   has_meaningful_support: boolean;
   positions?: AisPosition[];
+  /** Step 12 — Independent ML Model Probability in [0,1].
+   *  Not a probability of legal responsibility or causation.
+   *  NOT forced to sum to 1 across candidates; NOT used to re-rank. */
+  model_probability?: number | null;
+  /** Step 12 — 10-dimensional ML feature vector.
+   *  ML feature-vector values are model inputs produced by the feature extractor
+   *  and may use definitions or normalization different from the physical evidence presentation metrics. */
+  ml_feature_vector?: Record<string, number> | null;
+  /** Step 12 — Contextual AIS Rule-Based Detector Findings. Does NOT alter evidence_consistency_score. */
+  behavioral_intelligence?: VesselBehavioralIntelligence | null;
 }
 
 export interface BackwardStep {
@@ -201,6 +285,55 @@ export interface BackwardStep {
   v_wind_ms?: number | null;
   u_current_ms?: number | null;
   v_current_ms?: number | null;
+}
+
+export interface ForwardDriftStep {
+  step: number;
+  lon: number;
+  lat: number;
+  timestamp: string | null;
+  u_wind_ms?: number | null;
+  v_wind_ms?: number | null;
+  u_current_ms?: number | null;
+  v_current_ms?: number | null;
+}
+
+export interface ForwardPredictionResult {
+  observation_lon: number;
+  observation_lat: number;
+  origin_lon?: number;
+  origin_lat?: number;
+  observation_time: string;
+  prediction_hours: number;
+  step_hours: number;
+  model_version: string;
+  status: string;
+  termination_status?: string;
+  steps: ForwardDriftStep[];
+  final_lon: number;
+  final_lat: number;
+  displacement_km: number;
+  total_distance_km?: number;
+  provenance?: Record<string, string>;
+  scientific_disclaimer?: string;
+}
+
+export interface ForwardPredictionRequest {
+  satellite_product_id?: string;
+  observation_lon?: number;
+  observation_lat?: number;
+  origin_lon?: number;
+  origin_lat?: number;
+  observation_time: string;
+  era5_netcdf_path: string;
+  cmems_netcdf_path: string;
+  prediction_hours?: number;
+  step_hours?: number;
+}
+
+export interface ForwardPredictionResponse {
+  forward_prediction?: ForwardPredictionResult;
+  prediction?: ForwardPredictionResult;
 }
 
 export interface ExperimentRunResult {
@@ -224,6 +357,8 @@ export interface ExperimentRunResult {
   cmems_path: string;
   created_at: string;
   scientific_disclaimer: string;
+  slick_characterization?: SlickCharacterization | null;
+  forward_prediction?: ForwardPredictionResult | null;
 }
 
 export interface ExperimentRunSummary {
@@ -240,6 +375,8 @@ export interface ExperimentRunSummary {
   source_lat: number;
   source_radius_m: number;
   created_at: string;
+  slick_characterization?: SlickCharacterization | null;
+  forward_prediction?: ForwardPredictionResult | null;
 }
 
 export interface ExperimentListResponse {
@@ -270,6 +407,13 @@ export interface ExperimentWizardState {
   spillAreaM2: number | null;
   observationLat: number | null;
   observationLon: number | null;
+  // Step 11 — Forward Prediction configuration & preview
+  forwardPredictionHours: number;
+  forwardStepHours: number;
+  enableForwardPrediction: boolean;
+  forwardPrediction: ForwardPredictionResult | null;
+  forwardPredicting: boolean;
+  forwardPredictError: string | null;
   // Step 4 — Vessel selection
   aisSearchResult: AisSearchResponse | null;
   selectedVessels: VesselInput[];
@@ -280,6 +424,8 @@ export interface ExperimentWizardState {
   runResult: ExperimentRunResult | null;
   // Step 7 — History
   runHistory: ExperimentRunSummary[];
+  // Step 10 — Detected Slick Characterization
+  slickCharacterization: SlickCharacterization | null;
 }
 
 // ---------------------------------------------------------------------------

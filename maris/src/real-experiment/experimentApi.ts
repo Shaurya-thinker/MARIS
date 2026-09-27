@@ -12,6 +12,9 @@ import type {
   ExperimentConfig,
   SentinelDiscoverRequest,
   SentinelDiscoverResponse,
+  SentinelCharacterizeRequest,
+  SentinelCharacterizeResponse,
+  SlickCharacterization,
   EnvironmentSelectRequest,
   SelectedEnvironment,
   AisPositionsRequest,
@@ -21,6 +24,8 @@ import type {
   ExperimentRunRequest,
   ExperimentRunResult,
   ExperimentListResponse,
+  ForwardPredictionRequest,
+  ForwardPredictionResponse,
   SyntheticScenario,
   SyntheticRunResult,
   ActiveModelInfo,
@@ -67,7 +72,15 @@ async function experimentRequest<T>(
       let detail = `HTTP ${response.status}`
       try {
         const body = await response.json()
-        if (body?.detail) detail = String(body.detail)
+        if (body?.detail) {
+          if (typeof body.detail === 'string') {
+            detail = body.detail
+          } else if (Array.isArray(body.detail)) {
+            detail = body.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ')
+          } else {
+            detail = JSON.stringify(body.detail)
+          }
+        }
       } catch { /* ignore */ }
       throw new ApiError(response.status, detail)
     }
@@ -103,6 +116,19 @@ export async function discoverSentinelProducts(
     method: 'POST',
     body: JSON.stringify(body),
     timeoutMs: 60_000, // catalogue query; typically <5s
+  })
+}
+
+/**
+ * Step 1b — Automated detection & characterization of oil slick / anomaly (Step 10).
+ */
+export async function characterizeSentinelObservation(
+  body: SentinelCharacterizeRequest
+): Promise<SentinelCharacterizeResponse> {
+  return experimentRequest<SentinelCharacterizeResponse>('/sentinel/characterize', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    timeoutMs: 15_000,
   })
 }
 
@@ -157,6 +183,20 @@ export async function runExperiment(
     method: 'POST',
     body: JSON.stringify(body),
     timeoutMs: 10 * 60_000, // drift integration can take time for long backtrack
+  })
+}
+
+/**
+ * Step 11 — Predict forward drift from observed slick position into future time.
+ * Hits /api/experiment/drift/forward-predict.
+ */
+export async function runForwardPrediction(
+  body: ForwardPredictionRequest
+): Promise<ForwardPredictionResponse> {
+  return experimentRequest<ForwardPredictionResponse>('/drift/forward-predict', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    timeoutMs: 3 * 60_000,
   })
 }
 
@@ -373,3 +413,62 @@ export async function getEvaluatorInvestigation(
   })
 }
 
+// ---------------------------------------------------------------------------
+// AIS Fleet Registry
+// ---------------------------------------------------------------------------
+
+export interface AisFleetVessel {
+  vessel_id: string
+  mmsi: string | null
+  vessel_name: string | null
+  vessel_type: string | null
+  flag_country: string | null
+  call_sign: string | null
+  length: number | null
+  width: number | null
+  draft: number | null
+  imo: string | null
+  source_type: string
+  is_real_observation: number
+  created_at: string
+  provider_name: string | null
+  geographic_coverage: string | null
+  coverage_start: string | null
+  coverage_end: string | null
+  position_count: number
+  first_seen: string | null
+  last_seen: string | null
+}
+
+export interface AisFleetResponse {
+  stats: {
+    total_sources: number
+    total_batches: number
+    total_vessels: number
+    total_positions: number
+    real_positions: number
+    synthetic_or_manual_positions: number
+    vessel_provenance: Array<{ source_type: string; is_real_observation: number; cnt: number }>
+    position_provenance: Array<{ source_type: string; is_real_observation: number; cnt: number }>
+  }
+  source_breakdown: Array<{ source_type: string; cnt: number }>
+  total_matching: number
+  limit: number
+  offset: number
+  vessels: AisFleetVessel[]
+}
+
+export async function fetchAisFleet(params?: {
+  limit?: number
+  offset?: number
+  search?: string
+  source_type?: string
+}): Promise<AisFleetResponse> {
+  const qs = new URLSearchParams()
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.offset != null) qs.set('offset', String(params.offset))
+  if (params?.search) qs.set('search', params.search)
+  if (params?.source_type) qs.set('source_type', params.source_type)
+  const query = qs.toString() ? `?${qs.toString()}` : ''
+  return experimentRequest<AisFleetResponse>(`/ais/fleet${query}`)
+}

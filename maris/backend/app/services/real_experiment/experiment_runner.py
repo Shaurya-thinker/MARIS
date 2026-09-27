@@ -24,7 +24,7 @@ import json
 import math
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +54,63 @@ class ExperimentError(Exception):
 # ---------------------------------------------------------------------------
 
 @dataclass
+class BehavioralAnomalyItem:
+    """Serializable representation of one detected behavioral anomaly."""
+    anomaly_type: str
+    severity: str
+    description: str
+    timestamp: str
+    location_lon: float
+    location_lat: float
+    inside_source_zone: bool
+    observed_value: float | None
+    baseline_or_threshold_value: float | None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "anomaly_type": self.anomaly_type,
+            "severity": self.severity,
+            "description": self.description,
+            "timestamp": self.timestamp,
+            "location_lon": self.location_lon,
+            "location_lat": self.location_lat,
+            "inside_source_zone": self.inside_source_zone,
+            "observed_value": self.observed_value,
+            "baseline_or_threshold_value": self.baseline_or_threshold_value,
+            "details": self.details,
+        }
+
+
+@dataclass
+class VesselBehavioralIntelligence:
+    """Lightweight behavioral analysis result for one candidate vessel in the real-experiment pipeline.
+
+    Populated by _run_behavioral_analysis() using the same deterministic detectors as Stage E3.
+    ZERO-FABRICATION INVARIANT: Never interpolates or infers missing AIS positions.
+    NOTE: These findings are contextual evidence ONLY. They do NOT modify evidence_consistency_score.
+    """
+    anomalies: list[BehavioralAnomalyItem] = field(default_factory=list)
+    transmission_gap_count: int = 0
+    loitering_detected: bool = False
+    observed_loitering_duration_seconds: float = 0.0
+    nav_status_consistent: bool = True
+    summary_flags: list[str] = field(default_factory=list)
+    analysis_note: str = "Deterministic rule-based behavioral analysis (Stage E3 detectors). Findings are contextual only and do not alter physical drift attribution scores."
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "anomalies": [a.as_dict() for a in self.anomalies],
+            "transmission_gap_count": self.transmission_gap_count,
+            "loitering_detected": self.loitering_detected,
+            "observed_loitering_duration_seconds": self.observed_loitering_duration_seconds,
+            "nav_status_consistent": self.nav_status_consistent,
+            "summary_flags": self.summary_flags,
+            "analysis_note": self.analysis_note,
+        }
+
+
+@dataclass
 class VesselFeatures:
     """Calculated features for one vessel candidate.  No hardcoded values."""
     vessel_id: str          # MMSI or constructed identifier
@@ -72,6 +129,11 @@ class VesselFeatures:
     rank: int = 0
     has_meaningful_support: bool = True    # False if no spatial/temporal overlap at all
     positions: list[dict[str, Any]] = field(default_factory=list)
+    # Step 12 — ML Model Probability (independent binary, not forced to sum to 1. Not a probability of legal responsibility or causation.)
+    model_probability: float | None = None
+    ml_feature_vector: dict[str, float] | None = None
+    # Step 12 — AIS Behavioral Intelligence (contextual rule-based detector findings, decoupled from drift scoring)
+    behavioral_intelligence: VesselBehavioralIntelligence | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +151,13 @@ class VesselFeatures:
             "rank": self.rank,
             "has_meaningful_support": self.has_meaningful_support,
             "positions": self.positions,
+            "model_probability": self.model_probability,
+            "ml_feature_vector": self.ml_feature_vector,
+            "behavioral_intelligence": (
+                self.behavioral_intelligence.as_dict()
+                if self.behavioral_intelligence is not None and hasattr(self.behavioral_intelligence, "as_dict")
+                else self.behavioral_intelligence
+            ),
         }
 
 
@@ -122,6 +191,8 @@ class ExperimentResult:
     observation_lon: float = 0.0
     observation_lat: float = 0.0
     status: str = "completed"
+    slick_characterization: dict[str, Any] | None = None
+    forward_prediction: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.observation_time, str):
@@ -150,6 +221,8 @@ class ExperimentResult:
             "cmems_path": self.cmems_path,
             "created_at": self.created_at.isoformat(),
             "scientific_disclaimer": self.scientific_disclaimer,
+            "slick_characterization": self.slick_characterization,
+            "forward_prediction": self.forward_prediction,
         }
 
 
@@ -182,6 +255,9 @@ class ExperimentRunner:
         selected_vessels: list[dict[str, Any]] | None = None,
         search_bbox: dict[str, float] | None = None,
         ais_db_path: Path | None = None,
+        slick_characterization: dict[str, Any] | None = None,
+        forward_prediction_hours: float | None = None,
+        forward_step_hours: float = 1.0,
     ) -> ExperimentResult:
         """Execute the full real-data attribution experiment.
 
@@ -199,6 +275,9 @@ class ExperimentRunner:
                                     (list of {timestamp, lat, lon, speed, heading}).
             search_bbox:            Optional spatial bounding box dict with west/south/east/north.
             ais_db_path:            Optional path to ais_vessels.db (for isolated test fixtures).
+            slick_characterization: Optional Step 10 automated slick characterization dict.
+            forward_prediction_hours: Optional Step 11 forward prediction horizon in hours.
+            forward_step_hours:     Euler integration step size for forward prediction.
 
         Returns:
             ExperimentResult with source reconstruction and ranked vessel features.
@@ -210,6 +289,17 @@ class ExperimentRunner:
             run_id = str(uuid.uuid4())
 
         obs_utc = _utc(observation_time)
+
+        # Step 10 — Automated slick characterization
+        from app.services.real_experiment.slick_characterization import characterize_observation
+        if slick_characterization is None:
+            slick_characterization = characterize_observation(
+                product_id=satellite_product_id,
+                sensing_start=obs_utc.isoformat(),
+                centroid_lon=observation_lon,
+                centroid_lat=observation_lat,
+                backtrack_hours=backtrack_hours,
+            )
 
         # Resolve observation coordinates:
         # A Sentinel-1 product catalogue query returns the geometric centroid of the entire
@@ -226,6 +316,12 @@ class ExperimentRunner:
         if is_corsica and origin_lat < 42.5:
             origin_lat = 43.24833
             origin_lon = 9.47833
+        elif slick_characterization and slick_characterization.get("centroid_lat") is not None and (origin_lat == 0.0 and origin_lon == 0.0):
+            origin_lat = slick_characterization["centroid_lat"]
+            origin_lon = slick_characterization["centroid_lon"]
+
+        if spill_area_m2 is None and slick_characterization and slick_characterization.get("area_m2"):
+            spill_area_m2 = slick_characterization["area_m2"]
 
         # Step 1 — Backward drift (reuses Stage D3 pure function)
         try:
@@ -331,10 +427,103 @@ class ExperimentRunner:
                 )
                 vessel_features.append(features)
 
-        # Step 4 — Rank by evidence consistency score
+        # Step 4 — Rank by evidence consistency score (physical score unchanged)
         vessel_features.sort(key=lambda f: f.evidence_consistency_score, reverse=True)
         for rank_idx, vf in enumerate(vessel_features, start=1):
             vf.rank = rank_idx
+
+        # Step 12a — ML Model Probability (independent per-candidate binary probability)
+        # Not a probability of legal responsibility or causation.
+        # Training provenance: Model trained on synthetic benchmark scenarios; real-data inference is an experimental contextual signal and has not been established as a calibrated real-world responsibility probability.
+        # ML feature-vector values are model inputs produced by the feature extractor and may use definitions or normalization different from the physical evidence presentation metrics.
+        # Runs AFTER ranking to ensure physical ordering is unaffected.
+        # model_probability is additive contextual information, NOT used to re-sort.
+        try:
+            from app.services.synthetic_experiment.model_registry import load_model
+            from app.services.synthetic_experiment.feature_builder import (
+                FEATURE_NAMES,
+                extract_vessel_features,
+            )
+            import numpy as np
+
+            ml_model = load_model()
+            for vf in vessel_features:
+                try:
+                    # Reconstruct vessel_data dict with positions for feature extraction
+                    vessel_data_for_ml = {
+                        "positions": vf.positions,
+                        "mmsi": vf.mmsi,
+                        "vessel_name": vf.vessel_name,
+                    }
+                    feat_dict = extract_vessel_features(
+                        vessel_data=vessel_data_for_ml,
+                        source_lon=source_lon,
+                        source_lat=source_lat,
+                        source_radius_m=source_radius_m,
+                        observation_time=obs_utc,
+                        backtrack_hours=backtrack_hours,
+                        backward_steps=[
+                            type("_S", (), {"lon": s["lon"], "lat": s["lat"]})()
+                            for s in [
+                                {
+                                    "step": i,
+                                    "lon": bs.lon if hasattr(bs, "lon") else bs.get("lon", source_lon),
+                                    "lat": bs.lat if hasattr(bs, "lat") else bs.get("lat", source_lat),
+                                }
+                                for i, bs in enumerate(backward_steps)
+                            ]
+                        ],
+                    )
+                    feat_array = np.array(
+                        [feat_dict.get(fn, 0.0) for fn in FEATURE_NAMES],
+                        dtype=float,
+                    ).reshape(1, -1)
+                    proba = ml_model.predict_candidate_probabilities(feat_array)
+                    vf.model_probability = float(round(float(proba[0]), 4))
+                    vf.ml_feature_vector = {
+                        fn: float(round(feat_dict.get(fn, 0.0), 5))
+                        for fn in FEATURE_NAMES
+                    }
+                except Exception:
+                    # Graceful degradation: ML failure must not abort backward attribution
+                    vf.model_probability = None
+                    vf.ml_feature_vector = None
+        except Exception:
+            # model_registry unavailable or sklearn not installed — skip ML quietly
+            pass
+
+        # Step 12b — AIS Behavioral Intelligence per candidate
+        # Runs AFTER ranking, uses the same deterministic Stage E3 detectors.
+        # Findings are contextual only; do NOT alter evidence_consistency_score.
+        for vf in vessel_features:
+            try:
+                vf.behavioral_intelligence = _run_behavioral_analysis(
+                    positions=vf.positions,
+                    source_lon=source_lon,
+                    source_lat=source_lat,
+                    source_radius_m=source_radius_m,
+                )
+            except Exception:
+                vf.behavioral_intelligence = None
+
+        # Step 5 — Forward drift prediction (Step 11, if requested)
+        forward_prediction_data = None
+        if forward_prediction_hours is not None and forward_prediction_hours > 0:
+            try:
+                from app.services.real_experiment.forward_prediction import predict_forward_drift
+                forward_prediction_data = predict_forward_drift(
+                    origin_lon=origin_lon,
+                    origin_lat=origin_lat,
+                    observation_time=obs_utc,
+                    era5_netcdf_path=era5_netcdf_path,
+                    cmems_netcdf_path=cmems_netcdf_path,
+                    prediction_hours=forward_prediction_hours,
+                    step_hours=forward_step_hours,
+                    slick_characterization=slick_characterization,
+                )
+            except Exception:
+                # Do not abort backward attribution if forward prediction meets a data horizon limitation
+                forward_prediction_data = None
 
         return ExperimentResult(
             run_id=run_id,
@@ -367,6 +556,8 @@ class ExperimentRunner:
             observation_lon=origin_lon,
             observation_lat=origin_lat,
             status="completed",
+            slick_characterization=slick_characterization,
+            forward_prediction=forward_prediction_data,
         )
 
     # ------------------------------------------------------------------
@@ -564,6 +755,186 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlam = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
     return 2 * R * math.asin(math.sqrt(a))
+
+
+def _run_behavioral_analysis(
+    *,
+    positions: list[dict[str, Any]],
+    source_lon: float,
+    source_lat: float,
+    source_radius_m: float,
+    gap_threshold_seconds: float = 1800.0,
+    loitering_speed_threshold_knots: float = 3.0,
+    course_threshold_deg: float = 45.0,
+    speed_drop_threshold_knots: float = 5.0,
+) -> VesselBehavioralIntelligence:
+    """Run Stage E3 behavioral detectors directly on raw AIS position dicts.
+
+    This bypasses the Stage E1 CandidateVessel domain model entirely so that
+    the real-experiment pipeline does not need to build the full investigation
+    domain graph.  All constraints still apply:
+      - ZERO-FABRICATION: no AIS positions are interpolated or inferred.
+      - Findings are decoupled from evidence_consistency_score.
+      - No intent, culpability, or legal attribution is inferred.
+    """
+    from app.services.behavioral_intelligence import (
+        detect_transmission_gaps,
+        detect_loitering,
+        detect_course_alterations,
+        detect_speed_anomalies,
+    )
+    from app.models.behavioral_intelligence import BehavioralAnomalyType
+    from app.models.vessel import VesselPosition  # used as lightweight DTO
+
+    # Build VesselPosition-compatible objects from raw AIS dicts
+    vessel_positions: list[Any] = []
+    for pos in positions:
+        try:
+            ts = pos.get("timestamp")
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if ts is None:
+                continue
+            ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+            vessel_positions.append(
+                VesselPosition(
+                    timestamp=ts_utc,
+                    lon=float(pos["lon"]),
+                    lat=float(pos["lat"]),
+                    speed=float(pos["speed"]) if pos.get("speed") is not None else None,
+                    course=float(pos["heading"]) if pos.get("heading") is not None else None,
+                    heading=float(pos["heading"]) if pos.get("heading") is not None else None,
+                )
+            )
+        except Exception:
+            continue
+
+    vessel_positions.sort(key=lambda p: p.timestamp)
+
+    radius_km = max(source_radius_m / 1000.0, 0.5)
+    # No polygon ring available — use empty ring (detectors fall back to radial check)
+    polygon_ring: list[list[float]] = []
+
+    all_anomalies: list[BehavioralAnomalyItem] = []
+    summary_flags: list[str] = []
+
+    # --- A. Transmission gaps ---
+    gaps, gap_anomalies = detect_transmission_gaps(
+        positions=vessel_positions,
+        polygon_ring=polygon_ring,
+        center_lon=source_lon,
+        center_lat=source_lat,
+        radius_km=radius_km,
+        gap_threshold_seconds=gap_threshold_seconds,
+    )
+    for anom in gap_anomalies:
+        all_anomalies.append(
+            BehavioralAnomalyItem(
+                anomaly_type=anom.anomaly_type.value,
+                severity=anom.severity.value,
+                description=anom.description,
+                timestamp=anom.timestamp.isoformat(),
+                location_lon=anom.location_lon,
+                location_lat=anom.location_lat,
+                inside_source_zone=anom.inside_source_zone,
+                observed_value=anom.observed_value,
+                baseline_or_threshold_value=anom.baseline_or_threshold_value,
+                details=anom.details,
+            )
+        )
+    if gaps:
+        summary_flags.append(BehavioralAnomalyType.AIS_TRANSMISSION_GAP.value)
+
+    # --- B. Speed anomalies ---
+    speed_anoms = detect_speed_anomalies(
+        positions=vessel_positions,
+        polygon_ring=polygon_ring,
+        center_lon=source_lon,
+        center_lat=source_lat,
+        radius_km=radius_km,
+        speed_drop_threshold_knots=speed_drop_threshold_knots,
+    )
+    for anom in speed_anoms:
+        all_anomalies.append(
+            BehavioralAnomalyItem(
+                anomaly_type=anom.anomaly_type.value,
+                severity=anom.severity.value,
+                description=anom.description,
+                timestamp=anom.timestamp.isoformat(),
+                location_lon=anom.location_lon,
+                location_lat=anom.location_lat,
+                inside_source_zone=anom.inside_source_zone,
+                observed_value=anom.observed_value,
+                baseline_or_threshold_value=anom.baseline_or_threshold_value,
+                details=anom.details,
+            )
+        )
+        if anom.anomaly_type.value not in summary_flags:
+            summary_flags.append(anom.anomaly_type.value)
+
+    # --- C. Course alterations ---
+    course_anoms = detect_course_alterations(
+        positions=vessel_positions,
+        polygon_ring=polygon_ring,
+        center_lon=source_lon,
+        center_lat=source_lat,
+        radius_km=radius_km,
+        course_threshold_deg=course_threshold_deg,
+    )
+    for anom in course_anoms:
+        all_anomalies.append(
+            BehavioralAnomalyItem(
+                anomaly_type=anom.anomaly_type.value,
+                severity=anom.severity.value,
+                description=anom.description,
+                timestamp=anom.timestamp.isoformat(),
+                location_lon=anom.location_lon,
+                location_lat=anom.location_lat,
+                inside_source_zone=anom.inside_source_zone,
+                observed_value=anom.observed_value,
+                baseline_or_threshold_value=anom.baseline_or_threshold_value,
+                details=anom.details,
+            )
+        )
+        if anom.anomaly_type.value not in summary_flags:
+            summary_flags.append(anom.anomaly_type.value)
+
+    # --- D. Loitering ---
+    loit_detected, loit_dur, loit_anoms = detect_loitering(
+        positions=vessel_positions,
+        polygon_ring=polygon_ring,
+        center_lon=source_lon,
+        center_lat=source_lat,
+        radius_km=radius_km,
+        loitering_speed_threshold_knots=loitering_speed_threshold_knots,
+        is_anchored=False,
+    )
+    for anom in loit_anoms:
+        all_anomalies.append(
+            BehavioralAnomalyItem(
+                anomaly_type=anom.anomaly_type.value,
+                severity=anom.severity.value,
+                description=anom.description,
+                timestamp=anom.timestamp.isoformat(),
+                location_lon=anom.location_lon,
+                location_lat=anom.location_lat,
+                inside_source_zone=anom.inside_source_zone,
+                observed_value=anom.observed_value,
+                baseline_or_threshold_value=anom.baseline_or_threshold_value,
+                details=anom.details,
+            )
+        )
+    if loit_detected and BehavioralAnomalyType.LOITERING_OBSERVED.value not in summary_flags:
+        summary_flags.append(BehavioralAnomalyType.LOITERING_OBSERVED.value)
+
+    return VesselBehavioralIntelligence(
+        anomalies=all_anomalies,
+        transmission_gap_count=len(gaps),
+        loitering_detected=loit_detected,
+        observed_loitering_duration_seconds=round(loit_dur, 1),
+        nav_status_consistent=True,  # Nav status data not available in raw AIS dicts
+        summary_flags=summary_flags,
+    )
 
 
 def _compute_score(

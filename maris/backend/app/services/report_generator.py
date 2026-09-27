@@ -117,6 +117,20 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
         era5_path = r.get("era5_path", "ECMWF ERA5 10m Wind NetCDF")
         cmems_path = r.get("cmems_path", "Copernicus Marine CMEMS NetCDF")
         disclaimer = r.get("scientific_disclaimer", "")
+        slick_char = r.get("slick_characterization")
+        if not slick_char and r.get("slick_characterization_json"):
+            try:
+                import json
+                slick_char = json.loads(r["slick_characterization_json"])
+            except Exception:
+                slick_char = None
+        fwd_pred = r.get("forward_prediction")
+        if not fwd_pred and r.get("forward_prediction_json"):
+            try:
+                import json
+                fwd_pred = json.loads(r["forward_prediction_json"])
+            except Exception:
+                fwd_pred = None
     else:
         run_id = getattr(run, "run_id", "")
         model_version = getattr(run, "model_version", "experiment_runner_v1")
@@ -136,6 +150,8 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
         era5_path = getattr(run, "era5_path", "ECMWF ERA5 10m Wind NetCDF")
         cmems_path = getattr(run, "cmems_path", "Copernicus Marine CMEMS NetCDF")
         disclaimer = getattr(run, "scientific_disclaimer", "")
+        slick_char = getattr(run, "slick_characterization", None)
+        fwd_pred = getattr(run, "forward_prediction", None)
 
     # Resolve observation point if missing from benchmark or steps
     if (obs_lat is None or obs_lat == 0.0) and steps:
@@ -173,6 +189,11 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
                 "ais_coverage_fraction": float(v.get("ais_coverage_fraction", 0.0)),
                 "has_meaningful_support": bool(v.get("has_meaningful_support", False)),
                 "positions_count": len(v.get("positions") or []),
+                # Step 12 — ML attribution
+                "model_probability": v.get("model_probability"),
+                "ml_feature_vector": v.get("ml_feature_vector"),
+                # Step 12 — Behavioral intelligence
+                "behavioral_intelligence": v.get("behavioral_intelligence"),
             }
         else:
             positions = getattr(v, "positions", []) or []
@@ -191,6 +212,16 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
                 "ais_coverage_fraction": float(getattr(v, "ais_coverage_fraction", 0.0)),
                 "has_meaningful_support": bool(getattr(v, "has_meaningful_support", False)),
                 "positions_count": len(positions),
+                # Step 12 — ML attribution
+                "model_probability": getattr(v, "model_probability", None),
+                "ml_feature_vector": getattr(v, "ml_feature_vector", None),
+                # Step 12 — Behavioral intelligence
+                "behavioral_intelligence": (
+                    getattr(v, "behavioral_intelligence", None).as_dict()
+                    if getattr(v, "behavioral_intelligence", None) is not None
+                    and hasattr(getattr(v, "behavioral_intelligence", None), "as_dict")
+                    else getattr(v, "behavioral_intelligence", None)
+                ),
             }
         candidates.append(c_dict)
 
@@ -251,6 +282,66 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
             "uncertainty_radius_km": round(src_radius / 1000.0, 1),
             "step_count": len(steps),
         },
+        "oil_spill_characterization": {
+            "detection_status": slick_char.get("status", "DETECTED") if slick_char else "HISTORICAL_RECORD",
+            "centroid": (
+                f"{slick_char.get('centroid_lat', obs_lat):.4f}°N, {slick_char.get('centroid_lon', obs_lon):.4f}°E"
+                if slick_char and slick_char.get("centroid_lat") is not None
+                else f"{obs_lat:.4f}°N, {obs_lon:.4f}°E"
+            ),
+            "estimated_area_km2": slick_char.get("area_km2") if slick_char else None,
+            "damping_contrast_db": slick_char.get("damping_contrast_db") if slick_char else None,
+            "confidence_score": slick_char.get("confidence") if slick_char else None,
+            "estimated_age_hours": slick_char.get("estimated_age_hours", backtrack_h) if slick_char else backtrack_h,
+            "detection_method": (
+                slick_char.get("detection_method", "Adaptive Thresholding")
+                if slick_char
+                else "Historical Geometric Anchor"
+            ),
+            "sensor_mode": (
+                f"{slick_char.get('sensor', 'Sentinel-1')} ({slick_char.get('mode', 'IW')})"
+                if slick_char
+                else "Sentinel-1 SAR"
+            ),
+            "polarisation": slick_char.get("polarisation", "VV") if slick_char else "VV",
+            "provenance": slick_char.get("provenance", "ESA Copernicus") if slick_char else "Copernicus Archive",
+            "data_fidelity": (
+                slick_char.get("data_fidelity", "Observed")
+                if slick_char
+                else "Historical experiment (characterization unrecorded)"
+            ),
+        },
+        "forward_drift_prediction": (
+            {
+                "model": fwd_pred.get("model_version", "leeway_euler_v1"),
+                "prediction_hours": fwd_pred.get("prediction_hours", 0.0),
+                "step_hours": fwd_pred.get("step_hours", 1.0),
+                "steps_count": len(fwd_pred.get("steps", [])),
+                "origin_coordinate": f"{fwd_pred.get('origin_lat', obs_lat):.4f}°N, {fwd_pred.get('origin_lon', obs_lon):.4f}°E",
+                "observation_time": fwd_pred.get("observation_time", obs_time),
+                "final_lat": fwd_pred.get("final_lat"),
+                "final_lon": fwd_pred.get("final_lon"),
+                "final_position": (
+                    f"{fwd_pred['final_lat']:.4f}°N, {fwd_pred['final_lon']:.4f}°E"
+                    if fwd_pred.get("final_lat") is not None and fwd_pred.get("final_lon") is not None
+                    else "—"
+                ),
+                "total_distance_km": fwd_pred.get("total_distance_km", 0.0),
+                "termination_status": fwd_pred.get("termination_status", "completed"),
+                "forcing_modes": fwd_pred.get("forcing_modes", ["current_plus_windage"]),
+                "current_fallback_used": fwd_pred.get("current_fallback_used", False),
+                "scientific_disclaimer": fwd_pred.get(
+                    "scientific_disclaimer",
+                    "Deterministic Lagrangian Leeway-Euler model projection under supplied ERA5 wind and CMEMS current forcing fields. It is NOT an observed future trajectory, operational forecast, or guaranteed path. No statistical forward uncertainty distribution is assumed."
+                ),
+                "provenance": fwd_pred.get(
+                    "provenance",
+                    "ECMWF ERA5 10m Wind + CMEMS GLORYS12V1 Surface Currents via Stage D1 Deterministic Leeway-Euler Engine"
+                ),
+            }
+            if fwd_pred
+            else None
+        ),
         "candidates": candidates,
         "provenance": {
             "satellite_observation": "European Space Agency (ESA) Copernicus Sentinel-1",
@@ -513,6 +604,70 @@ def render_scientific_report_pdf(report_data: dict[str, Any]) -> bytes:
         )
     )
     story.append(env_table)
+    story.append(Spacer(1, 8))
+
+    # 4b. Oil-Spill Characterization Table (Step 10)
+    spill_char = report_data.get("oil_spill_characterization")
+    if spill_char:
+        area_str = (
+            f"{spill_char['estimated_area_km2']:.1f} km²"
+            if spill_char.get("estimated_area_km2") is not None
+            else "Unavailable (unsegmented scene)"
+        )
+        contrast_str = (
+            f"{spill_char['damping_contrast_db']:.1f} dB"
+            if spill_char.get("damping_contrast_db") is not None
+            else "Unavailable"
+        )
+        conf_str = (
+            f"{spill_char['confidence_score']*100:.0f}%"
+            if spill_char.get("confidence_score") is not None
+            else "Geometric anchor"
+        )
+        age_str = (
+            f"{spill_char['estimated_age_hours']:.1f} h"
+            if spill_char.get("estimated_age_hours") is not None
+            else "—"
+        )
+
+        char_data = [
+            [
+                Paragraph("<b>Detection Status</b>", body_style),
+                Paragraph(f"<b>{spill_char.get('detection_status', 'DETECTED')}</b>", body_style),
+                Paragraph("<b>Estimated Area</b>", body_style),
+                Paragraph(area_str, table_cell_style),
+            ],
+            [
+                Paragraph("<b>Slick Centroid</b>", body_style),
+                Paragraph(spill_char.get("centroid", "—"), table_mono_style),
+                Paragraph("<b>Damping Contrast</b>", body_style),
+                Paragraph(contrast_str, table_cell_style),
+            ],
+            [
+                Paragraph("<b>Detection Method</b>", body_style),
+                Paragraph(f"<font size='7'>{spill_char.get('detection_method', 'Adaptive Thresholding')}</font>", table_cell_style),
+                Paragraph("<b>Confidence / Age</b>", body_style),
+                Paragraph(f"{conf_str} | Age: {age_str}", table_cell_style),
+            ],
+        ]
+        char_table = Table(char_data, colWidths=[105, 155, 110, 134])
+        char_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), c_bg_alt),
+                    ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+        story.append(Paragraph("<font size='8' color='#0284c7'><b>Automated Oil-Spill Characterization (SAR Observation)</b></font>", body_style))
+        story.append(Spacer(1, 4))
+        story.append(char_table)
+
     story.append(Spacer(1, 10))
 
     # 5. Backward Drift Configuration & Reconstructed Source Zone
@@ -548,7 +703,57 @@ def render_scientific_report_pdf(report_data: dict[str, Any]) -> bytes:
         )
     )
     story.append(drift_table)
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 10))
+
+    # 5b. Forward Drift Prediction (Step 11, if executed)
+    fwd_data = report_data.get("forward_drift_prediction")
+    if fwd_data:
+        fwd_table_data = [
+            [
+                Paragraph("Forward Physics Model", table_header_style),
+                Paragraph("Prediction Horizon", table_header_style),
+                Paragraph("Forward Steps", table_header_style),
+                Paragraph("Projected Future Position", table_header_style),
+                Paragraph("Net Trajectory Distance", table_header_style),
+            ],
+            [
+                Paragraph(fwd_data.get("model", "leeway_euler_v1"), table_cell_style),
+                Paragraph(f"{fwd_data.get('prediction_hours', 0.0):g} hours", table_cell_style),
+                Paragraph(f"{fwd_data.get('steps_count', 0)} steps", table_cell_style),
+                Paragraph(f"{fwd_data.get('final_position', '—')}", table_mono_style),
+                Paragraph(f"{fwd_data.get('total_distance_km', 0.0):.1f} km", table_cell_style),
+            ],
+        ]
+        fwd_table = Table(fwd_table_data, colWidths=[130, 80, 75, 120, 99])
+        fwd_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0284c7")),
+                    ("BACKGROUND", (0, 1), (-1, 1), colors.white),
+                    ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("ALIGN", (1, 1), (-1, 1), "CENTER"),
+                ]
+            )
+        )
+        story.append(Paragraph("<font size='9' color='#0284c7'><b>Forward Drift Prediction (Step 11 — Model-Based Forward Projection)</b></font>", body_style))
+        story.append(Spacer(1, 4))
+        story.append(fwd_table)
+        story.append(Spacer(1, 4))
+        story.append(
+            Paragraph(
+                "<font size='7.5' color='#64748b'><i>"
+                "Deterministic Lagrangian Leeway-Euler model projection under supplied ERA5 wind and CMEMS current forcing fields. "
+                "It is NOT an observed future trajectory, operational forecast, or guaranteed path. No statistical forward uncertainty distribution is assumed."
+                "</i></font>",
+                body_style,
+            )
+        )
+        story.append(Spacer(1, 10))
+
+    story.append(Spacer(1, 2))
 
     # 6. Candidate Vessel Comparison Table (Authoritative Backend Ordering)
     story.append(Paragraph("4. Candidate Vessel Assessment & Evidence Consistency", h1_style))
@@ -668,9 +873,162 @@ def render_scientific_report_pdf(report_data: dict[str, Any]) -> bytes:
 
     story.append(Spacer(1, 10))
 
-    # 8. Experiment Reproducibility Audit Block (KeepTogether)
+    # 5b. ML Model Signal + AIS Behavioural Intelligence (Step 12)
+    # This section renders AFTER the evidence matrix and is clearly labelled
+    # as supplementary contextual intelligence, not as a re-ranking result.
+    has_ml_data = any(c.get("model_probability") is not None for c in candidates)
+    has_beh_data = any(c.get("behavioral_intelligence") is not None for c in candidates)
+
+    if candidates and (has_ml_data or has_beh_data):
+        story.append(Paragraph("6. ML Model Signal & AIS Behavioural Intelligence", h1_style))
+        story.append(
+            Paragraph(
+                "<font color='#475569'><b>CONTEXTUAL MODEL LAYER — NOT ATTRIBUTION OR LEGAL RESPONSIBILITY.</b></font> "
+                "ML Model Probability is an independent model output generated from extracted feature representations. "
+                "Not a probability of legal responsibility or causation. "
+                "Training provenance: Model trained on synthetic benchmark scenarios; "
+                "real-data inference is an experimental contextual signal and has not been "
+                "established as a calibrated real-world responsibility probability. ML probabilities are NOT forced "
+                "to sum to 1 across candidates and do NOT modify the physical evidence_consistency_score "
+                "or candidate ranking. Behavioural findings are deterministic rule-based results from the "
+                "Stage E3 detectors; they report observable AIS patterns only without inferring intent, "
+                "wrongdoing, or legal culpability.",
+                body_style,
+            )
+        )
+        story.append(Spacer(1, 6))
+
+        # 6a. ML Probability comparison table
+        if has_ml_data:
+            ml_headers = [
+                Paragraph("Rank", table_header_style),
+                Paragraph("Vessel Name", table_header_style),
+                Paragraph("Physical Score", table_header_style),
+                Paragraph("ML Model Probability", table_header_style),
+                Paragraph("Signal Interpretation", table_header_style),
+            ]
+            ml_rows = [ml_headers]
+            for c in candidates:
+                prob = c.get("model_probability")
+                prob_str = f"{prob * 100:.1f}%" if prob is not None else "—"
+                if prob is None:
+                    interp = "Inference unavailable"
+                elif prob >= 0.70:
+                    interp = "High spatial/temporal alignment with reconstructed release"
+                elif prob >= 0.40:
+                    interp = "Moderate alignment with reconstructed evidence profile"
+                elif prob >= 0.15:
+                    interp = "Low alignment; limited spatial or temporal overlap"
+                else:
+                    interp = "Minimal alignment with reconstructed release parameters"
+                ml_rows.append([
+                    Paragraph(f"#{c['rank']}", table_mono_style),
+                    Paragraph(c["vessel_name"], table_cell_style),
+                    Paragraph(f"{c['evidence_consistency_score'] * 100:.1f}%", table_mono_style),
+                    Paragraph(f"<b>{prob_str}</b>", table_mono_style),
+                    Paragraph(f"<font size='7.5'>{interp}</font>", table_cell_style),
+                ])
+            ml_table = Table(ml_rows, colWidths=[38, 120, 85, 90, 171])
+            ml_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+                        ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, c_bg_alt]),
+                    ]
+                )
+            )
+            story.append(Paragraph(
+                "<font size='8' color='#1d4ed8'><b>ML Model Probability</b> (Not a probability of legal responsibility or causation.)</font>",
+                body_style,
+            ))
+            story.append(Spacer(1, 4))
+            story.append(ml_table)
+            story.append(Spacer(1, 2))
+            story.append(Paragraph(
+                "<font size='6.8' color='#64748b'><i>"
+                "ML feature-vector values are model inputs produced by the feature extractor and may use definitions or normalization different from the physical evidence presentation metrics."
+                "</i></font>",
+                body_style,
+            ))
+            story.append(Spacer(1, 8))
+
+        # 6b. Behavioural Intelligence per candidate
+        if has_beh_data:
+            story.append(Paragraph(
+                "<font size='8' color='#0f766e'><b>AIS Behavioural Intelligence (Stage E3 Detectors — Contextual Only)</b></font>",
+                body_style,
+            ))
+            story.append(Spacer(1, 4))
+            beh_headers = [
+                Paragraph("Rank", table_header_style),
+                Paragraph("Vessel Name", table_header_style),
+                Paragraph("Gaps Detected", table_header_style),
+                Paragraph("Loitering", table_header_style),
+                Paragraph("Rule-Based Detector Findings", table_header_style),
+                Paragraph("Behavioural Flags", table_header_style),
+            ]
+            beh_rows = [beh_headers]
+            for c in candidates:
+                bi = c.get("behavioral_intelligence")
+                if bi is None:
+                    beh_rows.append([
+                        Paragraph(f"#{c['rank']}", table_mono_style),
+                        Paragraph(c["vessel_name"], table_cell_style),
+                        Paragraph("—", table_cell_style),
+                        Paragraph("—", table_cell_style),
+                        Paragraph("—", table_cell_style),
+                        Paragraph("<font size='7'>Analysis unavailable</font>", table_cell_style),
+                    ])
+                    continue
+                gaps_n = bi.get("transmission_gap_count", 0)
+                loit = bi.get("loitering_detected", False)
+                anom_n = len(bi.get("anomalies", []))
+                flags = ", ".join(bi.get("summary_flags", [])) or "None detected"
+                beh_rows.append([
+                    Paragraph(f"#{c['rank']}", table_mono_style),
+                    Paragraph(c["vessel_name"], table_cell_style),
+                    Paragraph(str(gaps_n), table_cell_style),
+                    Paragraph("Yes" if loit else "No", table_cell_style),
+                    Paragraph(str(anom_n), table_cell_style),
+                    Paragraph(f"<font size='7'>{flags}</font>", table_cell_style),
+                ])
+            beh_table = Table(beh_rows, colWidths=[38, 120, 70, 60, 75, 141])
+            beh_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#134e4a")),
+                        ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, c_bg_alt]),
+                    ]
+                )
+            )
+            story.append(beh_table)
+            story.append(Spacer(1, 4))
+            story.append(
+                Paragraph(
+                    "<font size='7' color='#475569'><i>"
+                    "ZERO-FABRICATION: All behavioural findings are based exclusively on genuine received AIS transmissions. "
+                    "Transmission gaps are reported as observable gaps in received telemetry only. "
+                    "No vessel movements, transponder disabling events, or activities during gaps are inferred. "
+                    "No intent, legal responsibility, or culpability is implied by any finding in this section."
+                    "</i></font>",
+                    body_style,
+                )
+            )
+
+    story.append(Spacer(1, 10))
+
+    # Reproducibility — section number depends on whether ML section rendered above
+    repro_sec_num = 7 if (candidates and (has_ml_data or has_beh_data)) else 6
     repro_block = []
-    repro_block.append(Paragraph("6. Experiment Reproducibility Audit", h1_style))
+    repro_block.append(Paragraph(f"{repro_sec_num}. Experiment Reproducibility Audit", h1_style))
     repro_data = [
         [Paragraph("Run ID", body_style), Paragraph(f"<font name='Courier'>{repro['run_id']}</font>", code_style)],
         [Paragraph("Model", body_style), Paragraph(repro["model"], body_style)],
@@ -697,9 +1055,10 @@ def render_scientific_report_pdf(report_data: dict[str, Any]) -> bytes:
     story.append(KeepTogether(repro_block))
     story.append(Spacer(1, 10))
 
-    # 9. Scientific Limitations & Legal Disclaimer (KeepTogether)
+    # Scientific Limitations — section number follows reproducibility
+    disc_sec_num = repro_sec_num + 1
     disc_block = []
-    disc_block.append(Paragraph("7. Scientific Interpretation & Limitations", h1_style))
+    disc_block.append(Paragraph(f"{disc_sec_num}. Scientific Interpretation & Limitations", h1_style))
     disc_block.append(
         Paragraph(
             "<b>SCIENTIFIC ASSESSMENT DISCLAIMER:</b> This analysis is an evidence-consistency assessment "

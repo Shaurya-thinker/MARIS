@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +47,162 @@ class SentinelDiscoverResponse(BaseModel):
     products: list[SentinelProductItem]
     count: int
     configured: bool
+
+
+# ---------------------------------------------------------------------------
+# Step 1b — Slick Detection & Characterization (Step 10)
+# ---------------------------------------------------------------------------
+
+class SlickCharacterizationItem(BaseModel):
+    detected: bool = Field(description="Whether a candidate slick anomaly is confirmed in this scene")
+    status: str = Field(description="Detection status: DETECTED (Verified Benchmark) | CATALOGUE_SELECTION | NO_SLICK_DETECTED")
+    centroid_lon: float | None = Field(default=None, description="Observed slick centroid longitude (WGS84)")
+    centroid_lat: float | None = Field(default=None, description="Observed slick centroid latitude (WGS84)")
+    area_km2: float | None = Field(default=None, description="Estimated slick area in square kilometers (None if unavailable)")
+    area_m2: float | None = Field(default=None, description="Estimated slick area in square meters (None if unavailable)")
+    bbox: dict[str, float] | None = Field(default=None, description="Slick bounding box {west, south, east, north}")
+    slick_geometry: dict[str, Any] | None = Field(default=None, description="GeoJSON Polygon/MultiPolygon of detected slick")
+    observation_time: str = Field(description="Scene acquisition timestamp (ISO 8601 UTC)")
+    satellite_product_id: str = Field(description="Sentinel-1 product identifier")
+    platform: str = Field(default="Sentinel-1", description="Spacecraft platform")
+    sensor: str = Field(default="Sentinel-1 C-SAR", description="Instrument type")
+    mode: str | None = Field(default="IW GRDH", description="Acquisition mode")
+    polarisation: str | None = Field(default="VV", description="Polarisation channel")
+    confidence: float | None = Field(default=None, description="Quantitative detection confidence [0, 1] (None if unsegmented)")
+    damping_contrast_db: float | None = Field(default=None, description="Radar Bragg damping contrast in dB (None if unsegmented)")
+    estimated_age_hours: float | None = Field(default=None, description="Estimated slick age derived from backward drift backtrack duration")
+    detection_method: str = Field(description="Algorithmic or metadata method used to locate/characterize the slick")
+    provenance: str = Field(description="Data provenance / source organization")
+    data_fidelity: str = Field(description="Honest statement of measurement fidelity")
+
+
+class SentinelCharacterizeRequest(BaseModel):
+    product_id: str
+    title: str | None = None
+    sensing_start: str | None = None
+    centroid_lon: float | None = None
+    centroid_lat: float | None = None
+    mode: str | None = None
+    polarisation: str | None = None
+    footprint: dict[str, Any] | None = None
+    backtrack_hours: float = 12.0
+
+
+class SentinelCharacterizeResponse(BaseModel):
+    characterization: SlickCharacterizationItem
+
+
+# ---------------------------------------------------------------------------
+# Step 11 — Forward Drift Prediction Schemas
+# ---------------------------------------------------------------------------
+
+class ForwardDriftStepItem(BaseModel):
+    step: int
+    timestamp: str
+    lat: float
+    lon: float
+    u_wind_ms: float | None = None
+    v_wind_ms: float | None = None
+    u_current_ms: float | None = None
+    v_current_ms: float | None = None
+    drift_u_ms: float | None = None
+    drift_v_ms: float | None = None
+    cumulative_distance_km: float = 0.0
+    forcing_mode: str = "current_plus_windage"
+    current_fallback: bool = False
+    current_source: str = "CMEMS"
+
+
+class ForwardPredictionResultItem(BaseModel):
+    model_version: str = "leeway_euler_v1"
+    prediction_hours: float = 12.0
+    step_hours: float = 1.0
+    origin_lon: float
+    origin_lat: float
+    observation_lon: float | None = None
+    observation_lat: float | None = None
+    observation_time: str
+    steps: list[ForwardDriftStepItem]
+    final_lon: float
+    final_lat: float
+    total_distance_km: float
+    displacement_km: float | None = None
+    termination_status: str
+    status: str | None = None
+    forcing_modes: list[str] = Field(default_factory=lambda: ["current_plus_windage"])
+    current_fallback_used: bool = False
+    scientific_disclaimer: str
+    provenance: str = "ECMWF ERA5 10m Wind + CMEMS GLORYS12V1 Surface Currents via Stage D1 Deterministic Leeway-Euler Engine"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "observation_lon" not in data and "origin_lon" in data:
+                data["observation_lon"] = data["origin_lon"]
+            if "observation_lat" not in data and "origin_lat" in data:
+                data["observation_lat"] = data["origin_lat"]
+            if "origin_lon" not in data and "observation_lon" in data:
+                data["origin_lon"] = data["observation_lon"]
+            if "origin_lat" not in data and "observation_lat" in data:
+                data["origin_lat"] = data["observation_lat"]
+            if "displacement_km" not in data and "total_distance_km" in data:
+                data["displacement_km"] = data["total_distance_km"]
+            if "total_distance_km" not in data and "displacement_km" in data:
+                data["total_distance_km"] = data["displacement_km"]
+            if "status" not in data and "termination_status" in data:
+                data["status"] = data["termination_status"]
+            if "termination_status" not in data and "status" in data:
+                data["termination_status"] = data["status"]
+            if "prediction_hours" not in data:
+                data["prediction_hours"] = float(len(data.get("steps", []))) or 12.0
+            if "step_hours" not in data:
+                data["step_hours"] = 1.0
+        return data
+
+
+class ForwardPredictionRequest(BaseModel):
+    satellite_product_id: str = ""
+    observation_time: str
+    origin_lon: float | None = None
+    origin_lat: float | None = None
+    observation_lon: float | None = None
+    observation_lat: float | None = None
+    era5_netcdf_path: str
+    cmems_netcdf_path: str
+    prediction_hours: float = 12.0
+    step_hours: float = 1.0
+    leeway_fraction: float = 0.035
+    slick_characterization: SlickCharacterizationItem | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _align_coords(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if data.get("origin_lon") is None and data.get("observation_lon") is not None:
+                data["origin_lon"] = data["observation_lon"]
+            if data.get("origin_lat") is None and data.get("observation_lat") is not None:
+                data["origin_lat"] = data["observation_lat"]
+            if data.get("observation_lon") is None and data.get("origin_lon") is not None:
+                data["observation_lon"] = data["origin_lon"]
+            if data.get("observation_lat") is None and data.get("origin_lat") is not None:
+                data["observation_lat"] = data["origin_lat"]
+        return data
+
+
+class ForwardPredictionResponse(BaseModel):
+    prediction: ForwardPredictionResultItem
+    forward_prediction: ForwardPredictionResultItem | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _align_prediction(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "prediction" in data and "forward_prediction" not in data:
+                data["forward_prediction"] = data["prediction"]
+            elif "forward_prediction" in data and "prediction" not in data:
+                data["prediction"] = data["forward_prediction"]
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +286,38 @@ class AisPositionsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Step 12 — ML Attribution + AIS Behavioral Intelligence Schemas
+# ---------------------------------------------------------------------------
+
+class BehavioralAnomalyItemSchema(BaseModel):
+    """One detected behavioral anomaly for a candidate vessel."""
+    anomaly_type: str
+    severity: str
+    description: str
+    timestamp: str
+    location_lon: float
+    location_lat: float
+    inside_source_zone: bool
+    observed_value: float | None = None
+    baseline_or_threshold_value: float | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class VesselBehavioralIntelligenceItem(BaseModel):
+    """Behavioral intelligence summary for one candidate vessel (contextual only)."""
+    anomalies: list[BehavioralAnomalyItemSchema] = Field(default_factory=list)
+    transmission_gap_count: int = 0
+    loitering_detected: bool = False
+    observed_loitering_duration_seconds: float = 0.0
+    nav_status_consistent: bool = True
+    summary_flags: list[str] = Field(default_factory=list)
+    analysis_note: str = (
+        "Deterministic rule-based behavioral analysis (Stage E3 detectors). "
+        "Findings are contextual only and do not alter physical drift attribution scores."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Experiment Run
 # ---------------------------------------------------------------------------
 
@@ -162,6 +350,18 @@ class ExperimentRunRequest(BaseModel):
         default=None,
         description="Optional spatial search bounding box {west, south, east, north}"
     )
+    slick_characterization: SlickCharacterizationItem | None = Field(
+        default=None,
+        description="Optional Step 10 automated slick characterization data"
+    )
+    forward_prediction_hours: float | None = Field(
+        default=None,
+        description="Optional Step 11 forward prediction duration in hours"
+    )
+    forward_step_hours: float = Field(
+        default=1.0,
+        description="Step 11 forward integration step size in hours"
+    )
 
 
 class VesselFeaturesItem(BaseModel):
@@ -181,6 +381,20 @@ class VesselFeaturesItem(BaseModel):
     positions: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Authentic AIS positions for this candidate: [{timestamp, lat, lon, speed?, heading?}]"
+    )
+    # Step 12 — ML Model Probability
+    model_probability: float | None = Field(
+        default=None,
+        description="Independent ML Model Probability in [0, 1]. Not a probability of legal responsibility or causation. Training provenance: Model trained on synthetic benchmark scenarios; real-data inference is an experimental contextual signal and has not been established as a calibrated real-world responsibility probability. NOT forced to sum to 1 across candidates."
+    )
+    ml_feature_vector: dict[str, float] | None = Field(
+        default=None,
+        description="ML feature-vector values are model inputs produced by the feature extractor and may use definitions or normalization different from the physical evidence presentation metrics."
+    )
+    # Step 12 — AIS Behavioral Intelligence
+    behavioral_intelligence: VesselBehavioralIntelligenceItem | None = Field(
+        default=None,
+        description="Contextual rule-based detector findings. Does NOT modify evidence_consistency_score."
     )
 
 
@@ -204,6 +418,8 @@ class ExperimentRunResponse(BaseModel):
     observation_lon: float | None = None
     observation_lat: float | None = None
     status: str = "completed"
+    slick_characterization: SlickCharacterizationItem | None = None
+    forward_prediction: ForwardPredictionResultItem | None = None
 
 
 class ExperimentRunSummary(BaseModel):
@@ -220,6 +436,8 @@ class ExperimentRunSummary(BaseModel):
     observation_lat: float | None = None
     candidate_count: int = 0
     status: str = "completed"
+    slick_characterization: SlickCharacterizationItem | None = None
+    forward_prediction: ForwardPredictionResultItem | None = None
 
 
 class ExperimentListResponse(BaseModel):

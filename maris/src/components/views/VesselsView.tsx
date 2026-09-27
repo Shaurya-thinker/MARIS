@@ -1,245 +1,411 @@
-import { useState } from 'react'
-import { ArrowRight, ChevronDown, ChevronUp, Compass, Navigation, Shield, Ship } from 'lucide-react'
-import type { CandidateAttribution } from '../../types/maris'
-import type { CandidateRanking, RankedCandidate } from '../../types/investigationApi'
-import type { SimulationScenario } from '../../simulation/simulationTypes'
+import { useEffect, useState, useCallback } from 'react'
+import { Compass, Database, RefreshCw, Search, Ship } from 'lucide-react'
+import { fetchAisFleet } from '../../real-experiment/experimentApi'
+import type { AisFleetVessel, AisFleetResponse } from '../../real-experiment/experimentApi'
 
 interface VesselsViewProps {
   isDemoMode: boolean
   isSimulationMode: boolean
-  simulationScenario: SimulationScenario | null
-  demoCandidates: CandidateAttribution[]
-  rankingResult: CandidateRanking | null
+  simulationScenario: any
+  demoCandidates: any[]
+  rankingResult: any
   selectedCandidate: string
   onSelectCandidate: (id: string) => void
-  onNavigateToView: (view: 'workspace') => void
+  onNavigateToView: (view: any) => void
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+const PROVENANCE_LABELS: Record<string, { label: string; color: string }> = {
+  NOAA_MARINECADASTRE:  { label: 'NOAA MarineCadastre',      color: '#00c896' },
+  MANUAL_REFERENCE:     { label: 'Manual Reference',          color: '#60a5fa' },
+  SYNTHETIC_BENCHMARK:  { label: 'Synthetic Benchmark',       color: '#f59e0b' },
+  LIVE_AIS_PROVIDER:    { label: 'Live AIS Feed',             color: '#a78bfa' },
+  UNVERIFIED_IMPORT:    { label: 'Unverified Import',         color: '#94a3b8' },
+}
+
+function provenanceBadge(sourceType: string, isReal: number) {
+  const p = PROVENANCE_LABELS[sourceType] ?? { label: sourceType, color: '#94a3b8' }
+  return { ...p, isReal: isReal === 1 }
+}
+
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  try {
+    const d = new Date(iso)
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    return `${String(d.getUTCDate()).padStart(2,'0')} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+  } catch { return iso }
+}
+
+function fmtNum(n: number | null | undefined, unit = ''): string {
+  if (n == null) return '—'
+  return unit ? `${n}${unit}` : String(n)
 }
 
 export function VesselsView({
-  isDemoMode,
-  isSimulationMode,
-  simulationScenario,
-  demoCandidates,
-  rankingResult,
-  selectedCandidate,
-  onSelectCandidate,
   onNavigateToView,
 }: VesselsViewProps) {
-  const [inspectedVesselId, setInspectedVesselId] = useState<string | null>(null)
-  const rankedCandidates: RankedCandidate[] = rankingResult?.candidates || []
+  const [fleet, setFleet] = useState<AisFleetResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [activeSource, setActiveSource] = useState('')
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
 
-  // Normalized list of candidates
-  const candidates = isDemoMode
-    ? demoCandidates.map((c) => ({
-        id: c.id,
-        name: c.id,
-        role: c.role,
-        rank: c.rank,
-        score: c.rank === 1 ? 0.94 : 0.38,
-        mmsi: c.mmsi,
-        imo: c.imo,
-        spatial: 'Strong',
-        temporal: 'Strong',
-        trajectory: c.rank === 1 ? 'Strong' : 'Weak',
-        channels: '3 / 3',
-        speed: c.speed,
-        heading: c.heading,
-        status: c.status,
-        anomalies: c.anomalies,
-      }))
-    : isSimulationMode && simulationScenario
-      ? simulationScenario.candidateVessels.map((c, idx) => ({
-          id: c.id,
-          name: c.name,
-          role: c.vesselType,
-          rank: idx + 1,
-          score: c.candidateScore,
-          mmsi: c.mmsi,
-          imo: c.imo,
-          spatial: c.spatialConsistency > 0.8 ? 'Strong' : 'Moderate',
-          temporal: c.temporalConsistency > 0.8 ? 'Strong' : 'Moderate',
-          trajectory: c.trajectoryCorrelation > 0.8 ? 'Strong' : 'Moderate',
-          channels: '3 / 3',
-          speed: '12.4 kn',
-          heading: '045°',
-          status: 'Underway using engine',
-          anomalies: c.note ? [c.note] : [],
-        }))
-      : rankedCandidates.map((c) => ({
-          id: c.candidate_id || c.vessel_id,
-          name: c.name || c.vessel_id,
-          role: c.vessel_type || 'Cargo / Tanker',
-          rank: c.rank,
-          score: c.evidence_consistency_score ?? 0,
-          mmsi: c.mmsi || 'N/A',
-          imo: c.imo || 'N/A',
-          spatial: (c.spatial_score ?? 0) > 0.8 ? 'Strong' : 'Moderate',
-          temporal: (c.temporal_score ?? 0) > 0.8 ? 'Strong' : 'Moderate',
-          trajectory: c.trajectory_score !== null ? ((c.trajectory_score ?? 0) > 0.8 ? 'Strong' : 'Moderate') : 'Insufficient data',
-          channels: `${c.valid_primary_channels} / ${c.total_primary_channels}`,
-          speed: '11.8 kn',
-          heading: '032°',
-          status: 'Underway',
-          anomalies: c.contextual_evidence?.notable_anomaly_types || [],
-        }))
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetchAisFleet({
+        limit: 200,
+        offset: 0,
+        search: debouncedSearch || undefined,
+        source_type: activeSource || undefined,
+      })
+      setFleet(res)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load AIS fleet registry')
+    } finally {
+      setLoading(false)
+    }
+  }, [debouncedSearch, activeSource])
+
+  useEffect(() => { load() }, [load])
+
+  const stats = fleet?.stats
+  const vessels = fleet?.vessels ?? []
+  const sourceBreakdown = fleet?.source_breakdown ?? []
 
   return (
     <div className="view-container">
-      {/* Editorial Header */}
+      {/* Header */}
       <div className="view-hero">
         <div className="view-hero-text">
           <span className="view-kicker">Maritime Surveillance</span>
-          <h1 className="view-headline">Candidate Vessel Attribution</h1>
+          <h1 className="view-headline">AIS Fleet Registry</h1>
           <p className="view-lead">
-            Candidate vessels ranked by physical evidence consistency with reconstructed spill origin and backward Lagrangian drift.
+            All vessels registered in <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85em' }}>ais_vessels.db</code> — 
+            real imported tracks, curated historical references, and synthetic benchmarks with full provenance tracking.
           </p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => onNavigateToView('workspace')}>
-          <Compass size={14} /> View in GIS Workspace
-        </button>
+        <div style={{ display: 'flex', gap: '0.65rem' }}>
+          <button className="secondary-button" type="button" onClick={() => onNavigateToView('workspace')}>
+            <Compass size={14} /> Back to GIS Workspace
+          </button>
+          <button className="secondary-button" type="button" onClick={load} disabled={loading}>
+            <RefreshCw size={14} className={loading ? 'spinner' : ''} /> Refresh
+          </button>
+        </div>
       </div>
 
-      {/* Spacious Candidate Vessel Rows */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        {candidates.map((cand) => {
-          const isInspected = inspectedVesselId === cand.id
-          const isSelected = selectedCandidate === cand.id
+      {/* Database Stats Hero */}
+      {stats && (
+        <div className="telemetry-hero-grid" style={{ marginBottom: '1.25rem' }}>
+          <div className="telemetry-hero-card">
+            <span className="telemetry-hero-label">Total Vessels</span>
+            <span className="telemetry-hero-value telemetry-hero-value--accent" style={{ fontSize: '2rem' }}>
+              {stats.total_vessels.toLocaleString()}
+            </span>
+            <span className="telemetry-hero-caption">Unique vessel identities in registry</span>
+          </div>
 
-          return (
-            <article
-              key={cand.id}
-              style={{
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--color-surface)',
-                border: isSelected ? '1px solid var(--color-accent)' : '1px solid var(--color-border)',
-                padding: '1.5rem',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '1.25rem',
-                transition: 'all var(--transition-fast)',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
-                  <span
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '1.75rem',
-                      fontWeight: 700,
-                      color: cand.rank === 1 ? 'var(--color-accent)' : 'var(--color-text-subtle)',
-                    }}
-                  >
-                    0{cand.rank}
-                  </span>
-                  <div>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: '#fff' }}>{cand.name}</h3>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>{cand.role}</span>
-                  </div>
-                </div>
+          <div className="telemetry-hero-card">
+            <span className="telemetry-hero-label">AIS Positions</span>
+            <span className="telemetry-hero-value telemetry-hero-value--info" style={{ fontSize: '2rem' }}>
+              {stats.total_positions.toLocaleString()}
+            </span>
+            <span className="telemetry-hero-caption">
+              {stats.real_positions.toLocaleString()} real · {stats.synthetic_or_manual_positions.toLocaleString()} benchmark
+            </span>
+          </div>
 
-                {/* Evidence Consistency Score Hero */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
-                  <div>
-                    <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      Evidence Consistency
-                    </span>
-                    <strong style={{ fontSize: '1.5rem', color: 'var(--color-accent)', fontFamily: 'var(--font-mono)' }}>
-                      {Math.round(cand.score * 100)}%
-                    </strong>
-                  </div>
+          <div className="telemetry-hero-card">
+            <span className="telemetry-hero-label">Data Sources</span>
+            <span className="telemetry-hero-value" style={{ fontSize: '2rem' }}>
+              {stats.total_sources}
+            </span>
+            <span className="telemetry-hero-caption">Distinct provenance origins</span>
+          </div>
 
-                  <div style={{ display: 'flex', gap: '1rem' }}>
-                    <div className="metric" style={{ padding: '0.35rem 0.65rem' }}>
-                      <span>Spatial Match</span>
-                      <strong>{cand.spatial}</strong>
-                    </div>
-                    <div className="metric" style={{ padding: '0.35rem 0.65rem' }}>
-                      <span>Temporal Match</span>
-                      <strong>{cand.temporal}</strong>
-                    </div>
-                    <div className="metric" style={{ padding: '0.35rem 0.65rem' }}>
-                      <span>Trajectory Match</span>
-                      <strong>{cand.trajectory}</strong>
-                    </div>
-                  </div>
+          <div className="telemetry-hero-card">
+            <span className="telemetry-hero-label">Import Batches</span>
+            <span className="telemetry-hero-value" style={{ fontSize: '2rem' }}>
+              {stats.total_batches}
+            </span>
+            <span className="telemetry-hero-caption">Verified import transactions</span>
+          </div>
+        </div>
+      )}
 
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      style={{ padding: '0.45rem 0.85rem', fontSize: '0.75rem' }}
-                      onClick={() => setInspectedVesselId(isInspected ? null : cand.id)}
-                    >
-                      <span>{isInspected ? 'Close Inspection' : 'Inspect Vessel'}</span>
-                      {isInspected ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    </button>
-                    <button
-                      type="button"
-                      className="primary-button"
-                      style={{ padding: '0.45rem 0.85rem', fontSize: '0.75rem' }}
-                      onClick={() => {
-                        onSelectCandidate(cand.id)
-                        onNavigateToView('workspace')
-                      }}
-                    >
-                      <span>View in Map</span>
-                      <ArrowRight size={13} />
-                    </button>
-                  </div>
-                </div>
-              </div>
+      {/* Source type provenance pills */}
+      {sourceBreakdown.length > 0 && (
+        <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <button
+            type="button"
+            className={!activeSource ? 'primary-button' : 'secondary-button'}
+            style={{ padding: '0.35rem 0.85rem', fontSize: '0.75rem' }}
+            onClick={() => setActiveSource('')}
+          >
+            All Types
+          </button>
+          {sourceBreakdown.map((s) => {
+            const p = PROVENANCE_LABELS[s.source_type] ?? { label: s.source_type, color: '#94a3b8' }
+            const isActive = activeSource === s.source_type
+            return (
+              <button
+                key={s.source_type}
+                type="button"
+                style={{
+                  padding: '0.35rem 0.85rem',
+                  fontSize: '0.75rem',
+                  borderRadius: 'var(--radius-sm)',
+                  border: `1px solid ${isActive ? p.color : 'var(--color-border)'}`,
+                  background: isActive ? `${p.color}22` : 'var(--color-surface)',
+                  color: isActive ? p.color : 'var(--color-text-muted)',
+                  cursor: 'pointer',
+                  transition: 'all var(--transition-fast)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                }}
+                onClick={() => setActiveSource(isActive ? '' : s.source_type)}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: p.color, flexShrink: 0 }} />
+                {p.label} <span style={{ opacity: 0.6 }}>({s.cnt})</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
-              {/* Progressive Inspection Drawer */}
-              {isInspected && (
-                <div
+      {/* Search bar */}
+      <div style={{ position: 'relative', maxWidth: '480px', marginBottom: '1.25rem' }}>
+        <Search size={14} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-subtle)' }} />
+        <input
+          type="text"
+          placeholder="Search by vessel name or MMSI…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '0.55rem 0.85rem 0.55rem 2.2rem',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--color-surface)',
+            border: '1px solid var(--color-border)',
+            color: '#fff',
+            fontSize: '0.82rem',
+          }}
+        />
+      </div>
+
+      {/* Error state */}
+      {error && (
+        <div style={{
+          padding: '1rem 1.25rem',
+          borderRadius: 'var(--radius-sm)',
+          background: 'rgba(239,68,68,0.08)',
+          border: '1px solid rgba(239,68,68,0.25)',
+          color: 'rgba(239,68,68,0.9)',
+          fontSize: '0.82rem',
+          marginBottom: '1rem',
+        }}>
+          <Database size={14} style={{ marginRight: '0.5rem', display: 'inline' }} />
+          {error} — is the backend running?
+          <button type="button" className="secondary-button" style={{ marginLeft: '1rem', padding: '0.25rem 0.65rem', fontSize: '0.72rem' }} onClick={load}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Fleet table */}
+      {loading && !fleet ? (
+        <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+          <RefreshCw size={20} className="spinner" style={{ marginBottom: '0.75rem' }} />
+          <p style={{ margin: 0, fontSize: '0.85rem' }}>Loading AIS Fleet Registry…</p>
+        </div>
+      ) : vessels.length === 0 ? (
+        <div style={{
+          padding: '3.5rem 1.5rem',
+          textAlign: 'center',
+          color: 'var(--color-text-muted)',
+          borderRadius: 'var(--radius-sm)',
+          border: '1px dashed var(--color-border)',
+        }}>
+          <Ship size={28} style={{ marginBottom: '0.75rem', opacity: 0.35 }} />
+          <p style={{ margin: '0 0 0.5rem', fontSize: '0.9rem' }}>No vessels found{search ? ` matching "${search}"` : ''}.</p>
+          {search && (
+            <button type="button" className="secondary-button" style={{ fontSize: '0.78rem' }} onClick={() => setSearch('')}>
+              Clear search
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Results count */}
+          <div style={{ fontSize: '0.78rem', color: 'var(--color-text-subtle)', marginBottom: '0.65rem' }}>
+            Showing <strong style={{ color: '#fff' }}>{vessels.length}</strong> of <strong style={{ color: '#fff' }}>{fleet?.total_matching ?? vessels.length}</strong> vessels
+          </div>
+
+          {/* Vessel cards */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+            {vessels.map((v) => {
+              const badge = provenanceBadge(v.source_type, v.is_real_observation)
+              const isExpanded = expandedId === v.vessel_id
+
+              return (
+                <article
+                  key={v.vessel_id}
                   style={{
-                    padding: '1.25rem',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'rgba(8, 23, 27, 0.5)',
-                    border: '1px solid var(--color-border-subtle)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '1rem',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--color-surface)',
+                    border: `1px solid ${isExpanded ? badge.color + '55' : 'var(--color-border)'}`,
+                    padding: '1rem 1.25rem',
+                    transition: 'all var(--transition-fast)',
                   }}
                 >
-                  <span className="section-kicker">Technical AIS Telemetry &amp; Anomaly Observations</span>
-                  <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-                    <div className="metric">
-                      <span>MMSI Identifier</span>
-                      <strong className="mono-num">{cand.mmsi}</strong>
+                  {/* Row: icon + name + type + provenance + positions */}
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', flexWrap: 'wrap' }}
+                    onClick={() => setExpandedId(isExpanded ? null : v.vessel_id)}
+                  >
+                    {/* Vessel icon */}
+                    <div style={{
+                      width: 38, height: 38, borderRadius: 'var(--radius-sm)',
+                      background: `${badge.color}18`,
+                      border: `1px solid ${badge.color}44`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <Ship size={17} color={badge.color} />
                     </div>
-                    <div className="metric">
-                      <span>IMO Number</span>
-                      <strong className="mono-num">{cand.imo}</strong>
+
+                    {/* Name + MMSI */}
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>
+                        {v.vessel_name ?? `MMSI ${v.mmsi}`}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--color-text-subtle)', fontFamily: 'var(--font-mono)' }}>
+                        MMSI {v.mmsi ?? '—'}{v.imo ? ` · IMO ${v.imo}` : ''}{v.call_sign ? ` · ${v.call_sign}` : ''}
+                      </div>
                     </div>
-                    <div className="metric">
-                      <span>Observed Speed &amp; Heading</span>
-                      <strong className="mono-num">{cand.speed} · {cand.heading}</strong>
+
+                    {/* Vessel type */}
+                    <div style={{ minWidth: 110 }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--color-text-subtle)', display: 'block' }}>Type</span>
+                      <span style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>{v.vessel_type ?? '—'}</span>
                     </div>
-                    <div className="metric">
-                      <span>Valid Primary Channels</span>
-                      <strong className="mono-num">{cand.channels}</strong>
+
+                    {/* Provenance badge */}
+                    <span style={{
+                      fontSize: '0.68rem',
+                      padding: '0.2rem 0.55rem',
+                      borderRadius: 'var(--radius-xs)',
+                      background: `${badge.color}1a`,
+                      border: `1px solid ${badge.color}44`,
+                      color: badge.color,
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {badge.label}
+                    </span>
+
+                    {/* Position count */}
+                    <div style={{ textAlign: 'right', minWidth: 70 }}>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-accent)', fontFamily: 'var(--font-mono)' }}>
+                        {v.position_count.toLocaleString()}
+                      </span>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--color-text-subtle)', display: 'block' }}>positions</span>
                     </div>
+
+                    {/* Expand chevron */}
+                    <span style={{ color: 'var(--color-text-subtle)', fontSize: '0.75rem', marginLeft: 'auto' }}>
+                      {isExpanded ? '▲' : '▼'}
+                    </span>
                   </div>
 
-                  {cand.anomalies.length > 0 && (
-                    <div>
-                      <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--color-processing)' }}>
-                        Contextual Behavioral Observations (Non-Additive):
-                      </span>
-                      <ul className="observations-list" style={{ marginTop: '0.25rem' }}>
-                        {cand.anomalies.map((a, i) => (
-                          <li key={i}>• {a}</li>
-                        ))}
-                      </ul>
+                  {/* Expanded detail panel */}
+                  {isExpanded && (
+                    <div style={{
+                      marginTop: '1rem',
+                      paddingTop: '1rem',
+                      borderTop: '1px solid var(--color-border-subtle)',
+                    }}>
+                      <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}>
+                        <div className="metric">
+                          <span>Flag</span>
+                          <strong>{v.flag_country ?? '—'}</strong>
+                        </div>
+                        <div className="metric">
+                          <span>Length</span>
+                          <strong className="mono-num">{fmtNum(v.length, ' m')}</strong>
+                        </div>
+                        <div className="metric">
+                          <span>Beam</span>
+                          <strong className="mono-num">{fmtNum(v.width, ' m')}</strong>
+                        </div>
+                        <div className="metric">
+                          <span>Draft</span>
+                          <strong className="mono-num">{fmtNum(v.draft, ' m')}</strong>
+                        </div>
+                        <div className="metric">
+                          <span>First Seen</span>
+                          <strong className="mono-num">{fmtDate(v.first_seen)}</strong>
+                        </div>
+                        <div className="metric">
+                          <span>Last Seen</span>
+                          <strong className="mono-num">{fmtDate(v.last_seen)}</strong>
+                        </div>
+                        <div className="metric">
+                          <span>Real Observation</span>
+                          <strong style={{ color: v.is_real_observation ? 'var(--color-accent)' : 'var(--color-text-subtle)' }}>
+                            {v.is_real_observation ? 'Yes' : 'No (Benchmark)'}
+                          </strong>
+                        </div>
+                        <div className="metric">
+                          <span>Coverage</span>
+                          <strong style={{ fontSize: '0.75rem' }}>
+                            {fmtDate(v.coverage_start)} → {fmtDate(v.coverage_end)}
+                          </strong>
+                        </div>
+                      </div>
+
+                      {/* Provider + geographic coverage */}
+                      {(v.provider_name || v.geographic_coverage) && (
+                        <div style={{
+                          marginTop: '0.75rem',
+                          padding: '0.6rem 0.85rem',
+                          borderRadius: 'var(--radius-xs)',
+                          background: 'var(--color-bg)',
+                          border: '1px solid var(--color-border)',
+                          fontSize: '0.75rem',
+                          color: 'var(--color-text-subtle)',
+                        }}>
+                          {v.provider_name && <div><span style={{ color: badge.color }}>Provider:</span> {v.provider_name}</div>}
+                          {v.geographic_coverage && <div style={{ marginTop: '0.2rem' }}><span style={{ color: 'var(--color-text-muted)' }}>Coverage:</span> {v.geographic_coverage}</div>}
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
-              )}
-            </article>
-          )
-        })}
-      </div>
+                </article>
+              )
+            })}
+          </div>
+
+          {fleet && fleet.total_matching > fleet.vessels.length && (
+            <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.8rem', color: 'var(--color-text-subtle)' }}>
+              Showing first {fleet.vessels.length} of {fleet.total_matching.toLocaleString()} matching vessels. Use search to narrow results.
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

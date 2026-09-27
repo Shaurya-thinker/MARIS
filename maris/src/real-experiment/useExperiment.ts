@@ -10,11 +10,13 @@
 import { useCallback, useEffect, useReducer } from 'react'
 import {
   discoverSentinelProducts,
+  characterizeSentinelObservation,
   fetchAisPositions,
   fetchExperimentConfig,
   getExperimentRun,
   listExperimentRuns,
   runExperiment,
+  runForwardPrediction,
   searchAisVessels,
   selectEnvironment,
 } from './experimentApi'
@@ -25,9 +27,11 @@ import type {
   ExperimentRunResult,
   ExperimentRunSummary,
   ExperimentWizardState,
+  ForwardPredictionResult,
   SelectedEnvironment,
   SentinelDiscoverRequest,
   SentinelProduct,
+  SlickCharacterization,
   VesselInput,
   WizardStep,
 } from './experimentTypes'
@@ -51,11 +55,18 @@ type Action =
   | { type: 'SET_AIS_RESULT'; result: import('./experimentTypes').AisSearchResponse }
   | { type: 'TOGGLE_VESSEL'; vessel: VesselInput }
   | { type: 'CLEAR_VESSELS' }
+  | { type: 'SET_SLICK_CHARACTERIZATION'; characterization: SlickCharacterization | null }
   | { type: 'RUN_STARTED' }
   | { type: 'RUN_SUCCESS'; result: ExperimentRunResult }
   | { type: 'RUN_ERROR'; error: string }
   | { type: 'SET_HISTORY'; runs: ExperimentRunSummary[] }
   | { type: 'LOAD_RUN'; result: ExperimentRunResult }
+  | { type: 'SET_FORWARD_PREDICTION_HOURS'; hours: number }
+  | { type: 'SET_FORWARD_STEP_HOURS'; hours: number }
+  | { type: 'SET_ENABLE_FORWARD_PREDICTION'; enabled: boolean }
+  | { type: 'FORWARD_PREDICT_START' }
+  | { type: 'FORWARD_PREDICT_SUCCESS'; result: ForwardPredictionResult }
+  | { type: 'FORWARD_PREDICT_ERROR'; error: string }
 
 const initialState: ExperimentWizardState = {
   step: 1,
@@ -77,6 +88,13 @@ const initialState: ExperimentWizardState = {
   runError: null,
   runResult: null,
   runHistory: [],
+  slickCharacterization: null,
+  forwardPredictionHours: 12,
+  forwardStepHours: 1.0,
+  enableForwardPrediction: true,
+  forwardPrediction: null,
+  forwardPredicting: false,
+  forwardPredictError: null,
 }
 
 function reducer(state: ExperimentWizardState, action: Action): ExperimentWizardState {
@@ -108,6 +126,14 @@ function reducer(state: ExperimentWizardState, action: Action): ExperimentWizard
         observationLon: initLon,
       }
     }
+    case 'SET_SLICK_CHARACTERIZATION':
+      return {
+        ...state,
+        slickCharacterization: action.characterization,
+        observationLat: action.characterization?.centroid_lat ?? state.observationLat,
+        observationLon: action.characterization?.centroid_lon ?? state.observationLon,
+        spillAreaM2: action.characterization?.area_m2 ?? state.spillAreaM2,
+      }
     case 'SET_OBSERVATION_COORDS':
       return { ...state, observationLat: action.lat, observationLon: action.lon }
     case 'SET_ENVIRONMENT':
@@ -146,13 +172,40 @@ function reducer(state: ExperimentWizardState, action: Action): ExperimentWizard
     case 'RUN_STARTED':
       return { ...state, runStatus: 'running', runError: null }
     case 'RUN_SUCCESS':
-      return { ...state, runStatus: 'success', runResult: action.result, step: 6 }
+      return {
+        ...state,
+        runStatus: 'success',
+        runResult: action.result,
+        forwardPrediction: action.result.forward_prediction ?? state.forwardPrediction,
+        step: 6,
+      }
     case 'RUN_ERROR':
       return { ...state, runStatus: 'error', runError: action.error }
     case 'SET_HISTORY':
       return { ...state, runHistory: action.runs }
     case 'LOAD_RUN':
-      return { ...state, runResult: action.result, runStatus: 'success', step: 6 }
+      return {
+        ...state,
+        runResult: action.result,
+        runStatus: 'success',
+        slickCharacterization: action.result.slick_characterization ?? null,
+        observationLat: action.result.observation_lat ?? null,
+        observationLon: action.result.observation_lon ?? null,
+        forwardPrediction: action.result.forward_prediction ?? null,
+        step: 6,
+      }
+    case 'SET_FORWARD_PREDICTION_HOURS':
+      return { ...state, forwardPredictionHours: action.hours }
+    case 'SET_FORWARD_STEP_HOURS':
+      return { ...state, forwardStepHours: action.hours }
+    case 'SET_ENABLE_FORWARD_PREDICTION':
+      return { ...state, enableForwardPrediction: action.enabled }
+    case 'FORWARD_PREDICT_START':
+      return { ...state, forwardPredicting: true, forwardPredictError: null }
+    case 'FORWARD_PREDICT_SUCCESS':
+      return { ...state, forwardPredicting: false, forwardPrediction: action.result, forwardPredictError: null }
+    case 'FORWARD_PREDICT_ERROR':
+      return { ...state, forwardPredicting: false, forwardPredictError: action.error }
     default:
       return state
   }
@@ -203,9 +256,36 @@ export function useExperiment() {
     []
   )
 
+  const characterizeObservation = useCallback(
+    async (productToChar?: SentinelProduct): Promise<SlickCharacterization | null> => {
+      const target = productToChar ?? state.selectedProduct
+      if (!target) return null
+      try {
+        const resp = await characterizeSentinelObservation({
+          product_id: target.product_id,
+          title: target.title,
+          sensing_start: target.sensing_start,
+          centroid_lon: target.centroid_lon,
+          centroid_lat: target.centroid_lat,
+          mode: target.mode,
+          polarisation: target.polarisation,
+          footprint: target.footprint,
+          backtrack_hours: state.backtrackHours,
+        })
+        dispatch({ type: 'SET_SLICK_CHARACTERIZATION', characterization: resp.characterization })
+        return resp.characterization
+      } catch (err) {
+        console.warn('Failed to characterize observation:', err)
+        return null
+      }
+    },
+    [state.selectedProduct, state.backtrackHours]
+  )
+
   const selectProduct = useCallback((product: SentinelProduct) => {
     dispatch({ type: 'SELECT_PRODUCT', product })
-  }, [])
+    characterizeObservation(product)
+  }, [characterizeObservation])
 
   const acquireEnvironment = useCallback(
     async (overrides?: { era5?: string; cmems?: string }): Promise<SelectedEnvironment> => {
@@ -324,6 +404,9 @@ export function useExperiment() {
       step_hours: stepHours,
       spill_area_m2: spillAreaM2,
       selected_vessels: vesselsToRun,
+      slick_characterization: state.slickCharacterization,
+      forward_prediction_hours: state.enableForwardPrediction ? state.forwardPredictionHours : undefined,
+      forward_step_hours: state.enableForwardPrediction ? state.forwardStepHours : undefined,
     }
 
     dispatch({ type: 'RUN_STARTED' })
@@ -337,6 +420,66 @@ export function useExperiment() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Experiment run failed'
       dispatch({ type: 'RUN_ERROR', error: msg })
+    }
+  }, [state])
+
+  const setForwardPredictionHours = useCallback((hours: number) => {
+    dispatch({ type: 'SET_FORWARD_PREDICTION_HOURS', hours })
+  }, [])
+
+  const setForwardStepHours = useCallback((hours: number) => {
+    dispatch({ type: 'SET_FORWARD_STEP_HOURS', hours })
+  }, [])
+
+  const setEnableForwardPrediction = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_ENABLE_FORWARD_PREDICTION', enabled })
+  }, [])
+
+  const predictForward = useCallback(async (): Promise<ForwardPredictionResult | null> => {
+    const { selectedProduct, environment, forwardPredictionHours, forwardStepHours, searchBbox } = state
+    if (!selectedProduct || !environment) {
+      dispatch({ type: 'FORWARD_PREDICT_ERROR', error: 'Missing required inputs (observation or environment)' })
+      return null
+    }
+
+    let observationLon = state.observationLon
+    let observationLat = state.observationLat
+    if (observationLon == null || observationLat == null) {
+      if (selectedProduct.title.includes('20181008') || selectedProduct.product_id.includes('20181008')) {
+        observationLat = 43.24833
+        observationLon = 9.47833
+      } else if (searchBbox) {
+        observationLat = (searchBbox.south + searchBbox.north) / 2
+        observationLon = (searchBbox.west + searchBbox.east) / 2
+      } else {
+        observationLon = selectedProduct.centroid_lon ?? 0
+        observationLat = selectedProduct.centroid_lat ?? 0
+      }
+    }
+
+    dispatch({ type: 'FORWARD_PREDICT_START' })
+    try {
+      const resp = await runForwardPrediction({
+        satellite_product_id: selectedProduct.product_id,
+        observation_lon: observationLon,
+        observation_lat: observationLat,
+        origin_lon: observationLon,
+        origin_lat: observationLat,
+        observation_time: selectedProduct.sensing_start,
+        era5_netcdf_path: environment.era5_netcdf_path,
+        cmems_netcdf_path: environment.cmems_netcdf_path,
+        prediction_hours: forwardPredictionHours,
+        step_hours: forwardStepHours,
+      })
+      const fwdResult = resp.forward_prediction ?? resp.prediction
+      if (fwdResult) {
+        dispatch({ type: 'FORWARD_PREDICT_SUCCESS', result: fwdResult })
+      }
+      return fwdResult ?? null
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Forward drift prediction failed'
+      dispatch({ type: 'FORWARD_PREDICT_ERROR', error: msg })
+      return null
     }
   }, [state])
 
@@ -361,11 +504,16 @@ export function useExperiment() {
     setSearchDates,
     searchProducts,
     selectProduct,
+    characterizeObservation,
     acquireEnvironment,
     setBacktrackHours,
     setStepHours,
     setSpillArea,
     setObservationCoords,
+    setForwardPredictionHours,
+    setForwardStepHours,
+    setEnableForwardPrediction,
+    predictForward,
     searchVessels,
     toggleVessel,
     clearVessels,

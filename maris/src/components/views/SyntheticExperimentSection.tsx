@@ -470,7 +470,7 @@ export default function SyntheticExperimentSection() {
                   <th>Rank</th>
                   <th>Candidate Vessel</th>
                   <th>MMSI / Type</th>
-                  <th>Ground Truth?</th>
+                  <th style={{ whiteSpace: 'nowrap' }}>Ground Truth</th>
                   <th title="Independent binary probability P(responsible | features) from predict_proba(). Does not sum to 1.">
                     Model Probability
                   </th>
@@ -505,11 +505,17 @@ export default function SyntheticExperimentSection() {
                       <td className="syn-td-sub">
                         {cand.mmsi || cand.vessel_id} <span className="syn-type-hint">({cand.vessel_type})</span>
                       </td>
-                      <td>
+                      <td className="syn-gt-cell">
                         {isGT ? (
-                          <span className="syn-gt-badge">YES (Actual Spiller)</span>
+                          <span className="syn-gt-badge">
+                            <span className="syn-gt-dot" />
+                            YES (Actual Spiller)
+                          </span>
                         ) : (
-                          <span className="syn-distractor-badge">No (Traffic Vessel)</span>
+                          <span className="syn-distractor-badge">
+                            <span className="syn-distractor-dot" />
+                            No (Traffic Vessel)
+                          </span>
                         )}
                       </td>
                       <td>

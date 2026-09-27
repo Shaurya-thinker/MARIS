@@ -10,7 +10,13 @@ import {
   ZoomOut,
   Compass,
 } from 'lucide-react'
-import type { AisPosition, BackwardStep, VesselFeatures } from '../../real-experiment/experimentTypes'
+import type {
+  AisPosition,
+  BackwardStep,
+  ForwardDriftStep,
+  ForwardPredictionResult,
+  VesselFeatures,
+} from '../../real-experiment/experimentTypes'
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 
@@ -30,6 +36,11 @@ export interface AttributionMapProps {
     timestamp: string
     title?: string
     footprint?: Record<string, unknown> | null
+    slickGeometry?: Record<string, unknown> | null
+    areaKm2?: number | null
+    confidence?: number | null
+    dampingContrastDb?: number | null
+    detectionStatus?: string
   }
   reconstructedSource: {
     lat: number
@@ -42,6 +53,8 @@ export interface AttributionMapProps {
   selectedVesselId: string | null
   onSelectVessel: (vesselId: string | null) => void
   vesselPositionsMap?: Record<string, AisPosition[]>
+  forwardSteps?: ForwardDriftStep[]
+  forwardPrediction?: ForwardPredictionResult | null
 }
 
 export function buildCirclePolygon(
@@ -78,6 +91,8 @@ export default function AttributionMap({
   selectedVesselId,
   onSelectVessel,
   vesselPositionsMap = {},
+  forwardSteps = [],
+  forwardPrediction = null,
 }: AttributionMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -86,6 +101,7 @@ export default function AttributionMap({
 
   // Layer visibility toggles
   const [showDrift, setShowDrift] = useState(true)
+  const [showForwardDrift, setShowForwardDrift] = useState(true)
   const [showAis, setShowAis] = useState(true)
   const [showWind, setShowWind] = useState(false)
   const [showCurrents, setShowCurrents] = useState(false)
@@ -97,6 +113,7 @@ export default function AttributionMap({
   const [activePopup, setActivePopup] = useState<
     | { type: 'observation' }
     | { type: 'source' }
+    | { type: 'forward_step'; step: ForwardDriftStep; index: number }
     | { type: 'vessel'; vessel: VesselFeatures }
     | null
   >(null)
@@ -135,6 +152,21 @@ export default function AttributionMap({
     }
     return coords
   }, [observation, backwardSteps, reconstructedSource])
+
+  // Forward predicted drift line coordinates [lon, lat] starting exactly from observation
+  const forwardLineCoords = useMemo(() => {
+    const coords: [number, number][] = [[observation.lon, observation.lat]]
+    const steps = forwardSteps.length > 0 ? forwardSteps : (forwardPrediction?.steps ?? [])
+    steps.forEach((s) => {
+      if (Number.isFinite(s.lon) && Number.isFinite(s.lat)) {
+        if (s.step === 0 && Math.abs(s.lon - observation.lon) < 1e-5 && Math.abs(s.lat - observation.lat) < 1e-5) {
+          return
+        }
+        coords.push([s.lon, s.lat])
+      }
+    })
+    return coords
+  }, [observation, forwardSteps, forwardPrediction])
 
   // Uncertainty polygon (6.5 km)
   const uncertaintyPolygon = useMemo(() => {
@@ -187,6 +219,15 @@ export default function AttributionMap({
       })
     })
 
+    if (forwardLineCoords.length > 1) {
+      forwardLineCoords.forEach((pt) => {
+        minLat = Math.min(minLat, pt[1])
+        maxLat = Math.max(maxLat, pt[1])
+        minLon = Math.min(minLon, pt[0])
+        maxLon = Math.max(maxLon, pt[0])
+      })
+    }
+
     // Add 18% padding so all markers, pills, and tracks fit comfortably
     const padLat = Math.max((maxLat - minLat) * 0.18, 0.05)
     const padLon = Math.max((maxLon - minLon) * 0.18, 0.05)
@@ -219,11 +260,12 @@ export default function AttributionMap({
     (map: MapLibreMap) => {
       clearMarkers()
 
-      // 1. OBSERVED SPILL MARKER
+      // 1. OBSERVED SPILL / SLICK MARKER
       const obsEl = document.createElement('div')
       obsEl.className = 're-map-marker-obs-wrap'
+      const areaTag = observation.areaKm2 ? ` (${observation.areaKm2.toFixed(1)} km²)` : ''
       obsEl.innerHTML = `
-        <div class="re-marker-pill re-marker-pill-obs">🔵 OBSERVED SPILL</div>
+        <div class="re-marker-pill re-marker-pill-obs">🔵 DETECTED SLICK${areaTag}</div>
         <div class="re-marker-dot re-marker-dot-obs">
           <div class="re-marker-pulse"></div>
         </div>
@@ -303,6 +345,32 @@ export default function AttributionMap({
         })
       }
 
+      // 4b. FORWARD DRIFT FINAL POSITION MARKER
+      const effectiveForwardSteps = forwardSteps.length > 0 ? forwardSteps : (forwardPrediction?.steps ?? [])
+      if (showForwardDrift && effectiveForwardSteps.length > 0) {
+        const lastStep = effectiveForwardSteps[effectiveForwardSteps.length - 1]
+        if (lastStep && Number.isFinite(lastStep.lon) && Number.isFinite(lastStep.lat)) {
+          const fwdEl = document.createElement('div')
+          fwdEl.className = 're-map-marker-fwd-wrap'
+          fwdEl.style.cursor = 'pointer'
+          const durationH = forwardPrediction?.prediction_hours ?? lastStep.step
+          fwdEl.innerHTML = `
+            <div class="re-marker-pill" style="background: rgba(6, 40, 50, 0.92); color: #22d3ee; border: 1.5px solid #06b6d4; font-size: 0.72rem; box-shadow: 0 0 14px rgba(6, 182, 212, 0.45);">
+              🔮 FORWARD PROJECTION (+${durationH}h)
+            </div>
+            <div class="re-marker-dot" style="width: 12px; height: 12px; border-radius: 50%; background: #06b6d4; border: 2px solid #ffffff; box-shadow: 0 0 8px #22d3ee; margin: 2px auto 0 auto;"></div>
+          `
+          fwdEl.onclick = (e) => {
+            e.stopPropagation()
+            setActivePopup({ type: 'forward_step', step: lastStep, index: effectiveForwardSteps.length - 1 })
+          }
+          const fwdMarker = new maplibregl.Marker({ element: fwdEl, anchor: 'bottom' })
+            .setLngLat([lastStep.lon, lastStep.lat])
+            .addTo(map)
+          markersRef.current.push(fwdMarker)
+        }
+      }
+
       // 5. AIS VESSEL LABELS (Positioned at track position farthest from the reconstructed source)
       if (showAis) {
         candidateTrackData.forEach((ct) => {
@@ -354,7 +422,11 @@ export default function AttributionMap({
       candidateTrackData,
       showUncertainty,
       showDrift,
+      showForwardDrift,
       backwardSteps,
+      forwardSteps,
+      forwardPrediction,
+      forwardLineCoords,
       showAis,
       onSelectVessel,
       clearMarkers,
@@ -364,6 +436,43 @@ export default function AttributionMap({
   // Register and sync MapLibre GeoJSON layers
   const syncMapLayers = useCallback(
     (map: MapLibreMap) => {
+      // 0. Source: Detected Slick / Anomaly Polygon (Step 10)
+      const slickGeo = observation.slickGeometry ?? observation.footprint
+      if (slickGeo && typeof slickGeo === 'object' && ('type' in slickGeo || 'coordinates' in slickGeo)) {
+        const slickGeoData = (
+          slickGeo.type === 'Feature' || slickGeo.type === 'Polygon' || slickGeo.type === 'MultiPolygon'
+            ? slickGeo
+            : { type: 'Feature', geometry: slickGeo, properties: {} }
+        ) as GeoJSON.GeoJSON
+        const slickSrc = map.getSource('slick-detected-geo') as maplibregl.GeoJSONSource | undefined
+        if (slickSrc) {
+          slickSrc.setData(slickGeoData)
+        } else {
+          map.addSource('slick-detected-geo', {
+            type: 'geojson',
+            data: slickGeoData,
+          })
+          map.addLayer({
+            id: 'slick-detected-fill',
+            type: 'fill',
+            source: 'slick-detected-geo',
+            paint: {
+              'fill-color': '#06b6d4',
+              'fill-opacity': 0.35,
+            },
+          })
+          map.addLayer({
+            id: 'slick-detected-line',
+            type: 'line',
+            source: 'slick-detected-geo',
+            paint: {
+              'line-color': '#22d3ee',
+              'line-width': 2.5,
+            },
+          })
+        }
+      }
+
       // 1. Source: Uncertainty Zone Polygon
       const uncSrc = map.getSource('src-unc-geo') as maplibregl.GeoJSONSource | undefined
       if (uncSrc) {
@@ -481,6 +590,92 @@ export default function AttributionMap({
       }
       if (map.getLayer('drift-steps')) {
         map.setLayoutProperty('drift-steps', 'visibility', showDrift ? 'visible' : 'none')
+      }
+
+      // 2b. Source: Forward Drift Trajectory Line & Step Markers (Step 11)
+      if (forwardLineCoords.length > 1) {
+        const fwdFeatures: GeoJSON.Feature[] = [
+          {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: forwardLineCoords,
+            },
+          },
+        ]
+        forwardLineCoords.forEach((pt, i) => {
+          fwdFeatures.push({
+            type: 'Feature',
+            properties: { stepIndex: i },
+            geometry: {
+              type: 'Point',
+              coordinates: pt,
+            },
+          })
+        })
+
+        const fwdSrc = map.getSource('fwd-traj-src') as maplibregl.GeoJSONSource | undefined
+        if (fwdSrc) {
+          fwdSrc.setData({
+            type: 'FeatureCollection',
+            features: fwdFeatures,
+          })
+        } else {
+          map.addSource('fwd-traj-src', {
+            type: 'geojson',
+            data: {
+              type: 'FeatureCollection',
+              features: fwdFeatures,
+            },
+          })
+          // Casing
+          map.addLayer({
+            id: 'fwd-drift-casing',
+            type: 'line',
+            source: 'fwd-traj-src',
+            filter: ['==', '$type', 'LineString'],
+            paint: {
+              'line-color': '#000000',
+              'line-width': 7,
+              'line-opacity': 0.8,
+            },
+          })
+          // Vibrant cyan dashed forward line
+          map.addLayer({
+            id: 'fwd-drift-line',
+            type: 'line',
+            source: 'fwd-traj-src',
+            filter: ['==', '$type', 'LineString'],
+            paint: {
+              'line-color': '#06b6d4',
+              'line-width': 4.5,
+              'line-dasharray': [3, 2],
+            },
+          })
+          // Step circles
+          map.addLayer({
+            id: 'fwd-drift-steps',
+            type: 'circle',
+            source: 'fwd-traj-src',
+            filter: ['==', '$type', 'Point'],
+            paint: {
+              'circle-color': '#22d3ee',
+              'circle-radius': 4.5,
+              'circle-stroke-color': '#000000',
+              'circle-stroke-width': 2,
+            },
+          })
+        }
+        if (map.getLayer('fwd-drift-casing')) {
+          map.setLayoutProperty('fwd-drift-casing', 'visibility', showForwardDrift ? 'visible' : 'none')
+        }
+        if (map.getLayer('fwd-drift-line')) {
+          map.setLayoutProperty('fwd-drift-line', 'visibility', showForwardDrift ? 'visible' : 'none')
+        }
+        if (map.getLayer('fwd-drift-steps')) {
+          map.setLayoutProperty('fwd-drift-steps', 'visibility', showForwardDrift ? 'visible' : 'none')
+        }
       }
 
       // 3. Source: AIS Candidate Tracks & Position Breadcrumbs
@@ -811,6 +1006,17 @@ export default function AttributionMap({
             <span className="re-toggle-text">Show drift trajectory</span>
           </label>
 
+          {forwardLineCoords.length > 1 && (
+            <label className="re-toggle-label" data-testid="forward-drift-toggle">
+              <input
+                type="checkbox"
+                checked={showForwardDrift}
+                onChange={(e) => setShowForwardDrift(e.target.checked)}
+              />
+              <span className="re-toggle-text" style={{ color: '#22d3ee' }}>Show forward prediction</span>
+            </label>
+          )}
+
           <label className="re-toggle-label">
             <input
               type="checkbox"
@@ -884,6 +1090,31 @@ export default function AttributionMap({
 
               <rect width="800" height="480" fill="#09141d" />
               <rect width="800" height="480" fill={`url(#grid-${popupIdPrefix})`} />
+
+              {/* 0. Detected Slick Polygon (SVG fallback) */}
+              {(() => {
+                const slickGeo = observation.slickGeometry
+                if (slickGeo && typeof slickGeo === 'object' && 'coordinates' in slickGeo) {
+                  const rings = (slickGeo as { coordinates: [number, number][][] }).coordinates
+                  if (rings && rings.length > 0 && Array.isArray(rings[0])) {
+                    const pts = rings[0].map((c) => {
+                      const pt = project(c[0], c[1])
+                      return `${pt.x},${pt.y}`
+                    })
+                    return (
+                      <g data-testid="slick-polygon-layer">
+                        <polygon
+                          points={pts.join(' ')}
+                          fill="rgba(6, 182, 212, 0.35)"
+                          stroke="#22d3ee"
+                          strokeWidth="2.5"
+                        />
+                      </g>
+                    )
+                  }
+                }
+                return null
+              })()}
 
               {/* 1. Reconstructed Source Uncertainty Zone */}
               {showUncertainty && (
@@ -961,6 +1192,95 @@ export default function AttributionMap({
                             />
                           )
                         })}
+                      </>
+                    )
+                  })()}
+                </g>
+              )}
+
+              {/* 2b. Forward Drift Predicted Trajectory (SVG fallback) */}
+              {showForwardDrift && forwardLineCoords.length > 1 && (
+                <g data-testid="forward-drift-layer" className="re-svg-fwd-drift">
+                  {(() => {
+                    const points = forwardLineCoords.map((c) => {
+                      const pt = project(c[0], c[1])
+                      return `${pt.x},${pt.y}`
+                    })
+                    const effectiveSteps = forwardSteps.length > 0 ? forwardSteps : (forwardPrediction?.steps ?? [])
+                    return (
+                      <>
+                        <polyline
+                          points={points.join(' ')}
+                          fill="none"
+                          stroke="#000000"
+                          strokeWidth="7"
+                          strokeOpacity="0.8"
+                        />
+                        <polyline
+                          data-testid="forward-drift-polyline"
+                          points={points.join(' ')}
+                          fill="none"
+                          stroke="#06b6d4"
+                          strokeWidth="4.5"
+                          strokeDasharray="6,4"
+                        />
+                        {forwardLineCoords.map((c, i) => {
+                          const pt = project(c[0], c[1])
+                          const isLast = i === forwardLineCoords.length - 1
+                          const stepObj = effectiveSteps[i - 1] ?? null
+                          return (
+                            <circle
+                              key={`fwd-pt-${i}`}
+                              data-testid={`forward-step-marker-${i}`}
+                              cx={pt.x}
+                              cy={pt.y}
+                              r={isLast ? 6.5 : 4}
+                              fill={isLast ? '#22d3ee' : '#0891b2'}
+                              stroke="#ffffff"
+                              strokeWidth="1.5"
+                              style={{ cursor: stepObj ? 'pointer' : 'default' }}
+                              onClick={() => {
+                                if (stepObj) {
+                                  setActivePopup({ type: 'forward_step', step: stepObj, index: i - 1 })
+                                }
+                              }}
+                            />
+                          )
+                        })}
+                        {(() => {
+                          const lastPt = project(
+                            forwardLineCoords[forwardLineCoords.length - 1][0],
+                            forwardLineCoords[forwardLineCoords.length - 1][1]
+                          )
+                          return (
+                            <g
+                              data-testid="forward-predicted-destination"
+                              onClick={() => {
+                                if (effectiveSteps.length > 0) {
+                                  setActivePopup({
+                                    type: 'forward_step',
+                                    step: effectiveSteps[effectiveSteps.length - 1],
+                                    index: effectiveSteps.length - 1,
+                                  })
+                                }
+                              }}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <circle cx={lastPt.x} cy={lastPt.y} r="12" fill="rgba(6, 182, 212, 0.3)" />
+                              <circle cx={lastPt.x} cy={lastPt.y} r="6" fill="#06b6d4" stroke="#ffffff" strokeWidth="2" />
+                              <text
+                                x={lastPt.x + 10}
+                                y={lastPt.y - 6}
+                                fill="#22d3ee"
+                                fontSize="11"
+                                fontWeight="bold"
+                                fontFamily="sans-serif"
+                              >
+                                PREDICTED FUTURE
+                              </text>
+                            </g>
+                          )
+                        })()}
                       </>
                     )
                   })()}
@@ -1147,7 +1467,7 @@ export default function AttributionMap({
               <div className="re-popup-content">
                 <div className="re-popup-header re-popup-obs">
                   <MapPin size={14} />
-                  <strong>Observed Spill / Slick</strong>
+                  <strong>Detected Oil Slick (SAR Observation)</strong>
                 </div>
                 <div className="re-popup-body">
                   <div className="re-popup-row">
@@ -1160,6 +1480,30 @@ export default function AttributionMap({
                       {observation.lat.toFixed(4)}°N, {observation.lon.toFixed(4)}°E
                     </code>
                   </div>
+                  {observation.areaKm2 != null && (
+                    <div className="re-popup-row">
+                      <span>Estimated Area:</span>
+                      <strong style={{ color: '#38bdf8' }}>{observation.areaKm2.toFixed(1)} km²</strong>
+                    </div>
+                  )}
+                  {observation.dampingContrastDb != null && (
+                    <div className="re-popup-row">
+                      <span>Damping Contrast:</span>
+                      <strong>{observation.dampingContrastDb.toFixed(1)} dB</strong>
+                    </div>
+                  )}
+                  {observation.confidence != null && (
+                    <div className="re-popup-row">
+                      <span>Confidence:</span>
+                      <strong>{(observation.confidence * 100).toFixed(0)}%</strong>
+                    </div>
+                  )}
+                  {observation.detectionStatus && (
+                    <div className="re-popup-row">
+                      <span>Status:</span>
+                      <span>{observation.detectionStatus}</span>
+                    </div>
+                  )}
                   <div className="re-popup-row">
                     <span>Sensor:</span>
                     <span>Sentinel-1 SAR (Copernicus)</span>
@@ -1188,6 +1532,56 @@ export default function AttributionMap({
                   <div className="re-popup-row">
                     <span>Model:</span>
                     <span>leeway_euler_backward_v1</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activePopup.type === 'forward_step' && (
+              <div className="re-popup-content" data-testid="forward-step-popup">
+                <div className="re-popup-header" style={{ color: '#22d3ee', borderBottom: '1px solid #0891b2' }}>
+                  <Compass size={14} />
+                  <strong>Forward Drift Prediction (+{activePopup.step.step}h)</strong>
+                </div>
+                <div className="re-popup-body">
+                  <div className="re-popup-row">
+                    <span>Elapsed Prediction:</span>
+                    <strong style={{ color: '#22d3ee' }}>+{activePopup.step.step} hours</strong>
+                  </div>
+                  {activePopup.step.timestamp && (
+                    <div className="re-popup-row">
+                      <span>Projected Time:</span>
+                      <strong>{activePopup.step.timestamp.replace('T', ' ').slice(0, 19)} UTC</strong>
+                    </div>
+                  )}
+                  <div className="re-popup-row">
+                    <span>Predicted Coordinates:</span>
+                    <code>
+                      {activePopup.step.lat.toFixed(4)}°N, {activePopup.step.lon.toFixed(4)}°E
+                    </code>
+                  </div>
+                  {activePopup.step.u_wind_ms != null && activePopup.step.v_wind_ms != null && (
+                    <div className="re-popup-row">
+                      <span>Wind Forcing (10m):</span>
+                      <strong>
+                        {Math.hypot(activePopup.step.u_wind_ms, activePopup.step.v_wind_ms).toFixed(1)} m/s
+                      </strong>
+                    </div>
+                  )}
+                  {activePopup.step.u_current_ms != null && activePopup.step.v_current_ms != null && (
+                    <div className="re-popup-row">
+                      <span>Ocean Current:</span>
+                      <strong>
+                        {Math.hypot(activePopup.step.u_current_ms, activePopup.step.v_current_ms).toFixed(2)} m/s
+                      </strong>
+                    </div>
+                  )}
+                  <div className="re-popup-row">
+                    <span>Model:</span>
+                    <span>leeway_euler_forward_v1 (α = 0.035)</span>
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic', marginTop: '0.4rem' }}>
+                    Deterministic model trajectory under supplied forcing. Not an observed future track.
                   </div>
                 </div>
               </div>
@@ -1273,6 +1667,19 @@ export default function AttributionMap({
             <span className="re-line re-line-drift" />
             <strong style={{ color: '#f59e0b' }}>Backward Drift Trajectory</strong>
           </div>
+          {forwardLineCoords.length > 1 && showForwardDrift && (
+            <div className="re-legend-entry" data-testid="legend-forward-drift">
+              <span
+                className="re-line"
+                style={{
+                  background: '#06b6d4',
+                  boxShadow: '0 0 6px rgba(6, 182, 212, 0.6)',
+                  borderTop: '2px dashed #ffffff',
+                }}
+              />
+              <strong style={{ color: '#22d3ee' }}>Forward Drift Prediction</strong>
+            </div>
+          )}
           {candidateTrackData.map((ct) => (
             <div
               key={ct.vessel.vessel_id}

@@ -161,7 +161,7 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
       setLoadingReferences(true)
       try {
         const refs = await fetchEvaluatorReferenceObservations()
-        setReferenceImages(refs)
+        setReferenceImages(Array.isArray(refs) ? refs : [])
       } catch (err) {
         setErrorMessage(err instanceof Error ? err.message : 'Failed to load reference observations.')
       } finally {

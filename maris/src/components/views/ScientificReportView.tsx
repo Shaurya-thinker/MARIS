@@ -381,6 +381,58 @@ export default function ScientificReportView({
                     {runResult.satellite_product_id}
                   </td>
                 </tr>
+                {reportData?.oil_spill_characterization && (
+                  <>
+                    <tr>
+                      <th>Slick Detection Status</th>
+                      <td>
+                        <span
+                          style={{
+                            fontWeight: 600,
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '4px',
+                            background: reportData.oil_spill_characterization.estimated_area_km2 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+                            color: reportData.oil_spill_characterization.estimated_area_km2 ? '#22c55e' : '#eab308',
+                          }}
+                        >
+                          {reportData.oil_spill_characterization.detection_status}
+                        </span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Estimated Slick Area</th>
+                      <td>
+                        <strong>
+                          {reportData.oil_spill_characterization.estimated_area_km2 != null
+                            ? `${reportData.oil_spill_characterization.estimated_area_km2} km²`
+                            : 'Unavailable (unsegmented scene)'}
+                        </strong>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Bragg Damping Contrast</th>
+                      <td>
+                        {reportData.oil_spill_characterization.damping_contrast_db != null
+                          ? `${reportData.oil_spill_characterization.damping_contrast_db} dB`
+                          : 'Unavailable'}
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Detection Confidence</th>
+                      <td>
+                        {reportData.oil_spill_characterization.confidence_score != null
+                          ? `${(reportData.oil_spill_characterization.confidence_score * 100).toFixed(0)}%`
+                          : 'Catalogue geometric anchor'}
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Detection Method</th>
+                      <td style={{ fontSize: '0.85rem' }}>
+                        {reportData.oil_spill_characterization.detection_method}
+                      </td>
+                    </tr>
+                  </>
+                )}
               </tbody>
             </table>
           </div>
@@ -464,6 +516,89 @@ export default function ScientificReportView({
           </div>
         </section>
 
+        {/* Section 4b: Forward Drift Prediction (Step 11) */}
+        {(runResult.forward_prediction || reportData?.forward_drift_prediction) && (() => {
+          const fwd = runResult.forward_prediction || reportData?.forward_drift_prediction
+          const steps: Array<any> = fwd.steps || []
+          return (
+            <section className="re-report-section" data-testid="report-forward-prediction-section">
+              <h2 className="re-report-sec-title">4b. Forward Drift Prediction (Model Projection)</h2>
+              <p className="re-section-desc">
+                Deterministic forward trajectory simulation predicting future slick movement from the Sentinel-1 observation coordinate under available ERA5 wind and CMEMS ocean current forcing fields.
+              </p>
+              <div className="re-source-zone-card" style={{ marginBottom: '1rem', borderColor: '#0891b2', background: 'rgba(6, 40, 50, 0.4)' }}>
+                <div className="re-source-grid">
+                  <div>
+                    <div className="re-source-label">Observation Origin</div>
+                    <div className="re-source-value">
+                      {fmt(fwd.observation_lat ?? fwd.origin_lat, 4)}°N, {fmt(fwd.observation_lon ?? fwd.origin_lon, 4)}°E
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Final Predicted Coordinate</div>
+                    <div className="re-source-value" style={{ color: '#22d3ee' }}>
+                      {fmt(fwd.final_lat, 4)}°N, {fmt(fwd.final_lon, 4)}°E
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Prediction Horizon</div>
+                    <div className="re-source-value">+{fwd.prediction_hours ?? steps.length} h ({steps.length} steps)</div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Cumulative Displacement</div>
+                    <div className="re-source-value">{(fwd.displacement_km ?? fwd.total_distance_km)?.toFixed(1) ?? '—'} km</div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Model Identifier</div>
+                    <div className="re-source-value" style={{ fontSize: '0.8rem' }}>{fwd.model_version ?? 'leeway_euler_v1'}</div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Projection Status</div>
+                    <div className="re-source-value" style={{ color: '#22d3ee' }}>{fwd.status ?? fwd.termination_status ?? 'COMPLETED'}</div>
+                  </div>
+                </div>
+              </div>
+
+              {steps.length > 0 && (
+                <div className="re-table-card" style={{ marginBottom: '1rem' }}>
+                  <table className="re-table re-report-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Step</th>
+                        <th>Forecast Time</th>
+                        <th>Latitude (°N)</th>
+                        <th>Longitude (°E)</th>
+                        <th>Wind (m/s)</th>
+                        <th>Current (m/s)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {steps.map((st: any, i: number) => {
+                        const windSpd = st.u_wind_ms != null && st.v_wind_ms != null ? Math.hypot(st.u_wind_ms, st.v_wind_ms).toFixed(1) : '—'
+                        const currSpd = st.u_current_ms != null && st.v_current_ms != null ? Math.hypot(st.u_current_ms, st.v_current_ms).toFixed(2) : '—'
+                        return (
+                          <tr key={i}>
+                            <td className="re-td-mono">+{st.step} h</td>
+                            <td className="re-td-mono">{formatDate(st.timestamp)}</td>
+                            <td className="re-td-mono">{fmt(st.lat, 4)}°N</td>
+                            <td className="re-td-mono">{fmt(st.lon, 4)}°E</td>
+                            <td className="re-td-mono">{windSpd}</td>
+                            <td className="re-td-mono">{currSpd}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="re-disclaimer">
+                <strong>Scientific Uncertainty Notice:</strong> The forward trajectory is a deterministic model projection under the supplied environmental forcing fields (Leeway-Euler with α = 0.035). MARIS does not project a synthetic uncertainty radius without a scientifically calibrated stochastic dispersion model. This prediction does not represent a guaranteed or observed future path.
+              </div>
+            </section>
+          )
+        })()}
+
         {/* Section 5: Attribution Map (Stored Result) */}
         <section className="re-report-section">
           <h2 className="re-report-sec-title">5. Historical Attribution Map</h2>
@@ -491,6 +626,8 @@ export default function ScientificReportView({
               selectedVesselId={selectedVesselId}
               onSelectVessel={setSelectedVesselId}
               vesselPositionsMap={vesselPositionsMap}
+              forwardSteps={runResult.forward_prediction?.steps}
+              forwardPrediction={runResult.forward_prediction}
             />
           </div>
         </section>
@@ -646,9 +783,132 @@ export default function ScientificReportView({
           </section>
         )}
 
-        {/* Section 8: Reproducibility Record */}
-        <section className="re-report-section">
-          <h2 className="re-report-sec-title">8. Experiment Reproducibility Audit</h2>
+        {/* Section 8: ML Model Signal & AIS Behavioural Intelligence */}
+        {(() => {
+          const cands: any[] = reportData?.candidates ?? []
+          const hasML = cands.some((c: any) => c.model_probability != null)
+          const hasBeh = cands.some((c: any) => c.behavioral_intelligence != null)
+          if (!cands.length || (!hasML && !hasBeh)) return null
+          return (
+            <section className="re-report-section" data-testid="report-ml-section">
+              <h2 className="re-report-sec-title">8. ML Model Signal &amp; AIS Behavioural Intelligence</h2>
+              <div className="re-disclaimer" style={{ marginBottom: '1rem', borderColor: '#1d4ed8', background: 'rgba(29,78,216,0.07)' }}>
+                <strong>CONTEXTUAL MODEL LAYER — NOT ATTRIBUTION OR LEGAL RESPONSIBILITY.</strong> ML Model Probability is an independent model output generated from the extracted feature representation. Not a probability of legal responsibility or causation. Training provenance: Model trained on synthetic benchmark scenarios; real-data inference is an experimental contextual signal and has not been established as a calibrated real-world responsibility probability. Behavioural findings are deterministic Stage E3 rule-based results only; no intent, wrongdoing, or legal culpability is implied.
+              </div>
+
+              {hasML && (
+                <>
+                  <p className="re-section-desc" style={{ color: '#93c5fd', marginBottom: '0.5rem' }}>
+                    <strong>ML Model Probability</strong> — Independent per-candidate model output (Not a probability of legal responsibility or causation.)
+                  </p>
+                  <div className="re-results-table-wrap" style={{ marginBottom: '1.25rem' }}>
+                    <table className="re-table re-report-table">
+                      <thead>
+                        <tr>
+                          <th>Rank</th>
+                          <th>Vessel</th>
+                          <th>Physical Score</th>
+                          <th>ML Model Probability</th>
+                          <th>Signal Interpretation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cands.map((c: any) => {
+                          const prob: number | null = c.model_probability ?? null
+                          const probStr = prob != null ? `${(prob * 100).toFixed(1)}%` : '—'
+                          const color = prob == null ? '#94a3b8' : prob >= 0.70 ? '#4ade80' : prob >= 0.40 ? '#facc15' : '#f87171'
+                          const interp = prob == null
+                            ? 'Inference unavailable'
+                            : prob >= 0.70 ? 'High spatial/temporal alignment with reconstructed release'
+                            : prob >= 0.40 ? 'Moderate alignment with reconstructed evidence profile'
+                            : prob >= 0.15 ? 'Low alignment; limited spatial or temporal overlap'
+                            : 'Minimal alignment with reconstructed release parameters'
+                          return (
+                            <tr key={c.vessel_id ?? c.rank}>
+                              <td className="re-td-mono"><strong>#{c.rank}</strong></td>
+                              <td>{c.vessel_name ?? c.mmsi ?? c.vessel_id}</td>
+                              <td className="re-td-mono">{(c.evidence_consistency_score * 100).toFixed(1)}%</td>
+                              <td className="re-td-mono" style={{ fontWeight: 800, color }}>{probStr}</td>
+                              <td style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>{interp}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p style={{ fontSize: '0.72rem', color: '#475569', fontStyle: 'italic', marginTop: '0.25rem', marginBottom: '0.2rem' }}>
+                    <strong>Training provenance:</strong> Model trained on synthetic benchmark scenarios; real-data inference is an experimental contextual signal and has not been established as a calibrated real-world responsibility probability.
+                  </p>
+                  <p style={{ fontSize: '0.72rem', color: '#475569', fontStyle: 'italic', marginTop: '0.15rem', marginBottom: 0 }}>
+                    ML feature-vector values are model inputs produced by the feature extractor and may use definitions or normalization different from the physical evidence presentation metrics.
+                  </p>
+                </>
+              )}
+
+              {hasBeh && (
+                <>
+                  <p className="re-section-desc" style={{ color: '#6ee7b7', marginBottom: '0.5rem' }}>
+                    <strong>AIS Behavioural Intelligence (Stage E3 Detectors)</strong> — Contextual Observable AIS Patterns Only
+                  </p>
+                  <div className="re-results-table-wrap" style={{ marginBottom: '0.75rem' }}>
+                    <table className="re-table re-report-table">
+                      <thead>
+                        <tr>
+                          <th>Rank</th>
+                          <th>Vessel</th>
+                          <th>AIS Gaps</th>
+                          <th>Loitering</th>
+                          <th>Rule-Based Detector Findings</th>
+                          <th>Flags</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cands.map((c: any) => {
+                          const bi = c.behavioral_intelligence
+                          if (!bi) return (
+                            <tr key={c.vessel_id ?? c.rank}>
+                              <td className="re-td-mono">#{c.rank}</td>
+                              <td>{c.vessel_name ?? c.mmsi ?? c.vessel_id}</td>
+                              <td colSpan={4} style={{ color: '#64748b', fontSize: '0.8rem' }}>Analysis unavailable</td>
+                            </tr>
+                          )
+                          return (
+                            <tr key={c.vessel_id ?? c.rank}>
+                              <td className="re-td-mono"><strong>#{c.rank}</strong></td>
+                              <td>{c.vessel_name ?? c.mmsi ?? c.vessel_id}</td>
+                              <td className="re-td-mono">{bi.transmission_gap_count ?? 0}</td>
+                              <td style={{ color: bi.loitering_detected ? '#facc15' : '#4ade80', fontWeight: 600 }}>
+                                {bi.loitering_detected ? 'Yes' : 'No'}
+                              </td>
+                              <td className="re-td-mono">{(bi.anomalies ?? []).length}</td>
+                              <td style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                                {(bi.summary_flags ?? []).join(', ') || 'None detected'}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p style={{ fontSize: '0.72rem', color: '#64748b', fontStyle: 'italic', margin: 0 }}>
+                    ZERO-FABRICATION: All findings are based exclusively on genuine received AIS transmissions. Transmission gaps are reported as observable gaps in received telemetry only. No vessel movements, transponder disabling events, or activities during gaps are inferred. No intent, wrongdoing, or legal responsibility is implied by any finding in this section.
+                  </p>
+                </>
+              )}
+            </section>
+          )
+        })()}
+
+        {/* Sections 8-9 / 9-10: Reproducibility + Limitations — numbers shift when ML section is present */}
+        {(() => {
+          const cands: any[] = reportData?.candidates ?? []
+          const hasMlSection = cands.some((c: any) => c.model_probability != null || c.behavioral_intelligence != null)
+          const reproSecNum = hasMlSection ? 9 : 8
+          const limSecNum = hasMlSection ? 10 : 9
+          return (
+            <>
+              <section className="re-report-section">
+                <h2 className="re-report-sec-title">{reproSecNum}. Experiment Reproducibility Audit</h2>
           <div className="re-reproducibility-card" data-testid="report-reproducibility-card">
             <div className="re-reproducibility-header">
               <FileCheck size={16} className="re-icon-cyan" />
@@ -693,11 +953,11 @@ export default function ScientificReportView({
               </div>
             </div>
           </div>
-        </section>
+              </section>
 
-        {/* Section 9: Scientific Interpretation & Limitations */}
-        <section className="re-report-section">
-          <h2 className="re-report-sec-title">9. Scientific Interpretation & Limitations</h2>
+              {/* Limitations section — number follows Reproducibility */}
+              <section className="re-report-section">
+                <h2 className="re-report-sec-title">{limSecNum}. Scientific Interpretation &amp; Limitations</h2>
           <div className="re-disclaimer re-result-disclaimer" data-testid="report-disclaimer">
             <strong>Scientific Assessment Disclaimer:</strong> This analysis is an evidence-consistency
             assessment and does not constitute a legal determination of responsibility or causation.
@@ -721,6 +981,9 @@ export default function ScientificReportView({
             </li>
           </ul>
         </section>
+            </>
+          )
+        })()}
 
         {/* Report Footer / Running Metadata */}
         <footer className="re-report-footer">
