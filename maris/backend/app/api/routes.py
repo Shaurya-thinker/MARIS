@@ -418,6 +418,134 @@ def acquire_environment(
     )
 
 
+class SpillCandidateEnvironmentRequest(BaseModel):
+    wind_asset_id: str | None = None
+    current_asset_id: str | None = None
+
+
+class SpillCandidateEnvironmentResponse(BaseModel):
+    investigation_id: str
+    spill_id: str
+    candidate_count: int
+    regime_counts: dict[str, int]
+    features: list[dict[str, Any]]
+
+
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/candidates/environment",
+    response_model=SpillCandidateEnvironmentResponse,
+)
+def enrich_spill_candidates_environment_endpoint(
+    investigation_id: str,
+    spill_id: str,
+    payload: SpillCandidateEnvironmentRequest | None = None,
+) -> SpillCandidateEnvironmentResponse:
+    """Stage C2 — Attach local environmental context and SAR lookalike gating to candidates."""
+    from app.services.candidate_environment import enrich_geojson_feature_collection
+
+    req_payload = payload or SpillCandidateEnvironmentRequest()
+
+    # 1. Resolve spill asset
+    spill_asset: Asset | None = None
+    try:
+        cand = default_asset_registry.get(spill_id)
+        if cand.investigation_id == investigation_id:
+            spill_asset = cand
+    except KeyError:
+        pass
+
+    if spill_asset is None:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if (
+                asset.id == spill_id
+                or asset.provenance.product_id == spill_id
+                or asset.metadata.get("detection_id") == spill_id
+                or asset.metadata.get("parent_scene_id") == spill_id
+                or asset.provenance.extra.get("detection_id") == spill_id
+            ):
+                spill_asset = asset
+                break
+
+    if spill_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill asset or detection '{spill_id}' not found for investigation '{investigation_id}'",
+        )
+
+    # 2. Resolve wind and current assets
+    wind_asset: Asset | None = None
+    current_asset: Asset | None = None
+
+    if req_payload.wind_asset_id:
+        try:
+            wind_asset = default_asset_registry.get(req_payload.wind_asset_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Wind asset '{req_payload.wind_asset_id}' not found in registry",
+            )
+    else:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if asset.type == AssetType.ENVIRONMENT_WIND:
+                wind_asset = asset
+                break
+
+    if req_payload.current_asset_id:
+        try:
+            current_asset = default_asset_registry.get(req_payload.current_asset_id)
+        except KeyError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Current asset '{req_payload.current_asset_id}' not found in registry",
+            )
+    else:
+        for asset in default_asset_registry.list_for_investigation(investigation_id):
+            if asset.type == AssetType.ENVIRONMENT_CURRENT:
+                current_asset = asset
+                break
+
+    # 3. Locate GeoJSON candidate vector artifact
+    spill_loc = Path(spill_asset.location)
+    if spill_loc.is_file() and spill_loc.suffix.lower() == ".geojson":
+        geojson_path = spill_loc
+    else:
+        geojson_path = spill_loc.parent / "spill_geometry.geojson"
+
+    if not geojson_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Spill geometry GeoJSON artifact not found at '{geojson_path}'",
+        )
+
+    import json
+    with open(geojson_path, "r", encoding="utf-8") as f:
+        fc = json.load(f)
+
+    obs_time = spill_asset.acquisition_time or spill_asset.provenance.retrieved_at or datetime.now(timezone.utc)
+
+    enriched_fc = enrich_geojson_feature_collection(
+        feature_collection=fc,
+        sensing_time=obs_time,
+        era5_source=wind_asset,
+        cmems_source=current_asset,
+    )
+
+    # Save enriched GeoJSON
+    with open(geojson_path, "w", encoding="utf-8") as f:
+        json.dump(enriched_fc, f, indent=2)
+
+    summary = enriched_fc.get("properties", {}).get("candidate_environment_summary", {})
+    regime_counts = summary.get("regime_counts", {})
+
+    return SpillCandidateEnvironmentResponse(
+        investigation_id=investigation_id,
+        spill_id=spill_id,
+        candidate_count=len(enriched_fc.get("features", [])),
+        regime_counts=regime_counts,
+        features=enriched_fc.get("features", []),
+    )
+
+
 class DriftModellingRequest(BaseModel):
     wind_asset_id: str
     current_asset_id: str
@@ -1079,6 +1207,10 @@ def behavioral_intelligence_endpoint(
 
 
 @router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/evidence/fuse",
+    response_model=EvidenceFusionResult,
+)
+@router.post(
     "/api/v1/investigations/{investigation_id}/spills/{spill_id}/evidence-fusion",
     response_model=EvidenceFusionResult,
 )
@@ -1324,6 +1456,10 @@ def evidence_fusion_endpoint(
     "/api/v1/investigations/{investigation_id}/spills/{spill_id}/candidate-ranking",
     response_model=CandidateRanking,
 )
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/candidates/rank",
+    response_model=CandidateRanking,
+)
 def candidate_ranking_endpoint(
     investigation_id: str,
     spill_id: str,
@@ -1335,7 +1471,7 @@ def candidate_ranking_endpoint(
     ranking of candidate vessels based on physical evidence consistency.
 
     Invariants:
-    - Primary score uses spatial (0.50), temporal (0.25), trajectory (0.25) channels only.
+    - Primary score uses spatial (0.50), temporal (0.25), trajectory (0.25) channels only (or custom configured weights).
     - Missing channels are excluded from the denominator (never treated as zero).
     - E3 behavioral anomalies contribute exactly 0.00 to the score.
     - D1 forward drift contributes exactly 0.00 to the score.
@@ -1433,6 +1569,7 @@ def candidate_ranking_endpoint(
             evidence_fusion=evidence_fusion,
             investigation_id=investigation_id,
             spill_id=spill_id,
+            weights=req_payload.weights,
         )
         return ranking
     except CandidateRankingError as exc:
@@ -1443,6 +1580,10 @@ def candidate_ranking_endpoint(
         raise HTTPException(status_code=500, detail=f"Candidate ranking failed: {exc}")
 
 
+@router.post(
+    "/api/v1/investigations/{investigation_id}/spills/{spill_id}/explain",
+    response_model=ExplainabilityReport,
+)
 @router.post(
     "/api/v1/investigations/{investigation_id}/spills/{spill_id}/explainability",
     response_model=ExplainabilityReport,

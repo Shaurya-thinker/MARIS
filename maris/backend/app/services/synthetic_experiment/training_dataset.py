@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from app.services.drift_modelling import MaritimeDomainChecker
 from app.services.source_estimation import run_backward_drift
 from app.services.synthetic_experiment.feature_builder import (
     FEATURE_NAMES,
@@ -65,6 +66,13 @@ def build_synthetic_dataset(
     ]
     num_scenarios = len(seeds)
 
+    # Pre-initialize a shared maritime domain checker for the synthetic corridor
+    # to avoid re-rasterizing coastline geometry on every single scenario (50x-70x speedup).
+    shared_domain_checker = MaritimeDomainChecker(
+        bbox=(5.0, 40.0, 13.0, 47.0),
+        resolution_deg=0.005,
+    )
+
     for scenario_seed in seeds:
         scenario = generate_synthetic_scenario(
             seed=scenario_seed,
@@ -74,7 +82,7 @@ def build_synthetic_dataset(
         )
         scenario_ids.append(scenario.scenario_id)
 
-        # Execute backward drift using actual physics integration
+        # Execute backward drift using actual physics integration with shared domain checker
         backward_steps = run_backward_drift(
             origin_lon=scenario.origin_lon,
             origin_lat=scenario.origin_lat,
@@ -84,6 +92,7 @@ def build_synthetic_dataset(
             lookback_hours=scenario.backtrack_hours,
             step_hours=scenario.step_hours,
             spill_area_m2=scenario.spill_area_m2,
+            domain_checker=shared_domain_checker,
         )
 
         final_step = backward_steps[-1]

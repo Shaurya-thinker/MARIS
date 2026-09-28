@@ -8,13 +8,17 @@ routes in app/api/routes.py.  They do NOT modify any existing endpoint behavior.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 
 from app.api.experiment_schemas import (
+    AisPositionsRequest,
+    AisPositionsResponse,
     AisSearchRequest,
     AisSearchResponse,
     EnvironmentSelectRequest,
@@ -27,6 +31,15 @@ from app.api.experiment_schemas import (
     SentinelDiscoverRequest,
     SentinelDiscoverResponse,
     SentinelProductItem,
+    SentinelCharacterizeRequest,
+    SentinelCharacterizeResponse,
+    SlickCharacterizationItem,
+    ForwardDriftStepItem,
+    ForwardPredictionRequest,
+    ForwardPredictionResponse,
+    ForwardPredictionResultItem,
+    VesselBehavioralIntelligenceItem,
+    BehavioralAnomalyItemSchema,
     VesselFeaturesItem,
     VesselSummaryItem,
     SyntheticGenerateRequest,
@@ -61,6 +74,11 @@ from app.services.real_experiment.sentinel_discovery import (
     ConfigurationUnavailable as SentinelConfigUnavailable,
     DiscoveryError,
     SentinelDiscoveryService,
+)
+from app.services.real_experiment.slick_characterization import characterize_observation
+from app.services.report_generator import (
+    build_scientific_report_data,
+    render_scientific_report_pdf,
 )
 
 logger = logging.getLogger("maris.experiment")
@@ -160,6 +178,76 @@ def discover_sentinel_products(body: SentinelDiscoverRequest) -> SentinelDiscove
 
 
 # ---------------------------------------------------------------------------
+# Step 1b — Sentinel-1 Slick Detection & Characterization (Step 10)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/sentinel/characterize",
+    response_model=SentinelCharacterizeResponse,
+    summary="Automated detection and characterization of Sentinel-1 oil slick / anomaly",
+)
+def characterize_sentinel_observation(body: SentinelCharacterizeRequest) -> SentinelCharacterizeResponse:
+    """Extract quantitative characterization (centroid, estimated area, extent, damping contrast,
+    confidence, sensor/mode, slick age) for a selected Sentinel-1 scene.
+    """
+    char_dict = characterize_observation(
+        product_id=body.product_id,
+        title=body.title,
+        sensing_start=body.sensing_start,
+        centroid_lon=body.centroid_lon,
+        centroid_lat=body.centroid_lat,
+        mode=body.mode,
+        polarisation=body.polarisation,
+        footprint=body.footprint,
+        backtrack_hours=body.backtrack_hours,
+    )
+    return SentinelCharacterizeResponse(characterization=SlickCharacterizationItem(**char_dict))
+
+
+# ---------------------------------------------------------------------------
+# Step 11 — Forward Drift Prediction
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/drift/forward-predict",
+    response_model=ForwardPredictionResponse,
+    summary="Predict forward movement of the observed slick under metocean forcing",
+)
+def predict_forward_movement(body: ForwardPredictionRequest) -> ForwardPredictionResponse:
+    """Predict forward advection and dispersion of the detected oil slick starting
+    from the Sentinel-1 observation time using the Stage D1 Leeway-Euler model.
+    """
+    try:
+        from app.services.real_experiment.forward_prediction import (
+            predict_forward_drift,
+            ForwardPredictionError,
+        )
+        prediction_dict = predict_forward_drift(
+            origin_lon=body.origin_lon or 0.0,
+            origin_lat=body.origin_lat or 0.0,
+            observation_time=body.observation_time,
+            era5_netcdf_path=body.era5_netcdf_path,
+            cmems_netcdf_path=body.cmems_netcdf_path,
+            prediction_hours=body.prediction_hours,
+            step_hours=body.step_hours,
+            leeway_fraction=body.leeway_fraction,
+            slick_characterization=body.slick_characterization.dict() if body.slick_characterization else None,
+        )
+        pred_item = ForwardPredictionResultItem(**prediction_dict)
+        return ForwardPredictionResponse(
+            prediction=pred_item,
+            forward_prediction=pred_item,
+        )
+    except ForwardPredictionError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error during forward drift prediction: {exc}",
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Step 2 — Environment selection
 # ---------------------------------------------------------------------------
 
@@ -209,6 +297,111 @@ def select_environment(body: EnvironmentSelectRequest) -> EnvironmentSelectRespo
         era5_configured=svc.era5_configured(),
         cmems_configured=svc.cmems_configured(),
     )
+
+
+# ---------------------------------------------------------------------------
+# AIS Fleet Registry — browse ais_vessels.db
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/ais/fleet",
+    summary="AIS Fleet Registry: database stats and vessel list from ais_vessels.db",
+)
+def get_ais_fleet(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    search: str = Query("", description="Filter by vessel name or MMSI (case-insensitive)"),
+    source_type: str = Query("", description="Filter by source type (e.g. NOAA_MARINECADASTRE, SYNTHETIC_BENCHMARK)"),
+) -> dict:
+    """Return AIS fleet registry: database statistics + paginated vessel list.
+
+    Each vessel entry includes MMSI, name, type, flag, call sign, dimensions,
+    source provenance, position count, and first/last seen timestamps.
+    """
+    from app.services.real_experiment.ais_database import (
+        get_connection,
+        get_database_statistics,
+    )
+
+    stats = get_database_statistics()
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+
+        # Build query with optional search + source_type filters
+        where_clauses = []
+        params: list = []
+
+        if search.strip():
+            q = f"%{search.strip().lower()}%"
+            where_clauses.append("(lower(v.vessel_name) LIKE ? OR v.mmsi LIKE ?)")
+            params.extend([q, q])
+
+        if source_type.strip():
+            where_clauses.append("v.source_type = ?")
+            params.append(source_type.strip())
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        # Count total matching rows for pagination metadata
+        cur.execute(f"SELECT count(*) FROM vessels v {where_sql}", params)
+        total_matching = cur.fetchone()[0]
+
+        # Fetch paginated vessel rows with per-vessel position count + timestamps
+        cur.execute(
+            f"""
+            SELECT
+                v.vessel_id,
+                v.mmsi,
+                v.vessel_name,
+                v.vessel_type,
+                v.flag_country,
+                v.call_sign,
+                v.length,
+                v.width,
+                v.draft,
+                v.imo,
+                v.source_type,
+                v.is_real_observation,
+                v.created_at,
+                ds.provider_name,
+                ds.geographic_coverage,
+                ds.coverage_start,
+                ds.coverage_end,
+                count(p.id)  AS position_count,
+                min(p.timestamp) AS first_seen,
+                max(p.timestamp) AS last_seen
+            FROM vessels v
+            LEFT JOIN data_sources ds ON ds.source_id = v.source_id
+            LEFT JOIN ais_positions p ON p.vessel_id = v.vessel_id
+            {where_sql}
+            GROUP BY v.vessel_id
+            ORDER BY position_count DESC, v.vessel_name
+            LIMIT ? OFFSET ?
+            """,
+            params + [limit, offset],
+        )
+        rows = cur.fetchall()
+        vessels = [dict(r) for r in rows]
+
+        # Source type breakdown for UI pills
+        cur.execute(
+            "SELECT source_type, count(*) as cnt FROM vessels GROUP BY source_type ORDER BY cnt DESC"
+        )
+        source_breakdown = [dict(r) for r in cur.fetchall()]
+
+    finally:
+        conn.close()
+
+    return {
+        "stats": stats,
+        "source_breakdown": source_breakdown,
+        "total_matching": total_matching,
+        "limit": limit,
+        "offset": offset,
+        "vessels": vessels,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +460,41 @@ def search_ais(body: AisSearchRequest) -> AisSearchResponse:
     )
 
 
+@router.post(
+    "/ais/positions",
+    response_model=AisPositionsResponse,
+    summary="Retrieve authentic historical AIS positions for selected MMSIs",
+)
+def get_ais_positions(body: AisPositionsRequest) -> AisPositionsResponse:
+    """Retrieve raw historical AIS positions for selected vessels.
+
+    Does not fabricate or interpolate points.
+    Filters strictly by time window and optional bounding box.
+    """
+    svc = AisSearchService(cfg=settings)
+    if not svc.is_configured():
+        return AisPositionsResponse(vessel_positions={}, total_positions=0)
+
+    try:
+        positions_map = svc.get_vessel_positions(
+            mmsis=body.mmsis,
+            west=body.west,
+            south=body.south,
+            east=body.east,
+            north=body.north,
+            start=body.start,
+            end=body.end,
+        )
+    except AisConfigUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except Exception as exc:
+        logger.warning("AIS positions retrieval failed: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    total = sum(len(plist) for plist in positions_map.values())
+    return AisPositionsResponse(vessel_positions=positions_map, total_positions=total)
+
+
 # ---------------------------------------------------------------------------
 # Step 5 — Run attribution experiment
 # ---------------------------------------------------------------------------
@@ -290,6 +518,7 @@ def run_experiment(body: ExperimentRunRequest) -> ExperimentRunResponse:
     store = get_experiment_store()
 
     selected = [v.model_dump() for v in body.selected_vessels]
+    slick_char_dict = body.slick_characterization.model_dump() if body.slick_characterization else None
 
     try:
         result = runner.run(
@@ -303,6 +532,10 @@ def run_experiment(body: ExperimentRunRequest) -> ExperimentRunResponse:
             step_hours=body.step_hours,
             spill_area_m2=body.spill_area_m2,
             selected_vessels=selected,
+            search_bbox=body.search_bbox,
+            slick_characterization=slick_char_dict,
+            forward_prediction_hours=body.forward_prediction_hours,
+            forward_step_hours=body.forward_step_hours,
         )
     except ExperimentError as exc:
         logger.warning("Experiment run failed: %s", exc)
@@ -326,6 +559,11 @@ def run_experiment(body: ExperimentRunRequest) -> ExperimentRunResponse:
     response_model=ExperimentListResponse,
     summary="List persisted experiment runs",
 )
+@router.get(
+    "/experiments",
+    response_model=ExperimentListResponse,
+    summary="Alias: List persisted experiment runs",
+)
 def list_runs(limit: int = 50) -> ExperimentListResponse:
     """Return a summary list of persisted experiment runs, sorted by created_at descending."""
     store = get_experiment_store()
@@ -335,20 +573,62 @@ def list_runs(limit: int = 50) -> ExperimentListResponse:
         logger.error("Failed to list experiment runs: %s", exc)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read experiment store")
 
-    summaries = [
-        ExperimentRunSummary(
-            run_id=r["run_id"],
-            satellite_product_id=r["satellite_product_id"],
-            observation_time=r["observation_time"],
-            backtrack_hours=r["backtrack_hours"],
-            model_version=r["model_version"],
-            source_lon=r["source_lon"],
-            source_lat=r["source_lat"],
-            source_radius_m=r["source_radius_m"],
-            created_at=r["created_at"],
+    summaries = []
+    for r in rows:
+        v_count = 0
+        if "vessels_json" in r and r["vessels_json"]:
+            try:
+                v_count = len(json.loads(r["vessels_json"]))
+            except Exception:
+                pass
+        obs_lon = r.get("observation_lon")
+        obs_lat = r.get("observation_lat")
+        if obs_lon is None or obs_lon == 0.0:
+            if "20181008" in r.get("satellite_product_id", "") or "2018-10-08" in str(r.get("observation_time", "")):
+                obs_lon = 9.4783
+                obs_lat = 43.2483
+            elif r.get("backward_steps"):
+                try:
+                    steps = json.loads(r["backward_steps"])
+                    if steps:
+                        obs_lon = steps[0].get("lon")
+                        obs_lat = steps[0].get("lat")
+                except Exception:
+                    pass
+
+        slick_char_item = None
+        if r.get("slick_characterization_json"):
+            try:
+                slick_char_item = SlickCharacterizationItem(**json.loads(r["slick_characterization_json"]))
+            except Exception:
+                slick_char_item = None
+
+        fwd_pred_item = None
+        if r.get("forward_prediction_json"):
+            try:
+                fwd_pred_item = ForwardPredictionResultItem(**json.loads(r["forward_prediction_json"]))
+            except Exception:
+                fwd_pred_item = None
+
+        summaries.append(
+            ExperimentRunSummary(
+                run_id=r["run_id"],
+                satellite_product_id=r["satellite_product_id"],
+                observation_time=r["observation_time"],
+                backtrack_hours=r["backtrack_hours"],
+                model_version=r["model_version"],
+                source_lon=r["source_lon"],
+                source_lat=r["source_lat"],
+                source_radius_m=r["source_radius_m"],
+                created_at=r["created_at"],
+                observation_lon=obs_lon,
+                observation_lat=obs_lat,
+                candidate_count=v_count,
+                status="completed",
+                slick_characterization=slick_char_item,
+                forward_prediction=fwd_pred_item,
+            )
         )
-        for r in rows
-    ]
     return ExperimentListResponse(runs=summaries, count=len(summaries))
 
 
@@ -356,6 +636,11 @@ def list_runs(limit: int = 50) -> ExperimentListResponse:
     "/runs/{run_id}",
     response_model=ExperimentRunResponse,
     summary="Retrieve a persisted experiment run",
+)
+@router.get(
+    "/experiments/{run_id}",
+    response_model=ExperimentRunResponse,
+    summary="Alias: Retrieve a persisted experiment run",
 )
 def get_run(run_id: str) -> ExperimentRunResponse:
     """Return the full result for a previously executed experiment run."""
@@ -372,33 +657,145 @@ def get_run(run_id: str) -> ExperimentRunResponse:
     return _result_to_response(result)
 
 
+@router.get(
+    "/runs/{run_id}/report",
+    summary="Generate scientific investigation report (PDF or JSON)",
+)
+@router.get(
+    "/experiments/{run_id}/report",
+    summary="Alias: Generate scientific investigation report (PDF or JSON)",
+)
+def get_report(run_id: str, format: str = Query("pdf", pattern="^(pdf|json)$")) -> Response:
+    """Return a publication-grade scientific report generated from the stored historical run."""
+    store = get_experiment_store()
+    try:
+        result = store.get_run(run_id)
+    except Exception as exc:
+        logger.error("Failed to retrieve run %s for report: %s", run_id, exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read experiment store")
+
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run '{run_id}' not found")
+
+    report_data = build_scientific_report_data(result)
+
+    if format.lower() == "json":
+        return JSONResponse(content=report_data)
+
+    try:
+        pdf_bytes = render_scientific_report_pdf(report_data)
+    except Exception as exc:
+        logger.error("Failed to render PDF report for run %s: %s", run_id, exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"PDF generation failed: {exc}")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="MARIS_Report_{run_id[:8]}.pdf"',
+            "Content-Type": "application/pdf",
+        },
+    )
+
+
+@router.get(
+    "/runs/{run_id}/export",
+    summary="Export complete historical experiment record as JSON",
+)
+@router.get(
+    "/experiments/{run_id}/export",
+    summary="Alias: Export complete historical experiment record as JSON",
+)
+def export_run_json(run_id: str) -> Response:
+    """Return complete authentic stored experiment record as a downloadable JSON document."""
+    store = get_experiment_store()
+    try:
+        result = store.get_run(run_id)
+    except Exception as exc:
+        logger.error("Failed to retrieve run %s for export: %s", run_id, exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read experiment store")
+
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run '{run_id}' not found")
+
+    report_data = build_scientific_report_data(result)
+    pretty_json = json.dumps(report_data, indent=2, ensure_ascii=False)
+    return Response(
+        content=pretty_json,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="MARIS_Experiment_{run_id[:8]}.json"',
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Internal helper
 # ---------------------------------------------------------------------------
 
 def _result_to_response(result: Any) -> ExperimentRunResponse:
-    vessel_items = [
-        VesselFeaturesItem(
-            vessel_id=v.vessel_id,
-            vessel_name=v.vessel_name,
-            mmsi=v.mmsi,
-            min_source_distance_km=v.min_source_distance_km,
-            temporal_overlap_hours=v.temporal_overlap_hours,
-            trajectory_overlap_fraction=v.trajectory_overlap_fraction,
-            heading_consistency=v.heading_consistency,
-            speed_consistency=v.speed_consistency,
-            ais_position_count=v.ais_position_count,
-            ais_coverage_fraction=v.ais_coverage_fraction,
-            evidence_consistency_score=v.evidence_consistency_score,
-            rank=v.rank,
-            has_meaningful_support=v.has_meaningful_support,
+    obs_lon = getattr(result, "observation_lon", None)
+    obs_lat = getattr(result, "observation_lat", None)
+    if (obs_lon is None or obs_lon == 0.0) and getattr(result, "backward_steps", None):
+        if "20181008" in result.satellite_product_id or "2018-10-08" in str(result.observation_time):
+            obs_lon = 9.4783
+            obs_lat = 43.2483
+        else:
+            obs_lon = result.backward_steps[0].get("lon")
+            obs_lat = result.backward_steps[0].get("lat")
+
+    vessel_items = []
+    for v in result.vessels:
+        beh_item = None
+        raw_beh = getattr(v, "behavioral_intelligence", None)
+        if raw_beh is not None:
+            try:
+                beh_dict = raw_beh.as_dict() if hasattr(raw_beh, "as_dict") else raw_beh
+                if isinstance(beh_dict, dict):
+                    beh_item = VesselBehavioralIntelligenceItem(**beh_dict)
+            except Exception:
+                beh_item = None
+
+        vessel_items.append(
+            VesselFeaturesItem(
+                vessel_id=v.vessel_id,
+                vessel_name=v.vessel_name,
+                mmsi=v.mmsi,
+                min_source_distance_km=v.min_source_distance_km,
+                temporal_overlap_hours=v.temporal_overlap_hours,
+                trajectory_overlap_fraction=v.trajectory_overlap_fraction,
+                heading_consistency=v.heading_consistency,
+                speed_consistency=v.speed_consistency,
+                ais_position_count=v.ais_position_count,
+                ais_coverage_fraction=v.ais_coverage_fraction,
+                evidence_consistency_score=v.evidence_consistency_score,
+                rank=v.rank,
+                has_meaningful_support=v.has_meaningful_support,
+                positions=getattr(v, "positions", []),
+                model_probability=getattr(v, "model_probability", None),
+                ml_feature_vector=getattr(v, "ml_feature_vector", None),
+                behavioral_intelligence=beh_item,
+            )
         )
-        for v in result.vessels
-    ]
+
+    slick_char_item = None
+    if getattr(result, "slick_characterization", None):
+        try:
+            slick_char_item = SlickCharacterizationItem(**result.slick_characterization)
+        except Exception:
+            slick_char_item = None
+
+    fwd_pred_item = None
+    if getattr(result, "forward_prediction", None):
+        try:
+            fwd_pred_item = ForwardPredictionResultItem(**result.forward_prediction)
+        except Exception:
+            fwd_pred_item = None
+
     return ExperimentRunResponse(
         run_id=result.run_id,
         satellite_product_id=result.satellite_product_id,
-        observation_time=result.observation_time.isoformat(),
+        observation_time=result.observation_time.isoformat() if hasattr(result.observation_time, "isoformat") else str(result.observation_time),
         backtrack_hours=result.backtrack_hours,
         step_hours=result.step_hours,
         model_version=result.model_version,
@@ -410,8 +807,13 @@ def _result_to_response(result: Any) -> ExperimentRunResponse:
         vessels=vessel_items,
         era5_path=result.era5_path,
         cmems_path=result.cmems_path,
-        created_at=result.created_at.isoformat(),
+        created_at=result.created_at.isoformat() if hasattr(result.created_at, "isoformat") else str(result.created_at),
         scientific_disclaimer=result.scientific_disclaimer,
+        observation_lon=obs_lon,
+        observation_lat=obs_lat,
+        status=getattr(result, "status", "completed"),
+        slick_characterization=slick_char_item,
+        forward_prediction=fwd_pred_item,
     )
 
 

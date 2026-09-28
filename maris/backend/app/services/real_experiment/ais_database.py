@@ -583,6 +583,98 @@ def query_vessels_in_spatiotemporal_box(
     return candidates
 
 
+def query_positions_for_mmsis(
+    *,
+    mmsis: list[str],
+    t_start: datetime,
+    t_end: datetime,
+    lat_min: float | None = None,
+    lat_max: float | None = None,
+    lon_min: float | None = None,
+    lon_max: float | None = None,
+    db_path: Path | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Query authentic historical AIS position records for specific MMSIs or vessel IDs.
+
+    Retrieves the complete position track for each vessel within the requested time window.
+    If spatial bounds are provided, ensures the vessel had presence within the AOI.
+    Zero fabrication policy: never generates or interpolates points.
+    """
+    if not mmsis:
+        return {}
+
+    conn = get_connection(db_path)
+    t_start_iso = t_start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    t_end_iso = t_end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    results: dict[str, list[dict[str, Any]]] = {mmsi: [] for mmsi in mmsis}
+
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in mmsis)
+
+        # If spatial bounds are given, filter to vessels with at least one position in the AOI
+        eligible_vessels: set[str] = set()
+        if lat_min is not None and lat_max is not None and lon_min is not None and lon_max is not None:
+            cur.execute(
+                f"""\
+                SELECT DISTINCT p.mmsi, v.vessel_id
+                FROM ais_positions p
+                JOIN vessels v ON p.vessel_id = v.vessel_id
+                WHERE (p.mmsi IN ({placeholders}) OR v.vessel_id IN ({placeholders}))
+                  AND p.lat BETWEEN ? AND ?
+                  AND p.lon BETWEEN ? AND ?
+                  AND p.timestamp >= ?
+                  AND p.timestamp <= ?;
+                """,
+                (*mmsis, *mmsis, lat_min, lat_max, lon_min, lon_max, t_start_iso, t_end_iso),
+            )
+            for r in cur.fetchall():
+                if r["mmsi"]:
+                    eligible_vessels.add(r["mmsi"])
+                if r["vessel_id"]:
+                    eligible_vessels.add(r["vessel_id"])
+        else:
+            eligible_vessels = set(mmsis)
+
+        if not eligible_vessels:
+            return results
+
+        # Fetch complete trajectory in the time window for eligible vessels
+        target_keys = list(eligible_vessels)
+        target_placeholders = ",".join("?" for _ in target_keys)
+        query = f"""\
+            SELECT p.mmsi, v.vessel_id, p.timestamp, p.lat, p.lon, p.sog, p.cog, p.heading, p.nav_status
+            FROM ais_positions p
+            JOIN vessels v ON p.vessel_id = v.vessel_id
+            WHERE (p.mmsi IN ({target_placeholders}) OR v.vessel_id IN ({target_placeholders}))
+              AND p.timestamp >= ?
+              AND p.timestamp <= ?
+            ORDER BY p.timestamp ASC;
+        """
+        cur.execute(query, (*target_keys, *target_keys, t_start_iso, t_end_iso))
+        rows = cur.fetchall()
+
+        for r in rows:
+            pos = {
+                "timestamp": r["timestamp"],
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "speed": r["sog"],
+                "heading": r["heading"],
+                "cog": r["cog"],
+                "nav_status": r["nav_status"],
+            }
+            if r["mmsi"] in results:
+                results[r["mmsi"]].append(pos)
+            if r["vessel_id"] in results and r["vessel_id"] != r["mmsi"]:
+                results[r["vessel_id"]].append(pos)
+    finally:
+        conn.close()
+
+    return results
+
+
 def get_vessel_by_identifier(
     identifier: str,
     db_path: Path | None = None,

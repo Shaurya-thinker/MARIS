@@ -1,0 +1,319 @@
+{
+  "total": 52,
+  "passed": 44,
+  "failed": 8,
+  "results": [
+    {
+      "step": "STEP1",
+      "check": "Sentinel discover endpoint reachable",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "step": "STEP1",
+      "check": "Returns product list",
+      "status": "PASS",
+      "detail": "10 products"
+    },
+    {
+      "step": "STEP1",
+      "check": "Cap Corse product (20181008) present",
+      "status": "PASS",
+      "detail": "27fc21a0-57a1-5d0a-9909-b4239e6f080b"
+    },
+    {
+      "step": "STEP2",
+      "check": "Environment select endpoint reachable",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "step": "STEP2",
+      "check": "ERA5 path returned",
+      "status": "FAIL",
+      "detail": "NONE"
+    },
+    {
+      "step": "STEP2",
+      "check": "CMEMS path returned",
+      "status": "FAIL",
+      "detail": "NONE"
+    },
+    {
+      "step": "STEP2",
+      "check": "Status is ready/success",
+      "status": "FAIL",
+      "detail": "status="
+    },
+    {
+      "step": "STEP3",
+      "check": "AIS search endpoint reachable",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "step": "STEP3",
+      "check": "Vessels returned",
+      "status": "PASS",
+      "detail": "3 vessels"
+    },
+    {
+      "step": "STEP3",
+      "check": "MV ULYSSE in AIS results",
+      "status": "PASS",
+      "detail": "vessel_id=None"
+    },
+    {
+      "step": "STEP3",
+      "check": "MEDITERRANEAN STAR in AIS results",
+      "status": "PASS",
+      "detail": "vessel_id=None"
+    },
+    {
+      "step": "STEP45",
+      "check": "Run endpoint reachable",
+      "status": "PASS",
+      "detail": "HTTP TIMEOUT"
+    },
+    {
+      "step": "STEP45",
+      "check": "Run completes with run_id",
+      "status": "FAIL",
+      "detail": "run_id=None"
+    },
+    {
+      "step": "STEP45",
+      "check": "Source reconstructed",
+      "status": "FAIL",
+      "detail": "no source_lat in response"
+    },
+    {
+      "step": "STEP45",
+      "check": "Candidates ranked",
+      "status": "FAIL",
+      "detail": "0 candidates"
+    },
+    {
+      "step": "STEP6",
+      "check": "Backward drift steps present",
+      "status": "FAIL",
+      "detail": "0 steps"
+    },
+    {
+      "step": "STEP7",
+      "check": "History list endpoint",
+      "status": "PASS",
+      "detail": "HTTP 200, 28 runs"
+    },
+    {
+      "step": "STEP7",
+      "check": "New run appears in history",
+      "status": "FAIL",
+      "detail": "checking run_id=None"
+    },
+    {
+      "step": "STEP7",
+      "check": "Cap Corse run in history",
+      "status": "PASS",
+      "detail": "run_id=a0843a32-92a9-42e3-9a77-31ef4e7f44ec"
+    },
+    {
+      "step": "STEP7",
+      "check": "Individual run retrieval",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "step": "STEP7",
+      "check": "Stored source coords present",
+      "status": "PASS",
+      "detail": "(43.217014,9.370805)"
+    },
+    {
+      "step": "STEP8",
+      "check": "JSON report endpoint",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'metadata' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'executive_summary' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'observation' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'environment' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'drift_configuration' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'candidates' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'reproducibility' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'limitations' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "Section 'disclaimer' present",
+      "status": "PASS",
+      "detail": "present"
+    },
+    {
+      "step": "STEP8",
+      "check": "No guilt language",
+      "status": "PASS",
+      "detail": "OK"
+    },
+    {
+      "step": "STEP8",
+      "check": "Disclaimer text present",
+      "status": "PASS",
+      "detail": "Physics + feature-based attribution baseline. This is NOT a trained machine-learning model. Results "
+    },
+    {
+      "step": "STEP8",
+      "check": "PDF endpoint",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "step": "STEP8",
+      "check": "PDF has valid %PDF header",
+      "status": "PASS",
+      "detail": "header=b'%PDF', size=8935B"
+    },
+    {
+      "step": "STEP8",
+      "check": "JSON export endpoint",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "step": "STEP8",
+      "check": "Export attachment header",
+      "status": "PASS",
+      "detail": "attachment; filename=\"MARIS_Experiment_a0843a32.json\""
+    },
+    {
+      "step": "STEP8",
+      "check": "Export is pretty-printed (has newlines)",
+      "status": "PASS",
+      "detail": "newlines present: True"
+    },
+    {
+      "step": "STEP8",
+      "check": "Export JSON parseable",
+      "status": "PASS",
+      "detail": "keys=['metadata', 'executive_summary', 'observation', 'environment', 'drift_configuration']"
+    },
+    {
+      "step": "BENCH",
+      "check": "Source lat in 43.1\u201343.35",
+      "status": "PASS",
+      "detail": "lat=43.217014"
+    },
+    {
+      "step": "BENCH",
+      "check": "Source lon in 9.2\u20139.6",
+      "status": "PASS",
+      "detail": "lon=9.370805"
+    },
+    {
+      "step": "BENCH",
+      "check": "Uncertainty 2\u201320 km",
+      "status": "PASS",
+      "detail": "unc=6.5 km"
+    },
+    {
+      "step": "BENCH",
+      "check": "Step count == 12",
+      "status": "PASS",
+      "detail": "steps=12"
+    },
+    {
+      "step": "BENCH",
+      "check": "Top candidate is MV ULYSSE",
+      "status": "PASS",
+      "detail": "MV ULYSSE score=0.6531"
+    },
+    {
+      "step": "BENCH",
+      "check": "MV ULYSSE score > 0.5",
+      "status": "PASS",
+      "detail": "score=0.6531"
+    },
+    {
+      "step": "BENCH",
+      "check": "Score in expected 0.5\u20130.8",
+      "status": "PASS",
+      "detail": "score=0.6531"
+    },
+    {
+      "step": "BENCH",
+      "check": "Rank 2 = MEDITERRANEAN STAR",
+      "status": "PASS",
+      "detail": "MEDITERRANEAN STAR score=0.4676"
+    },
+    {
+      "step": "BENCH",
+      "check": "Rank 2 score < Rank 1",
+      "status": "PASS",
+      "detail": "0.4676 < 0.6531"
+    },
+    {
+      "step": "EVAL",
+      "check": "Reference observations endpoint",
+      "status": "PASS",
+      "detail": "HTTP 200, 6 obs"
+    },
+    {
+      "step": "EVAL",
+      "check": "At least 1 reference observation",
+      "status": "PASS",
+      "detail": "Cap Corse / Northern Corsica (Historical Demo Benchmark)"
+    },
+    {
+      "step": "EVAL",
+      "check": "Cap Corse reference observation present",
+      "status": "PASS",
+      "detail": "Cap Corse / Northern Corsica (Historical Demo Benchmark)"
+    },
+    {
+      "step": "EVAL",
+      "check": "Evaluator investigations endpoint",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    }
+  ]
+}

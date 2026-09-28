@@ -23,19 +23,21 @@ def _load_dotenv(backend_root: Path) -> None:
 
 def _env(name: str, default: str = "") -> str:
     value = os.environ.get(name)
-    if value is None:
+    if value is None or not value.strip():
         return default
     return value.strip()
+
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_load_dotenv(_BACKEND_ROOT)
 
 
 class Settings:
     service_name = "MARIS backend"
 
     def __init__(self, **overrides: object) -> None:
-        backend_root = Path(__file__).resolve().parents[2]
-        _load_dotenv(backend_root)
         self.service_name = _env("MARIS_SERVICE_NAME", "MARIS backend")
-        self.data_dir = Path(_env("MARIS_DATA_DIR", str(backend_root / "data")))
+        self.data_dir = Path(_env("MARIS_DATA_DIR", str(_BACKEND_ROOT / "data")))
         self.cdse_username = _env("CDSE_USERNAME")
         self.cdse_password = _env("CDSE_PASSWORD")
         self.cdse_totp = _env("CDSE_TOTP")
@@ -58,6 +60,10 @@ class Settings:
         self.cmems_username = _env("COPERNICUSMARINE_SERVICE_USERNAME") or _env("CMEMS_USERNAME")
         self.cmems_password = _env("COPERNICUSMARINE_SERVICE_PASSWORD") or _env("CMEMS_PASSWORD")
         self.ais_adapter_id = _env("MARIS_AIS_ADAPTER", "unconfigured")
+        self.ocean_dataset_path = Path(
+            _env("MARIS_OCEAN_DATASET_PATH", str(self.data_dir / "geospatial" / "ne_10m_ocean.geojson"))
+        )
+        self.coastal_buffer_m = float(_env("MARIS_COASTAL_BUFFER_M", "50.0"))
         raw_origins = _env("MARIS_ALLOWED_ORIGINS")
         if raw_origins:
             self.allowed_origins = [

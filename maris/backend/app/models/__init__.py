@@ -11,6 +11,7 @@ from app.models.behavioral_intelligence import (
 from app.models.candidate_ranking import (
     CandidateRanking,
     CandidateRankingRequest,
+    CandidateRankingResult,
     RankedCandidate,
 )
 from app.models.investigation_api import (
@@ -38,21 +39,44 @@ from app.models.common import (
 from app.models.explainability import (
     BehavioralExplanation,
     CandidateExplanation,
+    CandidateSummary,
     DriftCrossCheckExplanation,
     DriftCrossCheckStatus,
+    EvidenceBreakdown,
     EvidenceConsistencyLevel,
     ExplainabilityReport,
     ExplainabilityRequest,
+    FORBIDDEN_ATTRIBUTION_TERMS,
+    LEGAL_DISCLAIMER_SHORT,
+    ProvenanceBreakdown,
+    RankingContext,
     SCIENTIFIC_DISCLAIMER,
+    ScoreExplanation,
+    StatementTraceability,
+    UncertaintyBreakdown,
+    verify_scientific_vocabulary,
 )
 from app.models.drift import DriftResult, DriftStep
 from app.models.evidence_fusion import (
+    AisEvidenceSummary,
     BehavioralContextSummary,
+    CandidateEvidenceDetail,
+    DataQualityEvidenceSummary,
+    EnvironmentalEvidenceSummary,
+    EvidenceAvailabilityProfile,
     EvidenceFusionRequest,
     EvidenceFusionResult,
+    EvidenceProvenanceRecord,
     EvidenceSignal,
     ForwardDriftCrossCheck,
+    KinematicEvidenceSummary,
+    MultiSourceUncertainty,
+    NormalizedEvidenceProfile,
     SignalStatus,
+    SourceEvidenceSummary,
+    SpatialEvidenceSummary,
+    SpillEvidenceSummary,
+    TemporalEvidenceSummary,
     VesselFusedEvidence,
 )
 from app.models.environment import CurrentField, Environment, WindField

@@ -28,8 +28,8 @@
   "properties": {
     "investigation_id": "inv-api",
     "spill_detection_id": "spill-api-1",
-    "wind_asset_id": "3c5b0d39-05f0-4f00-9722-758bd43b5385",
-    "current_asset_id": "c2b03027-266c-45b7-bbb1-1da23ca6c3a9",
+    "wind_asset_id": "1c6b5850-b9c2-4d7a-ba26-50ea8f44deba",
+    "current_asset_id": "f2e72cec-056f-4a39-ab69-07785a8be988",
     "model_version": "leeway_euler_v1",
     "observation_time": "2024-06-01T12:00:00+00:00",
     "origin_lon": 2.5,
@@ -41,6 +41,12 @@
     "leeway_fraction": 0.035,
     "step_count": 4,
     "total_distance_m": 5664.96,
+    "termination_status": "completed",
+    "forcing_mode": "current_plus_windage",
+    "forcing_modes": [
+      "current_plus_windage"
+    ],
+    "current_fallback_used": false,
     "scientific_note": "Deterministic Leeway-Euler baseline model. \u03b1=0.035 is not calibrated. Not an operational forecast."
   }
 }

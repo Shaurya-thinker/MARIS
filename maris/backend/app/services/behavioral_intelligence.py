@@ -178,7 +178,7 @@ def detect_transmission_gaps(
                 timestamp=p1.timestamp,
                 location_lon=p1.lon,
                 location_lat=p1.lat,
-                inside_source_zone=near_p1 or (polygon_ring and point_in_polygon(p1.lon, p1.lat, polygon_ring)),
+                inside_source_zone=bool(near_p1 or (bool(polygon_ring) and point_in_polygon(p1.lon, p1.lat, polygon_ring))),
                 observed_value=round(dt, 1),
                 baseline_or_threshold_value=gap_threshold_seconds,
                 details={

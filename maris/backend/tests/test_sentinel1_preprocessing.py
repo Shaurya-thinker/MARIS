@@ -10,12 +10,14 @@ import hashlib
 import io
 from pathlib import Path
 import tempfile
+from typing import Any
 import unittest
 import zipfile
 
 import numpy as np
 import rasterio
-from rasterio.transform import from_origin
+from rasterio.control import GroundControlPoint
+from rasterio.transform import Affine, from_origin
 
 from app.acquisition.registry import InMemoryAssetRegistry
 from app.models.asset import Asset
@@ -57,6 +59,9 @@ def _make_synthetic_geotiff_bytes(
     height: int = 10,
     dn_value: int = 100,
     custom_array: np.ndarray | None = None,
+    crs: str | None = "EPSG:4326",
+    transform: rasterio.Affine | None = None,
+    gcps: list[Any] | None = None,
 ) -> bytes:
     buf = io.BytesIO()
     if custom_array is not None:
@@ -66,18 +71,22 @@ def _make_synthetic_geotiff_bytes(
         data = np.full((height, width), dn_value, dtype=np.uint16)
         h, w = height, width
 
-    transform = from_origin(8.0, 52.0, 0.001, 0.001)
-    with rasterio.open(
-        buf,
-        "w",
-        driver="GTiff",
-        height=h,
-        width=w,
-        count=1,
-        dtype="uint16",
-        crs="EPSG:4326",
-        transform=transform,
-    ) as dst:
+    open_kwargs: dict[str, Any] = {
+        "driver": "GTiff",
+        "height": h,
+        "width": w,
+        "count": 1,
+        "dtype": "uint16",
+    }
+    if gcps is not None:
+        open_kwargs["gcps"] = gcps
+        open_kwargs["crs"] = crs or "EPSG:4326"
+    else:
+        open_kwargs["transform"] = transform if transform is not None else from_origin(8.0, 52.0, 0.001, 0.001)
+        if crs is not None:
+            open_kwargs["crs"] = crs
+
+    with rasterio.open(buf, "w", **open_kwargs) as dst:
         dst.write(data, 1)
 
     return buf.getvalue()
@@ -92,6 +101,9 @@ def _make_synthetic_s1_zip(
     sigma_values: str = "10.0 10.0",
     custom_dn_array: np.ndarray | None = None,
     malformed_cal_xml: str | None = None,
+    measurement_crs: str | None = "EPSG:4326",
+    measurement_transform: rasterio.Affine | None = None,
+    measurement_gcps: list[Any] | None = None,
 ) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
@@ -102,7 +114,12 @@ def _make_synthetic_s1_zip(
         )
 
         if include_measurement:
-            tiff_bytes = _make_synthetic_geotiff_bytes(custom_array=custom_dn_array)
+            tiff_bytes = _make_synthetic_geotiff_bytes(
+                custom_array=custom_dn_array,
+                crs=measurement_crs,
+                transform=measurement_transform,
+                gcps=measurement_gcps,
+            )
             fname = f"s1a-iw-grd-{polarisation.lower()}-20181008t063000-20181008t063025-023855-029b3d-001.tiff"
             zf.writestr(f"{safe_dir}/measurement/{fname}", tiff_bytes)
 
@@ -355,6 +372,83 @@ class Sentinel1PreprocessingPipelineTests(unittest.TestCase):
             self.assertIn("sar", loc.parts)
             self.assertIn(scene.id, loc.parts)
             self.assertEqual(loc.name, "sentinel1_sigma0_db.tif")
+
+    def test_identity_transform_rejected_fails_closed(self) -> None:
+        """Ensure measurement rasters with identity transform are rejected when georeferencing is expected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_bytes = _make_synthetic_s1_zip(measurement_transform=Affine.identity())
+            zip_path = Path(tmp) / "identity_transform.zip"
+            zip_path.write_bytes(zip_bytes)
+
+            asset = _source_asset(zip_path)
+            scene = _scene(asset)
+
+            with self.assertRaises(Sentinel1PreprocessingError) as ctx:
+                preprocess_sentinel1_scene("inv-b2-test", scene, asset, output_dir=Path(tmp))
+            self.assertIn("identity transform", str(ctx.exception).lower())
+
+    def test_missing_crs_rejected_fails_closed(self) -> None:
+        """Ensure CRS is not silently omitted or assumed when missing from measurement raster."""
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_bytes = _make_synthetic_s1_zip(measurement_crs=None)
+            zip_path = Path(tmp) / "missing_crs.zip"
+            zip_path.write_bytes(zip_bytes)
+
+            asset = _source_asset(zip_path)
+            scene = _scene(asset)
+
+            with self.assertRaises(Sentinel1PreprocessingError) as ctx:
+                preprocess_sentinel1_scene("inv-b2-test", scene, asset, output_dir=Path(tmp))
+            self.assertIn("crs metadata", str(ctx.exception).lower())
+
+    def test_native_gcp_raster_pipeline_success(self) -> None:
+        """Ensure native SAR with GCPs produces calibrated GeoTIFF preserving GCPs for downstream geocoding."""
+        with tempfile.TemporaryDirectory() as tmp:
+            gcps = [
+                GroundControlPoint(row=0.0, col=0.0, x=8.0, y=52.0, z=0.0, id="1"),
+                GroundControlPoint(row=10.0, col=10.0, x=9.0, y=53.0, z=0.0, id="2"),
+            ]
+            zip_bytes = _make_synthetic_s1_zip(measurement_crs="EPSG:4326", measurement_gcps=gcps)
+            zip_path = Path(tmp) / "gcp_product.zip"
+            zip_path.write_bytes(zip_bytes)
+
+            asset = _source_asset(zip_path)
+            scene = _scene(asset)
+
+            derived_asset, meta = preprocess_sentinel1_scene("inv-b2-test", scene, asset, output_dir=Path(tmp))
+            self.assertEqual(meta["georeferencing"], "native_gcp")
+            self.assertTrue(Path(derived_asset.location).name.endswith("sentinel1_sigma0_db_native.tif"))
+            with rasterio.open(derived_asset.location) as src:
+                self.assertEqual(len(src.gcps[0]), 2)
+
+    def test_authoritative_georeferencing_metadata_preserved(self) -> None:
+        """Verify authoritative CRS, transform, bounds, and pixel size are correctly derived and preserved."""
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_transform = from_origin(9.5, 45.2, 0.0001, 0.0001)
+            zip_bytes = _make_synthetic_s1_zip(
+                measurement_crs="EPSG:4326",
+                measurement_transform=custom_transform,
+            )
+            zip_path = Path(tmp) / "georef_product.zip"
+            zip_path.write_bytes(zip_bytes)
+
+            asset = _source_asset(zip_path)
+            scene = _scene(asset)
+
+            derived_asset, meta = preprocess_sentinel1_scene(
+                "inv-b2-test", scene, asset, output_dir=Path(tmp) / "derived"
+            )
+
+            # CRS not omitted
+            self.assertEqual(meta["crs"], "EPSG:4326")
+            # Bounds sensible and derived from transform
+            self.assertAlmostEqual(meta["bounds"]["west"], 9.5)
+            self.assertAlmostEqual(meta["bounds"]["north"], 45.2)
+            self.assertAlmostEqual(meta["bounds"]["east"], 9.5 + 10 * 0.0001)
+            self.assertAlmostEqual(meta["bounds"]["south"], 45.2 - 10 * 0.0001)
+            # Pixel size positive
+            self.assertAlmostEqual(meta["pixel_size"][0], 0.0001)
+            self.assertAlmostEqual(meta["pixel_size"][1], 0.0001)
 
 
 if __name__ == "__main__":

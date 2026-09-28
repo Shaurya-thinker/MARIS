@@ -55,6 +55,7 @@ class AisPositionRecord(BaseModel):
     mmsi: str | None = None
     imo: str | None = None
     vessel_name: str | None = None
+    vessel_type: str | None = None
     speed_over_ground: float | None = None
     course_over_ground: float | None = None
     heading: float | None = None
@@ -131,6 +132,7 @@ class SqliteAisAdapter:
             mmsi = v.get("mmsi")
             name = v.get("vessel_name")
             imo = v.get("imo")
+            v_type = v.get("vessel_type")
             for pos in v.get("positions", []):
                 records.append({
                     "timestamp": pos.get("timestamp"),
@@ -139,11 +141,14 @@ class SqliteAisAdapter:
                     "mmsi": mmsi,
                     "imo": imo,
                     "vessel_name": name,
+                    "vessel_type": v_type,
                     "speed_over_ground": pos.get("speed") if pos.get("speed") is not None else pos.get("sog"),
                     "course_over_ground": pos.get("cog"),
                     "heading": pos.get("heading"),
                     "navigation_status": pos.get("nav_status"),
                     "source_attributes": {
+                        "vessel_id": v.get("vessel_id"),
+                        "vessel_type": v_type,
                         "source_id": v.get("source_id"),
                         "source_type": v.get("source_type"),
                         "is_real_observation": v.get("is_real_observation"),
@@ -196,13 +201,37 @@ def _in_bbox(lat: float, lon: float, area: AreaOfInterest) -> bool:
     return south <= lat <= north and west <= lon <= east
 
 
+def _record_vessel_key(record: AisPositionRecord) -> str | None:
+    """Derive identity key for spatial track continuity evaluation."""
+    if record.mmsi:
+        return f"mmsi:{record.mmsi.strip()}"
+    if record.imo:
+        return f"imo:{record.imo.strip()}"
+    if record.vessel_name:
+        return f"name:{record.vessel_name.strip()}"
+    if record.source_attributes and isinstance(record.source_attributes, dict):
+        v_id = record.source_attributes.get("vessel_id") or record.source_attributes.get("source_id")
+        if v_id:
+            return f"attr:{str(v_id).strip()}"
+    return None
+
+
 def normalize_ais_records(
     raw_records: list[dict[str, Any]],
     query: AisHistoricalQuery,
 ) -> list[AisPositionRecord]:
+    """Normalize and validate historical AIS position records.
+
+    Preserves records outside the AOI bounding box ONLY when they belong
+    to a legitimate vessel trajectory that has at least one observation
+    inside the requested AOI. Records outside the requested temporal window
+    or from vessels entirely outside the AOI remain excluded/invalid.
+    """
     if not isinstance(raw_records, list):
         raise AcquisitionError("AIS adapter did not return a list of position records")
-    normalized: list[AisPositionRecord] = []
+
+    # Step 1: Validate individual record schemas and temporal clamping
+    validated: list[AisPositionRecord] = []
     for index, item in enumerate(raw_records):
         if not isinstance(item, dict):
             raise AcquisitionError(f"AIS record {index} is malformed: expected an object")
@@ -212,9 +241,31 @@ def normalize_ais_records(
             raise AcquisitionError(f"AIS record {index} is invalid: {error}") from error
         if not _in_time_window(record.timestamp, query.time_window):
             raise AcquisitionError(f"AIS record {index} timestamp is outside the requested time window")
-        if not _in_bbox(record.lat, record.lon, query.area_of_interest):
-            raise AcquisitionError(f"AIS record {index} coordinates are outside the requested AOI")
-        normalized.append(record)
+        validated.append(record)
+
+    # Step 2: Determine vessel tracks with legitimate presence inside the query AOI
+    vessels_in_aoi: set[str] = set()
+    for record in validated:
+        if _in_bbox(record.lat, record.lon, query.area_of_interest):
+            vkey = _record_vessel_key(record)
+            if vkey:
+                vessels_in_aoi.add(vkey)
+
+    # Step 3: Validate spatial boundary conditions
+    normalized: list[AisPositionRecord] = []
+    for index, record in enumerate(validated):
+        if _in_bbox(record.lat, record.lon, query.area_of_interest):
+            normalized.append(record)
+        else:
+            vkey = _record_vessel_key(record)
+            if vkey and vkey in vessels_in_aoi:
+                normalized.append(record)
+            else:
+                raise AcquisitionError(
+                    f"AIS record {index} coordinates are outside the requested AOI "
+                    f"and do not belong to a vessel with observations inside the AOI"
+                )
+
     return normalized
 
 

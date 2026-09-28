@@ -195,6 +195,244 @@ class ForwardDriftCrossCheck(BaseModel):
     )
 
 
+class SpillEvidenceSummary(BaseModel):
+    """B3 spill detection context and SAR dark-spot characterization."""
+
+    spill_id: str | None = None
+    detection_confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Uncalibrated dark-spot detector confidence score in [0.0, 1.0]. "
+            "CRITICAL: This is an uncalibrated feature score, NOT a probability of oil "
+            "or probability of vessel responsibility."
+        ),
+    )
+    spill_area_m2: float | None = None
+    centroid_lon: float | None = None
+    centroid_lat: float | None = None
+    maritime_domain_status: str | None = None
+    vv_vh_ratio: float | None = None
+    detection_provenance: dict[str, Any] = Field(default_factory=dict)
+    caveat: str = (
+        "Uncalibrated dark-spot score from B3. "
+        "Not a calibrated statistical probability of oil presence or vessel responsibility."
+    )
+
+
+class EnvironmentalEvidenceSummary(BaseModel):
+    """C2 candidate-level metocean context."""
+
+    wind_speed_ms: float | None = None
+    wind_direction_from_deg: float | None = None
+    wind_regime: str | None = None
+    current_speed_ms: float | None = None
+    current_direction_to_deg: float | None = None
+    source_timestamp: str | None = None
+    interpolation_method: str | None = None
+    data_quality: str | None = None
+    missing_data_status: str | None = None
+    caveat: str = (
+        "Contextual metocean conditions from C2. "
+        "FAVORABLE_DETECTION_WINDOW is NOT proof that oil exists; it indicates "
+        "radar backscatter physics permit capillary wave damping contrast."
+    )
+
+
+class SourceEvidenceSummary(BaseModel):
+    """D3 backward drift source estimation evidence."""
+
+    source_point_lon: float | None = None
+    source_point_lat: float | None = None
+    source_uncertainty_radius_km: float | None = None
+    source_time: datetime | None = None
+    steps_count: int = 0
+    termination_status: str | None = None
+    current_fallback_applied: bool = False
+    shoreline_terminated: bool = False
+    environmental_fallback_info: str | None = None
+
+
+class AisEvidenceSummary(BaseModel):
+    """E1 candidate generation identity and observation summary."""
+
+    mmsi: str | None = None
+    imo: str | None = None
+    vessel_name: str | None = None
+    vessel_type: str | None = None
+    call_sign: str | None = None
+    flag: str | None = None
+    accepted_observation_count: int = 0
+    spatial_filtering_passed: bool = True
+    temporal_filtering_passed: bool = True
+    data_source_type: str = "curated_historical_reconstruction"
+    is_real_observation: bool = False
+
+
+class SpatialEvidenceSummary(BaseModel):
+    """E2 observed spatial distance and zone relationship metrics."""
+
+    min_distance_to_center_km: float | None = None
+    distance_to_zone_boundary_km: float | None = None
+    inside_source_zone: bool = False
+    min_distance_to_centerline_km: float | None = None
+    cpa_lon: float | None = None
+    cpa_lat: float | None = None
+    cpa_time: datetime | None = None
+
+
+class TemporalEvidenceSummary(BaseModel):
+    """E2 observed temporal offset metrics."""
+
+    time_offset_from_source_hours: float | None = None
+    abs_time_offset_hours: float | None = None
+    tau_scale_hours: float | None = None
+    closest_observation_time: datetime | None = None
+    temporal_span_hours: float | None = None
+
+
+class KinematicEvidenceSummary(BaseModel):
+    """E2 observed kinematic metrics."""
+
+    reported_sog_knots: float | None = None
+    derived_speed_mps: float | None = None
+    bearing_degrees: float | None = None
+    trajectory_continuity: str | None = None
+    has_valid_kinematics: bool = False
+    invalid_intervals_count: int = 0
+
+
+class DataQualityEvidenceSummary(BaseModel):
+    """E2 trajectory and AIS data quality indicators."""
+
+    observed_positions_count: int = 0
+    duplicate_count: int = 0
+    sparse_track: bool = False
+    quality_flags: list[str] = Field(default_factory=list)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateEvidenceDetail(BaseModel):
+    """Structured collection of raw/extracted evidence across all domains."""
+
+    spill: SpillEvidenceSummary = Field(default_factory=SpillEvidenceSummary)
+    environment: EnvironmentalEvidenceSummary = Field(default_factory=EnvironmentalEvidenceSummary)
+    source: SourceEvidenceSummary = Field(default_factory=SourceEvidenceSummary)
+    ais: AisEvidenceSummary = Field(default_factory=AisEvidenceSummary)
+    spatial: SpatialEvidenceSummary = Field(default_factory=SpatialEvidenceSummary)
+    temporal: TemporalEvidenceSummary = Field(default_factory=TemporalEvidenceSummary)
+    kinematic: KinematicEvidenceSummary = Field(default_factory=KinematicEvidenceSummary)
+    data_quality: DataQualityEvidenceSummary = Field(default_factory=DataQualityEvidenceSummary)
+
+
+class NormalizedEvidenceProfile(BaseModel):
+    """Dimensionless normalized representations in [0.0, 1.0]. Not probabilities."""
+
+    spatial_proximity: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Dimensionless spatial compatibility in [0.0, 1.0]. Exp decay.",
+    )
+    temporal_proximity: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Dimensionless temporal compatibility in [0.0, 1.0]. Gaussian decay.",
+    )
+    trajectory_alignment: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Dimensionless trajectory consistency in [0.0, 1.0]. Centerline/angular alignment.",
+    )
+    source_zone_membership: bool = Field(
+        default=False,
+        description="Factual polygon containment boolean (inside D3 source zone).",
+    )
+    environmental_compatibility: str | None = Field(
+        default=None,
+        description="Categorical environmental compatibility regime from C2.",
+    )
+    trajectory_quality: str | None = Field(
+        default=None,
+        description="Categorical trajectory data quality status (e.g. SPARSE, ADEQUATE, NONE).",
+    )
+
+
+class EvidenceAvailabilityProfile(BaseModel):
+    """Structured tracking of available, missing, and insufficient dimensions."""
+
+    available_dimensions: list[str] = Field(
+        default_factory=list,
+        description="Evidence dimensions successfully evaluated with valid data.",
+    )
+    unavailable_dimensions: list[str] = Field(
+        default_factory=list,
+        description="Evidence dimensions that were unavailable or lacked sufficient data.",
+    )
+    missing_reasons: dict[str, str] = Field(
+        default_factory=dict,
+        description="Explanations for each missing or unavailable dimension.",
+    )
+
+
+class MultiSourceUncertainty(BaseModel):
+    """Preserves uncertainties across domains without collapsing to a single fabricated number."""
+
+    source_uncertainty_km: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="D3 source spatial uncertainty radius (km).",
+    )
+    source_fallback_applied: bool = Field(
+        default=False,
+        description="True if D3 employed fallback (e.g. wind-only drift, shoreline termination).",
+    )
+    trajectory_uncertainty: str = Field(
+        default="unassessed",
+        description="Assessment of AIS sampling density, observation gaps, or sparse track limitations.",
+    )
+    environmental_uncertainty: str = Field(
+        default="unassessed",
+        description="Assessment of ERA5/CMEMS resolution and metocean interpolation caveats.",
+    )
+    detection_uncertainty: str = Field(
+        default="unassessed",
+        description="Assessment of B3 dark-spot detection confidence and uncalibrated status.",
+    )
+    geospatial_uncertainty: str = Field(
+        default="unassessed",
+        description="Assessment of SAR geocoding / terrain distortion caveats.",
+    )
+
+
+class EvidenceProvenanceRecord(BaseModel):
+    """Full data provenance tracking."""
+
+    source_assets: dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping of upstream stage to asset/product ID.",
+    )
+    data_source_type: str = Field(
+        default="curated_historical_reconstruction",
+        description="Source classification of AIS observations.",
+    )
+    is_real_observation: bool = Field(
+        default=False,
+        description="False for benchmark/curated/synthetic AIS data; True only for raw live feeds.",
+    )
+    timestamps: dict[str, str] = Field(
+        default_factory=dict,
+        description="Relevant event and observation timestamps (ISO-8601).",
+    )
+    fallback_flags: dict[str, bool] = Field(
+        default_factory=dict,
+        description="Flags indicating upstream algorithmic or data fallback conditions.",
+    )
+
+
 class VesselFusedEvidence(BaseModel):
     """Fused multi-source evidence profile for a single candidate vessel.
 
@@ -263,18 +501,46 @@ class VesselFusedEvidence(BaseModel):
 
     # -------- Contextual / Supplemental Evidence (non-additive) --------
     behavioral_context: BehavioralContextSummary = Field(
+        default_factory=BehavioralContextSummary,
         description=(
             "E3 behavioural intelligence context. "
             "Contributes exactly 0.00 to composite_concordance_score. "
             "Preserved for maritime domain awareness and Stage F3 explainability."
-        )
+        ),
     )
     forward_drift_cross_check: ForwardDriftCrossCheck = Field(
+        default_factory=ForwardDriftCrossCheck,
         description=(
             "Optional D1 forward drift cross-check. "
             "Excluded from composite_concordance_score to prevent double-counting "
             "of environmental drift physics already represented by D3."
-        )
+        ),
+    )
+
+    # -------- Rich Structured Evidence & Provenance (F1 Evidence Blocks) --------
+    evidence: CandidateEvidenceDetail = Field(
+        default_factory=CandidateEvidenceDetail,
+        description="Multi-source raw/extracted evidence across all domains (B3, C2, D3, E1, E2).",
+    )
+    normalized_evidence: NormalizedEvidenceProfile = Field(
+        default_factory=NormalizedEvidenceProfile,
+        description="Dimensionless normalized representations in [0.0, 1.0]. Not probabilities.",
+    )
+    availability: EvidenceAvailabilityProfile = Field(
+        default_factory=EvidenceAvailabilityProfile,
+        description="Detailed dimension availability and missing-data tracking.",
+    )
+    uncertainty: MultiSourceUncertainty = Field(
+        default_factory=MultiSourceUncertainty,
+        description="Multi-source uncertainty preservation across all analytical domains.",
+    )
+    provenance: EvidenceProvenanceRecord = Field(
+        default_factory=EvidenceProvenanceRecord,
+        description="Data provenance, asset tracing, and real/reconstructed observation classification.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings, caveats, or limitations for this candidate.",
     )
 
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -298,6 +564,14 @@ class EvidenceFusionRequest(BaseModel):
     forward_drift_id: str | None = Field(
         default=None,
         description="Optional ID of a Stage D1 DriftResult or its registered asset for cross-check.",
+    )
+    spill_detection_id: str | None = Field(
+        default=None,
+        description="Optional ID of the Stage B3 SpillDetection or registered asset.",
+    )
+    environmental_context_id: str | None = Field(
+        default=None,
+        description="Optional ID of the Stage C2 CandidateEnvironmentalContext or registered asset.",
     )
 
 
@@ -361,4 +635,19 @@ class EvidenceFusionResult(BaseModel):
             "Unranked, unnominated, and uneliminated. Ordering belongs to Stage F2."
         )
     )
+
+    spill_evidence_summary: SpillEvidenceSummary | None = Field(
+        default=None,
+        description="Investigation-level B3 SAR spill evidence summary if provided.",
+    )
+    environmental_evidence_summary: EnvironmentalEvidenceSummary | None = Field(
+        default=None,
+        description="Investigation-level C2 metocean evidence summary if provided.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Investigation-level evidence fusion warnings or caveats.",
+    )
+
     metadata: dict[str, Any] = Field(default_factory=dict)
+

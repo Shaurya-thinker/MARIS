@@ -1,2 +1,14 @@
-node_modules/ 
-dist/ 
+node_modules/
+dist/
+.env
+.env.*
+**/.env
+**/__pycache__/
+maris/backend/data/acquisitions/
+maris/backend/acquisitions/
+**/acquisitions/
+**/models/
+**/derived/
+*.SAFE.zip
+maris/ais_vessels.db
+maris/real_experiments.db

@@ -26,20 +26,45 @@ dist-ssr
 
 # Python
 __pycache__/
-*.pyc
+**/__pycache__/
+*.py[cod]
+*$py.class
 
 # Backend environment and secrets
 backend/.venv/
+.venv/
+**/.venv/
 .env
 .env.*
 !.env.example
 **/.env
 **/.env.*
+!**/.env.example
 
-# Acquired scientific data (Sentinel-1 products, ERA5 NetCDF, etc.)
+# Acquired scientific data, rasters, and models
 backend/data/acquisitions/
+backend/acquisitions/
+acquisitions/
+**/acquisitions/
 backend/data/models/
 backend/data/synthetic/
+models/
+**/models/
+derived/
+**/derived/
+backend/derived/
 *.joblib
 *.pkl
-!**/.env.example
+*.SAFE.zip
+*.tif
+*.tiff
+
+# Databases (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# Large geospatial boundaries
+**/geospatial/*.geojson
+ne_10m_ocean.geojson
+

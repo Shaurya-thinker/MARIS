@@ -94,12 +94,140 @@ _CHANNEL_KEY_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
+def _validate_weights(weights: dict[str, float] | None) -> dict[str, float]:
+    """Validate and normalize candidate scoring weights.
+
+    Ensures all weights are non-negative (>= 0.0) and their sum is strictly positive (> 0.0).
+    """
+    if weights is None:
+        return dict(NOMINAL_WEIGHTS)
+
+    if not isinstance(weights, dict):
+        raise CandidateRankingError(f"Weights must be a dictionary, got {type(weights).__name__}")
+
+    cleaned: dict[str, float] = {}
+    for k, v in weights.items():
+        try:
+            val = float(v)
+        except (ValueError, TypeError):
+            raise CandidateRankingError(f"Weight for channel '{k}' must be a valid float, got {v}")
+        if val < 0.0:
+            raise CandidateRankingError(f"Weight for channel '{k}' must be non-negative (>= 0.0), got {val}")
+        cleaned[k] = val
+
+    total = sum(cleaned.values())
+    if total <= 0.0:
+        raise CandidateRankingError("Total sum of nominal scoring weights must be strictly positive (> 0.0).")
+
+    return cleaned
+
+
+def calculate_candidate_score_profile(
+    fev: VesselFusedEvidence,
+    nominal_weights: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Calculate the deterministic evidence consistency score and detailed profile for a candidate.
+
+    Computes:
+        S_candidate = sum(w_i * S_i) / sum(w_i) for all available channels.
+    Channels with missing/insufficient data are excluded from both numerator and denominator.
+    If no channels are available, score is None (never 0.0).
+
+    Returns a comprehensive dictionary with score, weights applied, availability, and components.
+    """
+    weights_config = _validate_weights(nominal_weights)
+    total_primary_channels = len(weights_config)
+
+    # Map signals by channel
+    signals_by_channel: dict[str, EvidenceSignal] = {}
+    for sig in fev.primary_signals:
+        mapped_key = _CHANNEL_KEY_MAP.get(sig.channel_name, sig.channel_name)
+        signals_by_channel[mapped_key] = sig
+
+    # Resolve scores per channel, prioritizing valid signals or rich normalized_evidence
+    channel_scores: dict[str, float | None] = {}
+
+    # 1. Spatial
+    sp_sig = signals_by_channel.get("spatial")
+    sp_score = sp_sig.score if (sp_sig and sp_sig.status == SignalStatus.VALID) else None
+    if sp_score is None and fev.normalized_evidence and fev.normalized_evidence.spatial_proximity is not None:
+        sp_score = fev.normalized_evidence.spatial_proximity
+    channel_scores["spatial"] = sp_score
+
+    # 2. Temporal
+    tp_sig = signals_by_channel.get("temporal")
+    tp_score = tp_sig.score if (tp_sig and tp_sig.status == SignalStatus.VALID) else None
+    if tp_score is None and fev.normalized_evidence and fev.normalized_evidence.temporal_proximity is not None:
+        tp_score = fev.normalized_evidence.temporal_proximity
+    channel_scores["temporal"] = tp_score
+
+    # 3. Trajectory
+    tr_sig = signals_by_channel.get("trajectory")
+    tr_score = tr_sig.score if (tr_sig and tr_sig.status == SignalStatus.VALID) else None
+    if tr_score is None and fev.normalized_evidence and fev.normalized_evidence.trajectory_alignment is not None:
+        tr_score = fev.normalized_evidence.trajectory_alignment
+    channel_scores["trajectory"] = tr_score
+
+    # Determine valid channels among configured weights
+    valid_channels: list[tuple[str, float, float]] = []
+    available_dimensions: list[str] = []
+    unavailable_dimensions: list[str] = []
+
+    for ch_name, weight in weights_config.items():
+        score = channel_scores.get(ch_name)
+        if score is not None:
+            valid_channels.append((ch_name, weight, score))
+            available_dimensions.append(ch_name)
+        else:
+            unavailable_dimensions.append(ch_name)
+
+    valid_primary_channels = len(valid_channels)
+    evidence_availability_ratio = (
+        round(valid_primary_channels / total_primary_channels, 6) if total_primary_channels > 0 else 0.0
+    )
+
+    channel_weights_applied: dict[str, float] = {}
+    active_weight_sum = 0.0
+
+    if valid_channels:
+        active_weight_sum = sum(weight for _, weight, _ in valid_channels)
+        if active_weight_sum > 0.0:
+            numerator = sum(weight * score for _, weight, score in valid_channels)
+            evidence_consistency_score = round(numerator / active_weight_sum, 6)
+            for ch_name, weight, _ in valid_channels:
+                channel_weights_applied[ch_name] = round(weight / active_weight_sum, 6)
+        else:
+            evidence_consistency_score = None
+    else:
+        evidence_consistency_score = None
+
+    return {
+        "evidence_consistency_score": evidence_consistency_score,
+        "valid_primary_channels": valid_primary_channels,
+        "total_primary_channels": total_primary_channels,
+        "evidence_availability_ratio": evidence_availability_ratio,
+        "channel_weights_applied": channel_weights_applied,
+        "spatial_score": channel_scores.get("spatial"),
+        "temporal_score": channel_scores.get("temporal"),
+        "trajectory_score": channel_scores.get("trajectory"),
+        "active_weight_sum": round(active_weight_sum, 6),
+        "available_dimensions": available_dimensions,
+        "unavailable_dimensions": unavailable_dimensions,
+        "raw_score_components": {
+            "spatial": channel_scores.get("spatial"),
+            "temporal": channel_scores.get("temporal"),
+            "trajectory": channel_scores.get("trajectory"),
+        },
+    }
+
+
 def calculate_candidate_score(
     fev: VesselFusedEvidence,
+    nominal_weights: dict[str, float] | None = None,
 ) -> tuple[float | None, int, int, float, dict[str, float], float | None, float | None, float | None]:
     """Calculate the deterministic evidence consistency score for a candidate.
 
-    Returns:
+    Returns the standard 8-tuple for backward compatibility:
         (
             evidence_consistency_score,
             valid_primary_channels,
@@ -111,53 +239,16 @@ def calculate_candidate_score(
             trajectory_score,
         )
     """
-    total_primary_channels = 3
-
-    # Map signals by channel
-    signals_by_channel: dict[str, EvidenceSignal] = {}
-    for sig in fev.primary_signals:
-        mapped_key = _CHANNEL_KEY_MAP.get(sig.channel_name, sig.channel_name)
-        signals_by_channel[mapped_key] = sig
-
-    spatial_sig = signals_by_channel.get("spatial")
-    temporal_sig = signals_by_channel.get("temporal")
-    trajectory_sig = signals_by_channel.get("trajectory")
-
-    spatial_score = spatial_sig.score if (spatial_sig and spatial_sig.status == SignalStatus.VALID) else None
-    temporal_score = temporal_sig.score if (temporal_sig and temporal_sig.status == SignalStatus.VALID) else None
-    trajectory_score = trajectory_sig.score if (trajectory_sig and trajectory_sig.status == SignalStatus.VALID) else None
-
-    # Determine valid channels
-    valid_channels: list[tuple[str, float, float]] = []
-    if spatial_score is not None:
-        valid_channels.append(("spatial", NOMINAL_WEIGHTS["spatial"], spatial_score))
-    if temporal_score is not None:
-        valid_channels.append(("temporal", NOMINAL_WEIGHTS["temporal"], temporal_score))
-    if trajectory_score is not None:
-        valid_channels.append(("trajectory", NOMINAL_WEIGHTS["trajectory"], trajectory_score))
-
-    valid_primary_channels = len(valid_channels)
-    evidence_availability_ratio = round(valid_primary_channels / total_primary_channels, 6)
-
-    channel_weights_applied: dict[str, float] = {}
-    if valid_channels:
-        total_denom = sum(weight for _, weight, _ in valid_channels)
-        numerator = sum(weight * score for _, weight, score in valid_channels)
-        evidence_consistency_score = round(numerator / total_denom, 6)
-        for ch_name, weight, _ in valid_channels:
-            channel_weights_applied[ch_name] = round(weight / total_denom, 6)
-    else:
-        evidence_consistency_score = None
-
+    profile = calculate_candidate_score_profile(fev, nominal_weights)
     return (
-        evidence_consistency_score,
-        valid_primary_channels,
-        total_primary_channels,
-        evidence_availability_ratio,
-        channel_weights_applied,
-        spatial_score,
-        temporal_score,
-        trajectory_score,
+        profile["evidence_consistency_score"],
+        profile["valid_primary_channels"],
+        profile["total_primary_channels"],
+        profile["evidence_availability_ratio"],
+        profile["channel_weights_applied"],
+        profile["spatial_score"],
+        profile["temporal_score"],
+        profile["trajectory_score"],
     )
 
 
@@ -172,21 +263,30 @@ def extract_discrepancies(
     spatial_disp: float | None = None
     temporal_disp: float | None = None
 
-    for sig in fev.primary_signals:
-        mapped_key = _CHANNEL_KEY_MAP.get(sig.channel_name, sig.channel_name)
-        raw = sig.raw_metrics or {}
+    # Check rich structured F1 evidence first if available
+    if fev.evidence is not None:
+        if fev.evidence.spatial is not None:
+            spatial_disp = fev.evidence.spatial.min_distance_to_center_km
+        if fev.evidence.temporal is not None:
+            temporal_disp = fev.evidence.temporal.time_offset_from_source_hours
 
-        if mapped_key == "spatial":
-            if "d_center_km" in raw and raw["d_center_km"] is not None:
-                spatial_disp = float(raw["d_center_km"])
-            elif "d_boundary_km" in raw and raw["d_boundary_km"] is not None:
-                spatial_disp = float(raw["d_boundary_km"])
+    # Fallback to primary_signals raw_metrics
+    if spatial_disp is None or temporal_disp is None:
+        for sig in fev.primary_signals:
+            mapped_key = _CHANNEL_KEY_MAP.get(sig.channel_name, sig.channel_name)
+            raw = sig.raw_metrics or {}
 
-        elif mapped_key == "temporal":
-            if "delta_t_hours" in raw and raw["delta_t_hours"] is not None:
-                temporal_disp = float(raw["delta_t_hours"])
-            elif "time_offset_from_source_hours" in raw and raw["time_offset_from_source_hours"] is not None:
-                temporal_disp = abs(float(raw["time_offset_from_source_hours"]))
+            if mapped_key == "spatial" and spatial_disp is None:
+                if "d_center_km" in raw and raw["d_center_km"] is not None:
+                    spatial_disp = float(raw["d_center_km"])
+                elif "d_boundary_km" in raw and raw["d_boundary_km"] is not None:
+                    spatial_disp = float(raw["d_boundary_km"])
+
+            elif mapped_key == "temporal" and temporal_disp is None:
+                if "delta_t_hours" in raw and raw["delta_t_hours"] is not None:
+                    temporal_disp = float(raw["delta_t_hours"])
+                elif "time_offset_from_source_hours" in raw and raw["time_offset_from_source_hours"] is not None:
+                    temporal_disp = abs(float(raw["time_offset_from_source_hours"]))
 
     return spatial_disp, temporal_disp
 
@@ -240,7 +340,9 @@ def _ranking_sort_key(candidate: RankedCandidate) -> tuple:
     6. Candidate ID: ascending (lexicographical)
     """
     has_score = 1 if candidate.evidence_consistency_score is not None else 0
-    score_val = round(candidate.evidence_consistency_score, 6) if candidate.evidence_consistency_score is not None else -1.0
+    score_val = (
+        round(candidate.evidence_consistency_score, 6) if candidate.evidence_consistency_score is not None else -1.0
+    )
     ratio_val = round(candidate.evidence_availability_ratio, 6)
 
     spatial_disp = candidate.provenance.get("spatial_discrepancy_km")
@@ -274,6 +376,7 @@ def rank_candidates(
     spill_id: str | None = None,
     output_dir: str | Path | None = None,
     registry: AssetRegistry | None = None,
+    weights: dict[str, float] | None = None,
 ) -> tuple[CandidateRanking, Asset]:
     """Execute Stage F2 Candidate Scoring & Ranking.
 
@@ -287,6 +390,7 @@ def rank_candidates(
         spill_id: Optional override for spill detection ID.
         output_dir: Optional override directory for ranking artifacts.
         registry: Target AssetRegistry for registering derived DOCUMENT asset.
+        weights: Optional custom nominal weights for primary channels.
 
     Returns:
         (CandidateRanking, Asset)
@@ -296,6 +400,8 @@ def rank_candidates(
     """
     if evidence_fusion is None:
         raise CandidateRankingError("Cannot rank candidates: evidence_fusion input is None.")
+
+    active_weights_config = _validate_weights(weights)
 
     target_inv = investigation_id or evidence_fusion.investigation_id
     target_spill = spill_id or evidence_fusion.spill_detection_id
@@ -308,16 +414,19 @@ def rank_candidates(
     unranked_candidates: list[RankedCandidate] = []
 
     for fev in evidence_fusion.fused_candidates:
-        (
-            score,
-            valid_channels,
-            total_channels,
-            avail_ratio,
-            weights_applied,
-            spatial_s,
-            temporal_s,
-            trajectory_s,
-        ) = calculate_candidate_score(fev)
+        profile = calculate_candidate_score_profile(fev, nominal_weights=active_weights_config)
+        score = profile["evidence_consistency_score"]
+        valid_channels = profile["valid_primary_channels"]
+        total_channels = profile["total_primary_channels"]
+        avail_ratio = profile["evidence_availability_ratio"]
+        weights_applied = profile["channel_weights_applied"]
+        spatial_s = profile["spatial_score"]
+        temporal_s = profile["temporal_score"]
+        trajectory_s = profile["trajectory_score"]
+        active_w_sum = profile["active_weight_sum"]
+        avail_dims = profile["available_dimensions"]
+        unavail_dims = profile["unavailable_dimensions"]
+        raw_components = profile["raw_score_components"]
 
         spatial_disp, temporal_disp = extract_discrepancies(fev)
         limitations = _build_limitations(
@@ -327,7 +436,7 @@ def rank_candidates(
             fev.forward_drift_cross_check,
         )
 
-        provenance = {
+        provenance: dict[str, Any] = {
             "candidate_id": fev.candidate_id,
             "vessel_id": fev.vessel_id,
             "input_index_f1": fev.input_index,
@@ -340,6 +449,32 @@ def rank_candidates(
             "forward_drift_score_contribution": 0.0,
             "zero_fabrication": True,
         }
+        if fev.provenance is not None:
+            provenance["is_real_observation"] = fev.provenance.is_real_observation
+            provenance["data_source_type"] = fev.provenance.data_source_type
+            provenance["source_assets"] = fev.provenance.source_assets
+            provenance["timestamps"] = fev.provenance.timestamps
+            provenance["fallback_flags"] = fev.provenance.fallback_flags
+        else:
+            provenance["is_real_observation"] = fev.metadata.get("is_real_observation", False)
+            provenance["data_source_type"] = fev.metadata.get("data_source_type", "curated_historical_reconstruction")
+
+        uncertainty_summary: dict[str, Any] = {}
+        if fev.uncertainty is not None:
+            uncertainty_summary = fev.uncertainty.model_dump()
+        else:
+            uncertainty_summary = {
+                "source_fallback_applied": fev.metadata.get("current_fallback", False),
+                "shoreline_truncated": fev.metadata.get("shoreline_terminated", False),
+            }
+
+        cand_warnings = list(fev.warnings) if fev.warnings else []
+        if valid_channels == 0:
+            cand_warnings.append("No primary evidence channels were available for scoring.")
+        elif valid_channels < total_channels:
+            cand_warnings.append(
+                f"{total_channels - valid_channels} of {total_channels} primary channels unavailable; weights renormalized."
+            )
 
         # Extract IMO if recorded in metadata
         imo_val = fev.metadata.get("imo")
@@ -363,18 +498,54 @@ def rank_candidates(
             drift_cross_check=fev.forward_drift_cross_check,
             limitations=limitations,
             provenance=provenance,
+            raw_score_components=raw_components,
+            active_weights=weights_applied,
+            active_weight_sum=active_w_sum,
+            available_dimensions=avail_dims,
+            unavailable_dimensions=unavail_dims,
+            uncertainty_summary=uncertainty_summary,
+            ranking_explanation_metadata={
+                "spatial_discrepancy_km": spatial_disp,
+                "temporal_discrepancy_hours": temporal_disp,
+                "score_interpretation": "Dimensionless physical consistency index in [0, 1]. Not a probability.",
+            },
+            warnings=cand_warnings,
         )
         unranked_candidates.append(candidate)
 
     # Sort deterministically
     sorted_candidates = sorted(unranked_candidates, key=_ranking_sort_key)
 
-    # Assign 1-based ranks
+    # Assign 1-based ranks and detect exact ties
     ranked_candidates: list[RankedCandidate] = []
     for idx, cand in enumerate(sorted_candidates):
         cand_dict = cand.model_dump()
         cand_dict["rank"] = idx + 1
+
+        is_tied = False
+        tie_reasons: list[str] = []
+        if (
+            idx > 0
+            and cand.evidence_consistency_score is not None
+            and sorted_candidates[idx - 1].evidence_consistency_score == cand.evidence_consistency_score
+        ):
+            is_tied = True
+            tie_reasons.append("Identical score with preceding candidate; tie broken by secondary criteria.")
+        if (
+            idx + 1 < len(sorted_candidates)
+            and cand.evidence_consistency_score is not None
+            and sorted_candidates[idx + 1].evidence_consistency_score == cand.evidence_consistency_score
+        ):
+            is_tied = True
+            tie_reasons.append("Identical score with succeeding candidate; tie broken by secondary criteria.")
+
+        cand_dict["ranking_explanation_metadata"]["is_tied_score"] = is_tied
+        if is_tied:
+            cand_dict["ranking_explanation_metadata"]["tie_notes"] = tie_reasons
+
         ranked_candidates.append(RankedCandidate.model_validate(cand_dict))
+
+    top_warnings = list(evidence_fusion.warnings) if evidence_fusion.warnings else []
 
     # Build CandidateRanking model
     ranking_result = CandidateRanking(
@@ -384,9 +555,16 @@ def rank_candidates(
         evidence_fusion_id=evidence_fusion.id,
         generated_at=now_utc,
         methodology_version="F2-1.0.0",
-        nominal_weights=dict(NOMINAL_WEIGHTS),
+        ranking_method="availability_weighted_concordance",
+        score_version="F2-1.0.0",
+        deterministic_tie_break_rule=(
+            "score_desc -> availability_ratio_desc -> spatial_disp_asc -> "
+            "temporal_disp_asc -> vessel_id_asc -> candidate_id_asc"
+        ),
+        nominal_weights=active_weights_config,
         candidate_count=len(ranked_candidates),
         candidates=ranked_candidates,
+        warnings=top_warnings,
         metadata={
             "stage": "F2",
             "asset_type": "candidate_ranking",
@@ -394,7 +572,7 @@ def rank_candidates(
             "methodology": "Stage F2 Candidate Scoring & Ranking",
             "scoring_formula": (
                 "weighted average of valid primary channels: "
-                "spatial=0.50, temporal=0.25, trajectory=0.25 with dynamic denominator renormalization"
+                f"{', '.join(f'{k}={v:.2f}' for k, v in active_weights_config.items())} with dynamic denominator renormalization"
             ),
             "tie_breaking_order": [
                 "1. evidence_consistency_score (descending)",
@@ -411,6 +589,8 @@ def rank_candidates(
             ),
             "behavioral_contribution": 0.0,
             "forward_drift_contribution": 0.0,
+            "is_real_observation": all(c.provenance.get("is_real_observation", False) for c in ranked_candidates) if ranked_candidates else False,
+            "data_source_type": ranked_candidates[0].provenance.get("data_source_type", "curated_historical_reconstruction") if ranked_candidates else "unknown",
         },
     )
 

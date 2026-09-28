@@ -51,6 +51,12 @@ class CandidateVessel(BaseModel):
     mmsi: str | None = None
     imo: str | None = None
     vessel_name: str | None = None
+    vessel_type: str | None = Field(
+        default=None,
+        description="Vessel classification (e.g. Tanker, Cargo, Ro-Ro Cargo)",
+    )
+    call_sign: str | None = None
+    flag_country: str | None = None
 
     # Spatial proximity metrics
     inside_source_zone: bool = Field(
@@ -81,7 +87,8 @@ class CandidateVessel(BaseModel):
 
     # Observation provenance
     observed_positions_count: int = Field(
-        ge=1,
+        ge=0,
+        default=0,
         description="Number of valid observed AIS positions for this vessel within the query window"
     )
     raw_positions: list[VesselPosition] = Field(

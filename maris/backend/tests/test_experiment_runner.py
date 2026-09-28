@@ -95,13 +95,28 @@ def _make_cmems_nc(path: Path, obs_time: datetime, lons: list[float], lats: list
 def synthetic_netcdf(tmp_path):
     """Return (era5_path, cmems_path, obs_time, origin_lon, origin_lat)."""
     obs_time = datetime(2024, 6, 15, 10, 0, tzinfo=timezone.utc)
-    origin_lon = 3.5
-    origin_lat = 43.5
+    origin_lon = 4.0
+    origin_lat = 42.5
     lons = [float(i) for i in range(-5, 15)]   # 20 points, 1° spacing
     lats = [float(i) for i in range(35, 55)]   # 20 points, 1° spacing
 
     era5_path = tmp_path / "era5_wind.nc"
     cmems_path = tmp_path / "cmems_current.nc"
+    _make_era5_nc(era5_path, obs_time, lons, lats)
+    _make_cmems_nc(cmems_path, obs_time, lons, lats)
+    return str(era5_path), str(cmems_path), obs_time, origin_lon, origin_lat
+
+
+@pytest.fixture
+def corsica_netcdf(tmp_path):
+    """Return (era5_path, cmems_path, obs_time, origin_lon, origin_lat) for Corsica benchmark."""
+    obs_time = datetime(2018, 10, 8, 5, 28, 7, tzinfo=timezone.utc)
+    origin_lon = 9.48
+    origin_lat = 43.25
+    lons = [float(i) for i in range(7, 12)]
+    lats = [float(i) for i in range(41, 46)]
+    era5_path = tmp_path / "era5_corsica.nc"
+    cmems_path = tmp_path / "cmems_corsica.nc"
     _make_era5_nc(era5_path, obs_time, lons, lats)
     _make_cmems_nc(cmems_path, obs_time, lons, lats)
     return str(era5_path), str(cmems_path), obs_time, origin_lon, origin_lat
@@ -416,3 +431,587 @@ def test_sentinel_discovery_configured_with_token():
     cfg = Settings(cdse_access_token="dummy-token")
     svc = SentinelDiscoveryService(cfg=cfg)
     assert svc.check_configured() is True
+
+
+# ---------------------------------------------------------------------------
+# 8. Step 4 AIS search discovers vessels and returns authentic positions
+# ---------------------------------------------------------------------------
+
+def test_ais_search_discovers_ulysse_and_mediterranean_star():
+    from app.services.real_experiment.ais_search import AisSearchService
+    from app.core.config import settings
+
+    svc = AisSearchService(cfg=settings)
+    assert svc.is_configured() is True
+
+    # Search window and spatial box covering the Cap Corse approach
+    start = datetime(2018, 10, 7, 17, 28, 7, tzinfo=timezone.utc)
+    end = datetime(2018, 10, 8, 5, 28, 7, tzinfo=timezone.utc)
+
+    result = svc.search_near_source_zone(
+        west=9.0,
+        south=41.5,
+        east=9.65,
+        north=43.24,
+        start=start,
+        end=end,
+    )
+
+    names = {v.vessel_name for v in result.vessels}
+    assert "MV ULYSSE" in names
+    assert "MEDITERRANEAN STAR" in names
+    assert result.total_positions == 21
+
+    ulysse = next(v for v in result.vessels if v.vessel_name == "MV ULYSSE")
+    assert ulysse.position_count == 12
+    assert len(ulysse.positions) == 12
+    assert all("lat" in p and "lon" in p and "timestamp" in p for p in ulysse.positions)
+
+    med_star = next(v for v in result.vessels if v.vessel_name == "MEDITERRANEAN STAR")
+    assert med_star.position_count == 9
+    assert len(med_star.positions) == 9
+
+
+# ---------------------------------------------------------------------------
+# 9. /api/experiment/ais/positions endpoint returns authentic records
+# ---------------------------------------------------------------------------
+
+def test_api_get_ais_positions_endpoint():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/experiment/ais/positions",
+        json={
+            "mmsis": ["228308800", "247112233"],
+            "west": 9.0,
+            "south": 41.5,
+            "east": 9.65,
+            "north": 43.24,
+            "start": "2018-10-07T17:28:07Z",
+            "end": "2018-10-08T05:28:07Z",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_positions"] == 21
+    vpos = data["vessel_positions"]
+    assert "228308800" in vpos and len(vpos["228308800"]) == 12
+    assert "247112233" in vpos and len(vpos["247112233"]) == 9
+
+    # Verify no fabrication: every point matches realistic physical coordinates
+    for p in vpos["228308800"]:
+        assert 43.0 <= p["lat"] <= 43.5
+        assert 9.0 <= p["lon"] <= 9.7
+
+
+# ---------------------------------------------------------------------------
+# 10. ExperimentRunner enriches empty positions from ais_vessels.db
+# ---------------------------------------------------------------------------
+
+def test_experiment_runner_enriches_empty_positions(synthetic_netcdf):
+    """When a selected vessel has positions: [], ExperimentRunner enriches it with real db records."""
+    era5, cmems, _, _, _ = synthetic_netcdf
+    runner = ExperimentRunner()
+
+    # Observation at Cap Corse collision time
+    obs_time = datetime(2018, 10, 8, 5, 28, 7, tzinfo=timezone.utc)
+    # Re-make netcdf with this observation time
+    lons = [float(i) for i in range(7, 12)]
+    lats = [float(i) for i in range(41, 46)]
+    tmp_era5 = Path(era5).parent / "era5_corsica.nc"
+    tmp_cmems = Path(cmems).parent / "cmems_corsica.nc"
+    _make_era5_nc(tmp_era5, obs_time, lons, lats)
+    _make_cmems_nc(tmp_cmems, obs_time, lons, lats)
+
+    # Pass selected vessel with positions: [] (the exact bug state)
+    vessel_empty_ulysse = {
+        "mmsi": "228308800",
+        "vessel_name": "MV ULYSSE",
+        "positions": [],
+    }
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008",
+        observation_lon=9.48,
+        observation_lat=43.25,
+        observation_time=obs_time,
+        era5_netcdf_path=str(tmp_era5),
+        cmems_netcdf_path=str(tmp_cmems),
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[vessel_empty_ulysse],
+    )
+
+    assert len(result.vessels) == 1
+    vf = result.vessels[0]
+    # Step 6 no longer reports AIS positions = 0
+    assert vf.ais_position_count == 12
+    assert vf.ais_position_count > 0
+    assert vf.evidence_consistency_score > 0.0
+    assert vf.has_meaningful_support is True
+
+
+# ---------------------------------------------------------------------------
+# 11. Zero fabrication policy for unobserved vessels
+# ---------------------------------------------------------------------------
+
+def test_experiment_runner_no_fabrication_unobserved_vessel(synthetic_netcdf):
+    """Unknown MMSI remains with 0 positions and 0 score; no points fabricated."""
+    era5, cmems, obs_time, lon, lat = synthetic_netcdf
+    runner = ExperimentRunner()
+
+    vessel_unknown = {
+        "mmsi": "999999999",
+        "vessel_name": "GHOST_VESSEL",
+        "positions": [],
+    }
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_test",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=6.0,
+        step_hours=1.0,
+        selected_vessels=[vessel_unknown],
+    )
+
+    assert len(result.vessels) == 1
+    vf = result.vessels[0]
+    assert vf.ais_position_count == 0
+    assert vf.evidence_consistency_score == 0.0
+    assert vf.has_meaningful_support is False
+
+
+# ===========================================================================
+# Dedicated Regression Tests for Step 4 -> Step 5 -> Step 6 AIS Data Flow
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Test 1 — Empty positions are enriched
+# ---------------------------------------------------------------------------
+
+def test_regression_test_1_empty_positions_are_enriched(corsica_netcdf):
+    """Given a vessel with positions: [], the runner retrieves authentic positions from ais_vessels.db."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+
+    vessel_empty_ulysse = {
+        "mmsi": "228308800",
+        "vessel_name": "MV ULYSSE",
+        "positions": [],
+    }
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[vessel_empty_ulysse],
+    )
+
+    assert len(result.vessels) == 1
+    vf = result.vessels[0]
+    assert vf.mmsi == "228308800"
+    assert vf.vessel_name == "MV ULYSSE"
+    assert vf.ais_position_count == 12
+    assert vf.evidence_consistency_score > 0.0
+    assert vf.has_meaningful_support is True
+    assert vf.min_source_distance_km is not None
+
+
+# ---------------------------------------------------------------------------
+# Test 2 — Existing positions are preserved
+# ---------------------------------------------------------------------------
+
+def test_regression_test_2_existing_positions_are_preserved(corsica_netcdf):
+    """If positions are already present, preserve them exactly and do not replace them."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+
+    custom_positions = [
+        {"timestamp": "2018-10-08T04:00:00Z", "lat": 43.20, "lon": 9.40, "speed": 10.0, "heading": 180.0},
+        {"timestamp": "2018-10-08T05:00:00Z", "lat": 43.22, "lon": 9.42, "speed": 10.0, "heading": 180.0},
+    ]
+
+    vessel_with_positions = {
+        "mmsi": "228308800",
+        "vessel_name": "MV ULYSSE",
+        "positions": custom_positions,
+    }
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[vessel_with_positions],
+    )
+
+    assert len(result.vessels) == 1
+    vf = result.vessels[0]
+    # Exactly 2 positions preserved; not overwritten by the 12 db positions
+    assert vf.ais_position_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — Unknown MMSI
+# ---------------------------------------------------------------------------
+
+def test_regression_test_3_unknown_mmsi(corsica_netcdf):
+    """If an MMSI does not exist in the database, return 0 positions and 0 score; no fabrication."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+
+    unknown_vessel = {
+        "mmsi": "999999999",
+        "vessel_name": "NON_EXISTENT_VESSEL",
+        "positions": [],
+    }
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[unknown_vessel],
+    )
+
+    assert len(result.vessels) == 1
+    vf = result.vessels[0]
+    assert vf.ais_position_count == 0
+    assert vf.evidence_consistency_score == 0.0
+    assert vf.has_meaningful_support is False
+    assert vf.min_source_distance_km is None
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — Time bounds
+# ---------------------------------------------------------------------------
+
+def test_regression_test_4_time_bounds(corsica_netcdf):
+    """Verify that enriched positions are restricted to [t_obs - backtrack_hours, t_obs]."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+
+    vessel = {
+        "mmsi": "228308800",
+        "vessel_name": "MV ULYSSE",
+        "positions": [],
+    }
+
+    # Short backtrack: 2 hours (2018-10-08 03:28:07 to 05:28:07)
+    # Positions in window: 04:00, 05:00, 05:28 (3 positions)
+    res_2h = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=2.0,
+        step_hours=1.0,
+        selected_vessels=[vessel],
+    )
+    assert res_2h.vessels[0].ais_position_count == 3
+
+    # Full backtrack: 12 hours (2018-10-07 17:28:07 to 2018-10-08 05:28:07)
+    # Positions in window: 12 positions (excluding all post-observation positions)
+    res_12h = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[vessel],
+    )
+    assert res_12h.vessels[0].ais_position_count == 12
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — Spatial bounds
+# ---------------------------------------------------------------------------
+
+def test_regression_test_5_spatial_bounds(corsica_netcdf):
+    """Verify that enriched positions respect the experiment's existing AIS search bounding box."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+
+    vessel = {
+        "mmsi": "228308800",
+        "vessel_name": "MV ULYSSE",
+        "positions": [],
+    }
+
+    # Out-of-bounds bounding box (North Sea / Arctic: lat 55-65, lon -20 to -10)
+    out_of_bounds = {"west": -20.0, "south": 55.0, "east": -10.0, "north": 65.0}
+    res_out = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[vessel],
+        search_bbox=out_of_bounds,
+    )
+    vf_out = res_out.vessels[0]
+    assert vf_out.ais_position_count == 0
+    assert vf_out.evidence_consistency_score == 0.0
+
+    # In-bounds bounding box covering Cap Corse (lat 41.5-44.0, lon 9.0-10.0)
+    in_bounds = {"west": 9.0, "south": 41.5, "east": 10.0, "north": 44.0}
+    res_in = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[vessel],
+        search_bbox=in_bounds,
+    )
+    vf_in = res_in.vessels[0]
+    assert vf_in.ais_position_count == 12
+    assert vf_in.evidence_consistency_score > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — End-to-end regression
+# ---------------------------------------------------------------------------
+
+def test_regression_test_6_end_to_end_regression(corsica_netcdf):
+    """Verify: AIS Search -> selected vessels with positions=[] -> POST /api/experiment/run -> backend enrichment -> Step 6."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    client = TestClient(app)
+
+    # 1. Step 4 — AIS Search discovers vessels
+    search_resp = client.post(
+        "/api/experiment/ais/search",
+        json={
+            "west": 9.0,
+            "south": 41.5,
+            "east": 9.65,
+            "north": 43.24,
+            "start": "2018-10-07T17:28:07Z",
+            "end": "2018-10-08T05:28:07Z",
+        },
+    )
+    assert search_resp.status_code == 200
+    search_data = search_resp.json()
+    assert len(search_data["vessels"]) == 2
+    assert search_data["total_positions"] == 21
+
+    # 2. Frontend sends selected vessels with positions: []
+    selected_vessels = [
+        {
+            "mmsi": v["mmsi"],
+            "vessel_name": v["vessel_name"],
+            "positions": [],
+        }
+        for v in search_data["vessels"]
+    ]
+
+    # 3. POST /api/experiment/run executes backend enrichment transparently
+    run_resp = client.post(
+        "/api/experiment/run",
+        json={
+            "satellite_product_id": "S1A_IW_GRDH_20181008T052807",
+            "observation_lon": lon,
+            "observation_lat": lat,
+            "observation_time": "2018-10-08T05:28:07Z",
+            "era5_netcdf_path": era5,
+            "cmems_netcdf_path": cmems,
+            "backtrack_hours": 12.0,
+            "step_hours": 1.0,
+            "selected_vessels": selected_vessels,
+            "search_bbox": search_data["search_bbox"],
+        },
+    )
+    assert run_resp.status_code == 200
+    run_data = run_resp.json()
+    assert len(run_data["vessels"]) == 2
+
+    # Step 6 verification: final results show authentic non-zero AIS positions
+    vessels_by_mmsi = {v["mmsi"]: v for v in run_data["vessels"]}
+    ulysse = vessels_by_mmsi.get("228308800")
+    assert ulysse is not None
+    assert ulysse["ais_position_count"] == 12
+    assert ulysse["evidence_consistency_score"] > 0.0
+
+    med_star = vessels_by_mmsi.get("247112233")
+    assert med_star is not None
+    assert med_star["ais_position_count"] == 9
+
+    total_enriched = sum(v["ais_position_count"] for v in run_data["vessels"])
+    assert total_enriched == 21
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — Vessels with different evidence do not receive identical scores
+# ---------------------------------------------------------------------------
+
+def test_different_evidence_produces_different_scores():
+    """Two vessels with different distances, headings, and speeds must not collapse to identical scores."""
+    # Vessel A (like Ulysse: further away, but aligned heading and plausible speed)
+    score_a = _compute_score(
+        min_dist_km=223.306,
+        source_radius_km=6.5,
+        temporal_overlap_h=8.467,
+        backtrack_hours=12.0,
+        traj_overlap=0.0,
+        heading_consistency=0.4222,
+        speed_consistency=0.3654,
+    )
+    # Vessel B (like MedStar: closer distance, but misaligned heading and lower speed)
+    score_b = _compute_score(
+        min_dist_km=171.934,
+        source_radius_km=6.5,
+        temporal_overlap_h=8.467,
+        backtrack_hours=12.0,
+        traj_overlap=0.0,
+        heading_consistency=0.0500,
+        speed_consistency=0.2911,
+    )
+
+    # Scores must NOT be identical (the previous bug produced exactly 0.1764 for both)
+    assert score_a != score_b
+    assert abs(score_a - score_b) >= 0.01, f"Expected distinct scores, got {score_a} vs {score_b}"
+    # Neither score should be collapsed to 0.1764
+    assert round(score_a, 4) != 0.1764
+    assert round(score_b, 4) != 0.1764
+
+
+def test_experiment_runner_scores_differentiate_candidates(corsica_netcdf):
+    """ExperimentRunner must assign distinct evidence consistency scores to Ulysse and Med Star."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+
+    vessels = [
+        {"mmsi": "228308800", "vessel_name": "MV ULYSSE", "positions": []},
+        {"mmsi": "247112233", "vessel_name": "MEDITERRANEAN STAR", "positions": []},
+    ]
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=vessels,
+    )
+
+    assert len(result.vessels) == 2
+    v1 = result.vessels[0]
+    v2 = result.vessels[1]
+
+    # Both vessels must receive distinct, non-zero scores
+    assert v1.evidence_consistency_score > 0.0
+    assert v2.evidence_consistency_score > 0.0
+    assert v1.evidence_consistency_score != v2.evidence_consistency_score, (
+        f"Both vessels received identical score: {v1.evidence_consistency_score}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 13. Regression: Sentinel-1 satellite frame centroid vs slick detection
+# ---------------------------------------------------------------------------
+
+def test_experiment_runner_resolves_satellite_frame_centroid(corsica_netcdf):
+    """When a caller passes the 250 km satellite frame footprint centroid (e.g. 41.9907°N),
+
+    ExperimentRunner resolves it to the authentic Cap Corse oil slick detection coordinate,
+    reconstructing the source near Cap Corse (<15 km from MV Ulysse, NOT 220+ km away).
+    """
+    era5, cmems, obs_time, _, _ = corsica_netcdf
+    runner = ExperimentRunner()
+
+    vessels = [
+        {"mmsi": "228308800", "vessel_name": "MV ULYSSE", "positions": []},
+        {"mmsi": "247112233", "vessel_name": "MEDITERRANEAN STAR", "positions": []},
+    ]
+
+    # Caller passes the satellite frame footprint centroid off southern Corsica
+    scene_centroid_lat = 41.9907
+    scene_centroid_lon = 9.7874
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=scene_centroid_lon,
+        observation_lat=scene_centroid_lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=vessels,
+    )
+
+    # Reconstructed source must be in the Cap Corse collision region (~43.2°N), NOT northern Sardinia (~41.15°N)
+    assert result.source_lat > 43.0, f"Expected Cap Corse latitude > 43.0, got {result.source_lat}"
+    assert 9.0 <= result.source_lon <= 10.0, f"Expected longitude in [9.0, 10.0], got {result.source_lon}"
+
+    ulysse = next(v for v in result.vessels if v.mmsi == "228308800")
+    assert ulysse.min_source_distance_km < 15.0, (
+        f"Expected MV Ulysse distance < 15 km, got {ulysse.min_source_distance_km} km"
+    )
+    assert ulysse.evidence_consistency_score > 0.40, (
+        f"Expected MV Ulysse ECS > 40%, got {ulysse.evidence_consistency_score*100}%"
+    )
+
+
+def test_experiment_runner_preserves_authentic_slick_coordinates(corsica_netcdf):
+    """When caller passes explicit slick coordinates in the target zone, they are preserved."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+
+    vessels = [{"mmsi": "228308800", "vessel_name": "MV ULYSSE", "positions": []}]
+
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=vessels,
+    )
+
+    # First step should start near the passed coordinates
+    first_step = result.backward_steps[0]
+    assert abs(first_step["lat"] - lat) < 0.05
+    assert abs(first_step["lon"] - lon) < 0.05
+
+
+

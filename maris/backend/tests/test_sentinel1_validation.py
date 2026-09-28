@@ -731,5 +731,113 @@ class ManifestDataUnitTests(unittest.TestCase):
         self.assertTrue(any(i.code == "S1_SENSING_TIME_ORDER_INVALID" and i.severity == _ERROR for i in issues))
 
 
+# ---------------------------------------------------------------------------
+# Genuine Sentinel-1 ESA Manifest & Namespace Compatibility Tests
+# ---------------------------------------------------------------------------
+
+_GENUINE_ESA_MANIFEST_TEMPLATE = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<xfdu:XFDU xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:gml="http://www.opengis.net/gml"
+  xmlns:xfdu="urn:ccsds:schema:xfdu:1"
+  xmlns:safe="http://www.esa.int/safe/sentinel-1.0"
+  xmlns:s1="http://www.esa.int/safe/sentinel-1.0/sentinel-1"
+  xmlns:s1sar="http://www.esa.int/safe/sentinel-1.0/sentinel-1/sar"
+  xmlns:s1sarl1="http://www.esa.int/safe/sentinel-1.0/sentinel-1/sar/level-1"
+  version="esa/safe/sentinel-1.0/sentinel-1/sar/level-1/grd/standard/iwdp">
+  <metadataSection>
+    <metadataObject ID="generalProductInformation"><metadataWrap><xmlData>
+      <s1sarl1:standAloneProductInformation>
+        <s1sarl1:productType>GRD</s1sarl1:productType>
+        <s1sarl1:transmitterReceiverPolarisation>VV</s1sarl1:transmitterReceiverPolarisation>
+        <s1sarl1:transmitterReceiverPolarisation>VH</s1sarl1:transmitterReceiverPolarisation>
+      </s1sarl1:standAloneProductInformation>
+    </xmlData></metadataWrap></metadataObject>
+    <metadataObject ID="acquisitionPeriod"><metadataWrap><xmlData>
+      <safe:acquisitionPeriod>
+        <safe:startTime>2018-10-08T17:22:10.145682</safe:startTime>
+        <safe:stopTime>2018-10-08T17:22:35.143322</safe:stopTime>
+      </safe:acquisitionPeriod>
+    </xmlData></metadataWrap></metadataObject>
+    <metadataObject ID="platform"><metadataWrap><xmlData>
+      <safe:platform>
+        <safe:familyName>SENTINEL-1</safe:familyName>
+        <safe:number>B</safe:number>
+        <safe:instrument>
+          <safe:familyName abbreviation="SAR">Synthetic Aperture Radar</safe:familyName>
+          <safe:extension>
+            <s1sarl1:instrumentMode><s1sarl1:mode>IW</s1sarl1:mode></s1sarl1:instrumentMode>
+          </safe:extension>
+        </safe:instrument>
+      </safe:platform>
+    </xmlData></metadataWrap></metadataObject>
+    <metadataObject ID="measurementOrbitReference"><metadataWrap><xmlData>
+      <safe:orbitReference>
+        <safe:orbitNumber type="start">13064</safe:orbitNumber>
+      </safe:orbitReference>
+    </xmlData></metadataWrap></metadataObject>
+    <metadataObject ID="measurementFrameSet"><metadataWrap><xmlData>
+      <safe:frameSet><safe:frame>
+        <safe:footPrint srsName="http://www.opengis.net/gml/srs/epsg.xml#4326">
+          <gml:coordinates>44.977211,5.928633 45.379654,9.205695 43.876495,9.493886 43.472549,6.299100</gml:coordinates>
+        </safe:footPrint>
+      </safe:frame></safe:frameSet>
+    </xmlData></metadataWrap></metadataObject>
+  </metadataSection>
+</xfdu:XFDU>"""
+
+_UNSUPPORTED_NAMESPACE_MANIFEST = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<xfdu:XFDU xmlns:xfdu="urn:ccsds:schema:xfdu:1"
+  xmlns:unknown="http://example.com/unsupported/namespace">
+  <metadataSection>
+    <metadataObject ID="generalProductInformation"><metadataWrap><xmlData>
+      <unknown:productType>GRD</unknown:productType>
+    </xmlData></metadataWrap></metadataObject>
+  </metadataSection>
+</xfdu:XFDU>"""
+
+
+class GenuineEsaNamespaceTests(unittest.TestCase):
+    def test_genuine_esa_manifest_accepted(self) -> None:
+        """Genuine ESA Sentinel-1 manifest using http://www.esa.int/safe/sentinel-1.0 is valid."""
+        safe_dir = "S1B_IW_GRDH_1SDV_20181008T172210_20181008T172235_013064_01822C_29B4.SAFE"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_zip(tmp, "genuine.zip", _make_zip(safe_dir=safe_dir, manifest_xml=_GENUINE_ESA_MANIFEST_TEMPLATE))
+            result = _validator().validate(_artifact(str(path), safe_dir))
+            self.assertTrue(result.passed)
+            self.assertEqual(result.metadata.get("validation_classification"), _CLASS_PREFERRED)
+            self.assertEqual(result.metadata.get("platform"), "SENTINEL-1-B")
+            self.assertEqual(result.metadata.get("instrument"), "Synthetic Aperture Radar")
+            self.assertEqual(result.metadata.get("sensor_mode"), "IW")
+            self.assertEqual(result.metadata.get("polarisation"), "VV VH")
+            self.assertEqual(result.metadata.get("product_type"), "GRD")
+            self.assertEqual(result.metadata.get("orbit_number"), "13064")
+            self.assertEqual(result.metadata.get("sensing_start"), "2018-10-08T17:22:10.145682")
+            self.assertEqual(result.metadata.get("sensing_stop"), "2018-10-08T17:22:35.143322")
+
+    def test_legacy_synthetic_manifest_preserved(self) -> None:
+        """Legacy synthetic test fixture using http://www.esa.int/safe/sentinel/1.1 remains valid."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_zip(tmp, "synthetic.zip", _make_zip())
+            result = _validator().validate(_artifact(str(path)))
+            self.assertTrue(result.passed)
+            self.assertEqual(result.metadata.get("validation_classification"), _CLASS_PREFERRED)
+            self.assertEqual(result.metadata.get("platform"), "SENTINEL-1-A")
+            self.assertEqual(result.metadata.get("sensor_mode"), "IW")
+
+    def test_unsupported_namespace_rejected(self) -> None:
+        """Manifest using an unknown/unsupported namespace fails validation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_zip(tmp, "unsupported.zip", _make_zip(manifest_xml=_UNSUPPORTED_NAMESPACE_MANIFEST))
+            result = _validator().validate(_artifact(str(path)))
+            self.assertFalse(result.passed)
+            self.assertEqual(result.metadata.get("validation_classification"), _CLASS_INVALID)
+            codes = _codes(result)
+            self.assertIn("S1_PLATFORM_MISSING", codes)
+            self.assertIn("S1_PRODUCT_TYPE_MISSING", codes)
+
+
 if __name__ == "__main__":
     unittest.main()
+

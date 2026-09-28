@@ -40,13 +40,28 @@ _INFO = ValidationSeverity.INFO
 _MANIFEST_SUFFIX = "manifest.safe"
 
 # XML namespaces used in manifest.safe (ESA XFDU / SAFE spec)
+# Official ESA Sentinel-1 SAFE specification namespace mapping:
 _NS: dict[str, str] = {
+    "xfdu": "urn:ccsds:schema:xfdu:1",
+    "safe": "http://www.esa.int/safe/sentinel-1.0",
+    "s1": "http://www.esa.int/safe/sentinel-1.0/sentinel-1",
+    "s1sar": "http://www.esa.int/safe/sentinel-1.0/sentinel-1/sar",
+    "s1sarl1": "http://www.esa.int/safe/sentinel-1.0/sentinel-1/sar/level-1",
+    "gml": "http://www.opengis.net/gml",
+}
+
+# Legacy / synthetic test fixture namespace mapping (sentinel/1.1):
+_NS_LEGACY: dict[str, str] = {
     "xfdu": "urn:ccsds:schema:xfdu:1",
     "safe": "http://www.esa.int/safe/sentinel/1.1",
     "s1": "http://www.esa.int/safe/sentinel-1.0",
     "s1sarl1": "http://www.esa.int/safe/sentinel-1.0/sentinel-1/sar/level-1",
     "gml": "http://www.opengis.net/gml",
 }
+
+# Search candidates: genuine ESA official namespace first, followed by legacy synthetic fixture namespace
+_NS_CANDIDATES: list[dict[str, str]] = [_NS, _NS_LEGACY]
+
 
 # Platform family name as it appears in manifest.safe
 _SENTINEL1_FAMILY = "SENTINEL-1"
@@ -186,12 +201,21 @@ def _safe_dir_name(zf: zipfile.ZipFile) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _ft(root: ET.Element, xpath: str) -> str | None:
-    """Find element text, strip whitespace, return None if absent or empty."""
-    el = root.find(xpath, _NS)
-    if el is None or not el.text:
-        return None
-    text = el.text.strip()
-    return text if text else None
+    """Find element text, strip whitespace, return None if absent or empty.
+
+    Searches across candidate namespace mappings (official ESA sentinel-1.0 first,
+    then legacy synthetic sentinel/1.1).
+    """
+    for ns in _NS_CANDIDATES:
+        try:
+            el = root.find(xpath, ns)
+        except KeyError:
+            continue
+        if el is not None and el.text:
+            text = el.text.strip()
+            if text:
+                return text
+    return None
 
 
 def _parse_manifest(root: ET.Element, safe_dir: str | None) -> _ManifestData:
@@ -199,7 +223,17 @@ def _parse_manifest(root: ET.Element, safe_dir: str | None) -> _ManifestData:
     data.product_name = safe_dir
 
     data.product_type = _ft(root, ".//s1sarl1:standAloneProductInformation/s1sarl1:productType")
+
+    # Polarisation: check polarisationChannels first (synthetic), then transmitterReceiverPolarisation (genuine ESA SAFE)
     data.polarisation = _ft(root, ".//s1sarl1:standAloneProductInformation/s1sarl1:polarisationChannels")
+    if not data.polarisation:
+        for ns in _NS_CANDIDATES:
+            pol_elems = root.findall(".//s1sarl1:standAloneProductInformation/s1sarl1:transmitterReceiverPolarisation", ns)
+            if pol_elems:
+                pols = [p.text.strip() for p in pol_elems if p.text and p.text.strip()]
+                if pols:
+                    data.polarisation = " ".join(pols)
+                    break
 
     data.sensing_start = _ft(root, ".//safe:acquisitionPeriod/safe:startTime")
     data.sensing_stop = _ft(root, ".//safe:acquisitionPeriod/safe:stopTime")
@@ -207,12 +241,20 @@ def _parse_manifest(root: ET.Element, safe_dir: str | None) -> _ManifestData:
     data.platform_family = _ft(root, ".//safe:platform/safe:familyName")
     data.platform_number = _ft(root, ".//safe:platform/safe:number")
 
-    instr_el = root.find(".//safe:platform/safe:instrument/safe:familyName", _NS)
+    instr_el: ET.Element | None = None
+    for ns in _NS_CANDIDATES:
+        instr_el = root.find(".//safe:platform/safe:instrument/safe:familyName", ns)
+        if instr_el is not None:
+            break
     if instr_el is not None:
         data.instrument_family = instr_el.text.strip() if instr_el.text else None
         data.instrument_abbreviation = instr_el.get("abbreviation")
 
-    data.sensor_mode = _ft(root, ".//s1:instrumentMode/s1:mode")
+    # Mode: check genuine ESA path (s1sarl1 namespace) then legacy path (s1 namespace)
+    data.sensor_mode = (
+        _ft(root, ".//s1sarl1:instrumentMode/s1sarl1:mode")
+        or _ft(root, ".//s1:instrumentMode/s1:mode")
+    )
 
     data.orbit_number = _ft(root, ".//safe:orbitReference/safe:orbitNumber")
 

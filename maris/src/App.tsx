@@ -2,19 +2,28 @@ import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { Header, type MarisView } from './components/layout/Header'
 import { AlertsDrawer } from './components/layout/AlertsDrawer'
-import { InvestigationWorkspace } from './components/layout/InvestigationWorkspace'
+import { InvestigationWorkspace, resolveSpillId } from './components/layout/InvestigationWorkspace'
 import { MainLayout } from './components/layout/MainLayout'
 import { WorkspaceErrorBoundary } from './components/layout/WorkspaceErrorBoundary'
-import { OverviewView } from './components/views/OverviewView'
 import { InvestigationsView } from './components/views/InvestigationsView'
 import { EvidenceView } from './components/views/EvidenceView'
 import { VesselsView } from './components/views/VesselsView'
 import { AnalyticsView } from './components/views/AnalyticsView'
 import { PipelineView } from './components/views/PipelineView'
-import { listInvestigations } from './api/investigationApi'
+import {
+  getCandidateRanking,
+  getExplainabilityReport,
+  getInvestigationArtifacts,
+  listInvestigations,
+} from './api/investigationApi'
 import { candidateVessels as demoCandidateVessels, incidentData as demoIncidentData } from './data/demoData'
 import { getSimulationScenarioById, simulationScenarios } from './simulation/simulationEngine'
-import type { InvestigationListItem } from './types/investigationApi'
+import type {
+  ArtifactSummary,
+  CandidateRanking,
+  ExplainabilityReport,
+  InvestigationListItem,
+} from './types/investigationApi'
 import RealExperimentView from './components/views/RealExperimentView'
 import { usePageTransition } from './lib/motion'
 
@@ -48,12 +57,50 @@ export function App() {
   const [initError, setInitError] = useState<string | null>(null)
   const [isLoadingList, setIsLoadingList] = useState(false)
   const [selectedCandidate, setSelectedCandidate] = useState<string>(demoCandidateVessels[0].id)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedEvaluatorInvId, setSelectedEvaluatorInvId] = useState<string | null>(null)
+  const [selectedExperimentMode, setSelectedExperimentMode] = useState<'real' | 'evaluator' | 'synthetic'>('evaluator')
+  const [activeArtifacts, setActiveArtifacts] = useState<ArtifactSummary[]>([])
+  const [activeRankingResult, setActiveRankingResult] = useState<CandidateRanking | null>(null)
+  const [activeExplainabilityReport, setActiveExplainabilityReport] = useState<ExplainabilityReport | null>(null)
   const pageContainerRef = usePageTransition<HTMLDivElement>(activeView)
 
   const handleSelectView = useCallback((view: MarisView) => {
     setActiveView(view)
+    if (view === 'evaluator') {
+      setSelectedExperimentMode('evaluator')
+      setSelectedRunId(null)
+      setSelectedEvaluatorInvId(null)
+    }
     if (typeof window !== 'undefined') {
       const targetPath = view === 'workspace' ? '/' : `/${view}`
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState(null, '', targetPath)
+      }
+    }
+  }, [])
+
+  const handleNavigateToEvaluator = useCallback((opts?: {
+    mode?: 'real' | 'evaluator';
+    runId?: string;
+    investigationId?: string;
+  }) => {
+    if (opts?.runId) {
+      setSelectedRunId(opts.runId)
+      setSelectedEvaluatorInvId(null)
+      setSelectedExperimentMode('real')
+    } else if (opts?.investigationId) {
+      setSelectedEvaluatorInvId(opts.investigationId)
+      setSelectedRunId(null)
+      setSelectedExperimentMode('evaluator')
+    } else {
+      setSelectedRunId(null)
+      setSelectedEvaluatorInvId(null)
+      setSelectedExperimentMode(opts?.mode ?? 'evaluator')
+    }
+    setActiveView('evaluator')
+    if (typeof window !== 'undefined') {
+      const targetPath = '/evaluator'
       if (window.location.pathname !== targetPath) {
         window.history.pushState(null, '', targetPath)
       }
@@ -63,7 +110,11 @@ export function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
     const onLocationChange = () => {
-      setActiveView(getInitialViewFromLocation())
+      const view = getInitialViewFromLocation()
+      setActiveView(view)
+      if (view === 'evaluator') {
+        setSelectedExperimentMode('evaluator')
+      }
     }
     window.addEventListener('popstate', onLocationChange)
     window.addEventListener('hashchange', onLocationChange)
@@ -100,6 +151,57 @@ export function App() {
   useEffect(() => {
     loadInvestigationsList()
   }, [loadInvestigationsList])
+
+  useEffect(() => {
+    let isCancelled = false
+    if (!activeInvestigationId || activeInvestigationId === 'corsica-2018-demo' || activeInvestigationId.startsWith('simulation-')) {
+      setActiveArtifacts([])
+      setActiveRankingResult(null)
+      setActiveExplainabilityReport(null)
+      return
+    }
+
+    async function fetchInvestigationTelemetry() {
+      try {
+        const artifacts = await getInvestigationArtifacts(activeInvestigationId).catch(() => [])
+        if (isCancelled) return
+        setActiveArtifacts(artifacts)
+
+        const spillId = resolveSpillId(artifacts)
+        if (spillId) {
+          const [ranking, report] = await Promise.all([
+            getCandidateRanking(activeInvestigationId, spillId).catch(() => null),
+            getExplainabilityReport(activeInvestigationId, spillId).catch(() => null),
+          ])
+          if (!isCancelled) {
+            setActiveRankingResult(ranking)
+            setActiveExplainabilityReport(report)
+            if (ranking?.candidates && ranking.candidates.length > 0) {
+              const firstId = ranking.candidates[0].candidate_id || ranking.candidates[0].vessel_id
+              if (firstId) setSelectedCandidate(firstId)
+            }
+          }
+        } else {
+          if (!isCancelled) {
+            setActiveRankingResult(null)
+            setActiveExplainabilityReport(null)
+          }
+        }
+      } catch {
+        if (!isCancelled) {
+          setActiveArtifacts([])
+          setActiveRankingResult(null)
+          setActiveExplainabilityReport(null)
+        }
+      }
+    }
+
+    fetchInvestigationTelemetry()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [activeInvestigationId])
 
   const isDemoMode = activeInvestigationId === 'corsica-2018-demo'
   const isSimulationMode = activeInvestigationId.startsWith('simulation-')
@@ -168,21 +270,36 @@ export function App() {
               onOpenCreateModal={() => setIsCreateModalOpen(true)}
               onInvestigationCreated={loadInvestigationsList}
               backendError={initError}
-              onNavigateToEvaluator={() => handleSelectView('evaluator')}
+              onNavigateToEvaluator={handleNavigateToEvaluator}
             />
           </WorkspaceErrorBoundary>
         )}
 
         {activeView === 'evaluator' && (
-          <RealExperimentView initialMode="evaluator" />
+          <WorkspaceErrorBoundary onReset={loadInvestigationsList}>
+            <RealExperimentView
+              initialMode={selectedExperimentMode}
+              initialRunId={selectedRunId}
+              initialInvestigationId={selectedEvaluatorInvId}
+            />
+          </WorkspaceErrorBoundary>
         )}
 
         {activeView === 'overview' && (
-          <OverviewView
+          <InvestigationsView
             investigations={investigations}
             activeId={activeInvestigationId}
             onSelectInvestigation={setActiveInvestigationId}
-            onNavigateToView={handleSelectView}
+            onNavigateToView={(view, opts) => {
+              if (opts?.runId) {
+                setSelectedRunId(opts.runId)
+                setSelectedEvaluatorInvId(null)
+              } else if (opts?.investigationId) {
+                setSelectedEvaluatorInvId(opts.investigationId)
+                setSelectedRunId(null)
+              }
+              handleSelectView(view)
+            }}
             onOpenCreateModal={() => setIsCreateModalOpen(true)}
             simulationScenarios={simulationScenarios}
             isBackendUnavailable={Boolean(initError)}
@@ -194,9 +311,19 @@ export function App() {
             investigations={investigations}
             activeId={activeInvestigationId}
             onSelectInvestigation={setActiveInvestigationId}
-            onNavigateToView={handleSelectView}
+            onNavigateToView={(view, opts) => {
+              if (opts?.runId) {
+                setSelectedRunId(opts.runId)
+                setSelectedEvaluatorInvId(null)
+              } else if (opts?.investigationId) {
+                setSelectedEvaluatorInvId(opts.investigationId)
+                setSelectedRunId(null)
+              }
+              handleSelectView(view)
+            }}
             onOpenCreateModal={() => setIsCreateModalOpen(true)}
             simulationScenarios={simulationScenarios}
+            isBackendUnavailable={Boolean(initError)}
           />
         )}
 
@@ -206,7 +333,7 @@ export function App() {
             isSimulationMode={isSimulationMode}
             simulationScenario={activeSimulationScenario}
             demoIncident={demoIncidentData}
-            artifacts={[]}
+            artifacts={activeArtifacts}
             activeId={activeInvestigationId}
             onNavigateToView={handleSelectView}
           />
@@ -218,7 +345,7 @@ export function App() {
             isSimulationMode={isSimulationMode}
             simulationScenario={activeSimulationScenario}
             demoCandidates={demoCandidateVessels}
-            rankingResult={null}
+            rankingResult={activeRankingResult}
             selectedCandidate={selectedCandidate}
             onSelectCandidate={setSelectedCandidate}
             onNavigateToView={handleSelectView}
@@ -230,17 +357,14 @@ export function App() {
             isDemoMode={isDemoMode}
             isSimulationMode={isSimulationMode}
             simulationScenario={activeSimulationScenario}
-            rankingResult={null}
-            explainabilityReport={null}
+            rankingResult={activeRankingResult}
+            explainabilityReport={activeExplainabilityReport}
             onNavigateToView={handleSelectView}
           />
         )}
 
         {activeView === 'pipeline' && (
           <PipelineView
-            completedStages={activeListItem?.status === 'COMPLETED' ? ['B1', 'B2', 'B3', 'C1', 'D1', 'D3', 'E1', 'E2', 'E3', 'F1', 'F2', 'F3'] : ['B1', 'B2', 'B3']}
-            currentStage={null}
-            workflowStatus={activeListItem?.status}
             onNavigateToView={handleSelectView}
           />
         )}

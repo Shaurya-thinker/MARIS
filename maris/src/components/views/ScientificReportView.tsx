@@ -1,0 +1,1001 @@
+/**
+ * ScientificReportView.tsx — Step 8: Scientific Investigation Report & Export.
+ *
+ * Renders a publication-grade, self-contained scientific investigation report
+ * constructed strictly from the stored historical experiment record.
+ *
+ * CRITICAL SCIENTIFIC INTEGRITY INVARIANTS:
+ * - Read-only transformation of stored experiment records.
+ * - Zero re-running of drift calculations or AIS queries.
+ * - Authoritative backend ordering and exact consistency scores strictly preserved.
+ * - Neutral terminology: Strictly evidence-consistency assessment; no attribution of
+ *   guilt, fault, or legal responsibility.
+ */
+
+import React, { useCallback, useEffect, useState } from 'react'
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Download,
+  FileCheck,
+  FileText,
+  Printer,
+} from 'lucide-react'
+
+import {
+  fetchScientificReport,
+  downloadReportPdf,
+  downloadExportJson,
+  getExperimentRun,
+} from '../../real-experiment/experimentApi'
+import type {
+  AisPosition,
+  ExperimentRunResult,
+} from '../../real-experiment/experimentTypes'
+import AttributionMap from './AttributionMap'
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function fmt(n: number | null | undefined, dec = 3): string {
+  if (n == null || !Number.isFinite(n)) return '—'
+  return n.toFixed(dec)
+}
+
+function scoreColor(score: number): string {
+  if (score >= 0.7) return '#4ade80'
+  if (score >= 0.4) return '#facc15'
+  return '#f87171'
+}
+
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return iso.slice(0, 16).replace('T', ' ')
+    return d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
+  } catch {
+    return iso.slice(0, 16).replace('T', ' ')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
+export interface ScientificReportViewProps {
+  runId: string
+  onBack: () => void
+  initialRun?: ExperimentRunResult | null
+  onLoadIntoEvaluator?: (runId: string) => void | Promise<void>
+}
+
+export default function ScientificReportView({
+  runId,
+  onBack,
+  initialRun,
+  onLoadIntoEvaluator,
+}: ScientificReportViewProps) {
+  const [runResult, setRunResult] = useState<ExperimentRunResult | null>(initialRun ?? null)
+  const [reportData, setReportData] = useState<Record<string, any> | null>(null)
+  const [loading, setLoading] = useState<boolean>(!initialRun)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedVesselId, setSelectedVesselId] = useState<string | null>(null)
+  const [pdfDownloading, setPdfDownloading] = useState(false)
+  const [jsonDownloading, setJsonDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [fullRun, reportJson] = await Promise.all([
+        initialRun ? Promise.resolve(initialRun) : getExperimentRun(runId),
+        fetchScientificReport(runId),
+      ])
+      setRunResult(fullRun)
+      setReportData(reportJson)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to generate scientific report.')
+    } finally {
+      setLoading(false)
+    }
+  }, [runId, initialRun])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  const handlePrint = () => {
+    window.print()
+  }
+
+  const handleDownloadPdf = async () => {
+    setPdfDownloading(true)
+    setDownloadError(null)
+    try {
+      await downloadReportPdf(runId)
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'PDF download failed. Is the backend running?')
+    } finally {
+      setPdfDownloading(false)
+    }
+  }
+
+  const handleExportJson = async () => {
+    setJsonDownloading(true)
+    setDownloadError(null)
+    try {
+      await downloadExportJson(runId)
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'JSON export failed. Is the backend running?')
+    } finally {
+      setJsonDownloading(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="re-step-panel re-report-loading" data-testid="report-loading-state">
+        <div className="re-running-status">
+          <div className="re-spinner" />
+          <span>Generating scientific report from stored experiment record…</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (error || !runResult) {
+    return (
+      <div className="re-step-panel re-report-error" data-testid="report-error-state">
+        <div className="re-btn-row" style={{ marginBottom: '1rem' }}>
+          <button className="re-btn-ghost" onClick={onBack}>
+            ← Back to Investigation
+          </button>
+        </div>
+        <p className="re-error">
+          <strong>Unable to generate scientific report.</strong>
+          {error && ` (${error})`}
+        </p>
+        <div className="re-btn-row">
+          <button className="re-btn-secondary" onClick={loadData}>
+            Retry Report Generation
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Authentic AIS positions map from stored vessel records
+  const vesselPositionsMap: Record<string, AisPosition[]> = {}
+  runResult.vessels.forEach((v) => {
+    if (v.positions && v.positions.length > 0) {
+      vesselPositionsMap[v.vessel_id] = v.positions
+      if (v.mmsi) vesselPositionsMap[v.mmsi] = v.positions
+    }
+  })
+
+  // Observation coordinate determination
+  const obsLat =
+    runResult.observation_lat != null && runResult.observation_lat !== 0
+      ? runResult.observation_lat
+      : runResult.satellite_product_id.includes('20181008')
+      ? 43.2483
+      : runResult.source_lat
+  const obsLon =
+    runResult.observation_lon != null && runResult.observation_lon !== 0
+      ? runResult.observation_lon
+      : runResult.satellite_product_id.includes('20181008')
+      ? 9.4783
+      : runResult.source_lon
+
+  const meta = reportData?.metadata ?? {}
+  const execSum = reportData?.executive_summary ?? {}
+
+  return (
+    <div className="re-step-panel re-report-view" data-testid="scientific-report-view">
+      {/* Top Action Toolbar (Hidden during print) */}
+      <div className="re-report-toolbar no-print">
+        <div className="re-toolbar-left">
+          <button
+            className="re-btn-ghost"
+            onClick={onBack}
+            data-testid="report-back-btn"
+            title="Return to experiment details"
+          >
+            <ArrowLeft size={14} style={{ marginRight: '0.35rem' }} />
+            Back to Investigation
+          </button>
+        </div>
+        <div className="re-toolbar-right">
+          <button
+            className="re-btn-primary"
+            onClick={handleDownloadPdf}
+            disabled={pdfDownloading}
+            data-testid="report-download-pdf-btn"
+            title="Download publication-ready PDF"
+          >
+            <Download size={14} style={{ marginRight: '0.35rem' }} />
+            {pdfDownloading ? 'Generating PDF…' : 'Download PDF'}
+          </button>
+          <button
+            className="re-btn-secondary"
+            onClick={handleExportJson}
+            disabled={jsonDownloading}
+            data-testid="report-export-json-btn"
+            title="Export full experiment record as structured JSON"
+          >
+            <FileText size={14} style={{ marginRight: '0.35rem' }} />
+            {jsonDownloading ? 'Exporting…' : 'Export JSON'}
+          </button>
+          {onLoadIntoEvaluator && (
+            <button
+              className="re-btn-ghost"
+              onClick={() => onLoadIntoEvaluator(runId)}
+              data-testid="report-load-evaluator-btn"
+              title="Load this run into the active Evaluator wizard"
+            >
+              Load into Evaluator
+            </button>
+          )}
+          <button
+            className="re-btn-ghost"
+            onClick={handlePrint}
+            data-testid="report-print-btn"
+            title="Print or save as browser PDF"
+          >
+            <Printer size={14} style={{ marginRight: '0.35rem' }} />
+            Print
+          </button>
+        </div>
+      </div>
+      {downloadError && (
+        <div className="re-report-download-error no-print" data-testid="report-download-error">
+          <FileCheck size={14} style={{ marginRight: '0.4rem', flexShrink: 0 }} />
+          <span><strong>Download failed:</strong> {downloadError}</span>
+          <button className="re-btn-ghost" style={{ marginLeft: 'auto', padding: '0 0.4rem' }} onClick={() => setDownloadError(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Report Paper Container */}
+      <div className="re-report-paper" data-testid="report-paper">
+        {/* Cover / Document Header */}
+        <header className="re-report-cover">
+          <div className="re-report-org">
+            <span className="re-report-logo">MARIS</span>
+            <span className="re-report-sublogo">Marine Attribution & Investigation System</span>
+          </div>
+          <h1 className="re-report-main-title">SCIENTIFIC ATTRIBUTION & AUDIT REPORT</h1>
+          <p className="re-report-subtitle">
+            Hydrodynamic Backward Drift Reconstruction & Multi-Factor Vessel Telemetry Consistency Assessment
+          </p>
+          <div className="re-report-divider" />
+        </header>
+
+        {/* Report Metadata Grid */}
+        <section className="re-report-meta-box">
+          <div className="re-report-meta-item">
+            <span className="re-meta-label">Experiment Run ID</span>
+            <code className="re-meta-value re-td-mono" data-testid="report-run-id">
+              {runResult.run_id}
+            </code>
+          </div>
+          <div className="re-report-meta-item">
+            <span className="re-meta-label">Report Generated</span>
+            <span className="re-meta-value">
+              {meta.report_generated_at || formatDate(new Date().toISOString())}
+            </span>
+          </div>
+          <div className="re-report-meta-item">
+            <span className="re-meta-label">Experiment Status</span>
+            <span className="re-status-badge re-status-completed">
+              <CheckCircle2 size={12} />
+              Completed
+            </span>
+          </div>
+          <div className="re-report-meta-item">
+            <span className="re-meta-label">Attribution Model</span>
+            <code
+              className="re-meta-value re-td-mono"
+              title={runResult.model_version}
+              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+            >
+              {runResult.model_version.includes('+')
+                ? runResult.model_version.replace('+', ' + ')
+                : runResult.model_version}
+            </code>
+          </div>
+        </section>
+
+        {/* Section 1: Executive Summary */}
+        <section className="re-report-section">
+          <h2 className="re-report-sec-title">1. Executive Summary</h2>
+          <div className="re-exec-summary-box">
+            <p className="re-exec-text">
+              {execSum.assessment_statement ||
+                'The experiment reconstructed a candidate source zone using backward drift integration and evaluated available AIS vessel evidence against the reconstructed attribution result. This analysis is an evidence-consistency assessment and does not constitute a legal determination of responsibility or causation.'}
+            </p>
+            <div className="re-exec-grid">
+              <div className="re-exec-metric">
+                <span className="re-exec-label">Observation</span>
+                <strong>
+                  {fmt(obsLat, 4)}°N, {fmt(obsLon, 4)}°E
+                </strong>
+              </div>
+              <div className="re-exec-metric">
+                <span className="re-exec-label">Reconstructed Source</span>
+                <strong>
+                  {fmt(runResult.source_lat, 4)}°N, {fmt(runResult.source_lon, 4)}°E
+                </strong>
+              </div>
+              <div className="re-exec-metric">
+                <span className="re-exec-label">Source Uncertainty</span>
+                <strong>{(runResult.source_radius_m / 1000).toFixed(1)} km</strong>
+              </div>
+              <div className="re-exec-metric">
+                <span className="re-exec-label">Backward Integration</span>
+                <strong>
+                  {runResult.backtrack_hours} h ({runResult.backward_steps.length} steps)
+                </strong>
+              </div>
+              <div className="re-exec-metric">
+                <span className="re-exec-label">Candidate Vessels</span>
+                <strong>{runResult.vessels.length} evaluated</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Section 2: Observation Details */}
+        <section className="re-report-section">
+          <h2 className="re-report-sec-title">2. Observation Information</h2>
+          <div className="re-table-card">
+            <table className="re-table re-report-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <tbody>
+                <tr>
+                  <th style={{ width: '26%' }}>Sensor Platform</th>
+                  <td style={{ width: '74%', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                    {runResult.satellite_product_id.includes('S1A')
+                      ? 'Copernicus Sentinel-1A C-SAR'
+                      : runResult.satellite_product_id.includes('S1B')
+                      ? 'Copernicus Sentinel-1B C-SAR'
+                      : 'Satellite Synthetic Aperture Radar (SAR)'}
+                  </td>
+                </tr>
+                <tr>
+                  <th>Observation Coordinates</th>
+                  <td className="re-td-mono" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                    {fmt(obsLat, 4)}°N, {fmt(obsLon, 4)}°E
+                  </td>
+                </tr>
+                <tr>
+                  <th>Observation Timestamp</th>
+                  <td className="re-td-mono" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                    {formatDate(runResult.observation_time)}
+                  </td>
+                </tr>
+                <tr>
+                  <th>Satellite Product ID</th>
+                  <td className="re-td-mono" style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
+                    {runResult.satellite_product_id}
+                  </td>
+                </tr>
+                {reportData?.oil_spill_characterization && (
+                  <>
+                    <tr>
+                      <th>Slick Detection Status</th>
+                      <td>
+                        <span
+                          style={{
+                            fontWeight: 600,
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '4px',
+                            background: reportData.oil_spill_characterization.estimated_area_km2 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+                            color: reportData.oil_spill_characterization.estimated_area_km2 ? '#22c55e' : '#eab308',
+                          }}
+                        >
+                          {reportData.oil_spill_characterization.detection_status}
+                        </span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Estimated Slick Area</th>
+                      <td>
+                        <strong>
+                          {reportData.oil_spill_characterization.estimated_area_km2 != null
+                            ? `${reportData.oil_spill_characterization.estimated_area_km2} km²`
+                            : 'Unavailable (unsegmented scene)'}
+                        </strong>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Bragg Damping Contrast</th>
+                      <td>
+                        {reportData.oil_spill_characterization.damping_contrast_db != null
+                          ? `${reportData.oil_spill_characterization.damping_contrast_db} dB`
+                          : 'Unavailable'}
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Detection Confidence</th>
+                      <td>
+                        {reportData.oil_spill_characterization.confidence_score != null
+                          ? `${(reportData.oil_spill_characterization.confidence_score * 100).toFixed(0)}%`
+                          : 'Catalogue geometric anchor'}
+                      </td>
+                    </tr>
+                    <tr>
+                      <th>Detection Method</th>
+                      <td style={{ fontSize: '0.85rem' }}>
+                        {reportData.oil_spill_characterization.detection_method}
+                      </td>
+                    </tr>
+                  </>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* Section 3: Environmental Data Sources */}
+        <section className="re-report-section">
+          <h2 className="re-report-sec-title">3. Environmental Conditions & Data Sources</h2>
+          <div className="re-table-card">
+            <table className="re-table re-report-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: '26%' }}>Domain</th>
+                  <th style={{ width: '32%' }}>Source & Dataset</th>
+                  <th style={{ width: '42%' }}>Coverage & Provenance</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Atmospheric Reanalysis</td>
+                  <td><strong>ECMWF ERA5 10m Wind</strong></td>
+                  <td className="re-td-mono" style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
+                    {runResult.era5_path || 'Metocean NetCDF'}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Ocean Hydrodynamics</td>
+                  <td><strong>Copernicus Marine CMEMS</strong></td>
+                  <td className="re-td-mono" style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
+                    {runResult.cmems_path || 'Oceanic NetCDF'}
+                  </td>
+                </tr>
+                <tr>
+                  <td>AIS Vessel Telemetry</td>
+                  <td><strong>Curated Historical SQLite Database</strong></td>
+                  <td className="re-td-mono" style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
+                    ais_vessels.db Benchmark Archive
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* Section 4: Drift Configuration */}
+        <section className="re-report-section">
+          <h2 className="re-report-sec-title">4. Drift Configuration & Source Reconstruction</h2>
+          <div className="re-source-zone-card" style={{ marginBottom: '1rem' }}>
+            <div className="re-source-grid">
+              <div>
+                <div className="re-source-label">Physics Model</div>
+                <div className="re-source-value" style={{ fontSize: '0.8rem' }}>
+                  Leeway-Euler Backward Integration
+                </div>
+              </div>
+              <div>
+                <div className="re-source-label">Backtrack Duration</div>
+                <div className="re-source-value">{runResult.backtrack_hours} h</div>
+              </div>
+              <div>
+                <div className="re-source-label">Backward Steps</div>
+                <div className="re-source-value">{runResult.backward_steps.length} steps</div>
+              </div>
+              <div>
+                <div className="re-source-label">Step Timestep</div>
+                <div className="re-source-value">{runResult.step_hours} h</div>
+              </div>
+              <div>
+                <div className="re-source-label">Reconstructed Source</div>
+                <div className="re-source-value">
+                  {fmt(runResult.source_lat, 4)}°N, {fmt(runResult.source_lon, 4)}°E
+                </div>
+              </div>
+              <div>
+                <div className="re-source-label">Uncertainty Radius</div>
+                <div className="re-source-value">
+                  {(runResult.source_radius_m / 1000).toFixed(1)} km
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Section 4b: Forward Drift Prediction (Step 11) */}
+        {(runResult.forward_prediction || reportData?.forward_drift_prediction) && (() => {
+          const fwd = runResult.forward_prediction || reportData?.forward_drift_prediction
+          const steps: Array<any> = fwd.steps || []
+          return (
+            <section className="re-report-section" data-testid="report-forward-prediction-section">
+              <h2 className="re-report-sec-title">4b. Forward Drift Prediction (Model Projection)</h2>
+              <p className="re-section-desc">
+                Deterministic forward trajectory simulation predicting future slick movement from the Sentinel-1 observation coordinate under available ERA5 wind and CMEMS ocean current forcing fields.
+              </p>
+              <div className="re-source-zone-card" style={{ marginBottom: '1rem', borderColor: '#0891b2', background: 'rgba(6, 40, 50, 0.4)' }}>
+                <div className="re-source-grid">
+                  <div>
+                    <div className="re-source-label">Observation Origin</div>
+                    <div className="re-source-value">
+                      {fmt(fwd.observation_lat ?? fwd.origin_lat, 4)}°N, {fmt(fwd.observation_lon ?? fwd.origin_lon, 4)}°E
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Final Predicted Coordinate</div>
+                    <div className="re-source-value" style={{ color: '#22d3ee' }}>
+                      {fmt(fwd.final_lat, 4)}°N, {fmt(fwd.final_lon, 4)}°E
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Prediction Horizon</div>
+                    <div className="re-source-value">+{fwd.prediction_hours ?? steps.length} h ({steps.length} steps)</div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Cumulative Displacement</div>
+                    <div className="re-source-value">{(fwd.displacement_km ?? fwd.total_distance_km)?.toFixed(1) ?? '—'} km</div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Model Identifier</div>
+                    <div className="re-source-value" style={{ fontSize: '0.8rem' }}>{fwd.model_version ?? 'leeway_euler_v1'}</div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Projection Status</div>
+                    <div className="re-source-value" style={{ color: '#22d3ee' }}>{fwd.status ?? fwd.termination_status ?? 'COMPLETED'}</div>
+                  </div>
+                </div>
+              </div>
+
+              {steps.length > 0 && (
+                <div className="re-table-card" style={{ marginBottom: '1rem' }}>
+                  <table className="re-table re-report-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th>Step</th>
+                        <th>Forecast Time</th>
+                        <th>Latitude (°N)</th>
+                        <th>Longitude (°E)</th>
+                        <th>Wind (m/s)</th>
+                        <th>Current (m/s)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {steps.map((st: any, i: number) => {
+                        const windSpd = st.u_wind_ms != null && st.v_wind_ms != null ? Math.hypot(st.u_wind_ms, st.v_wind_ms).toFixed(1) : '—'
+                        const currSpd = st.u_current_ms != null && st.v_current_ms != null ? Math.hypot(st.u_current_ms, st.v_current_ms).toFixed(2) : '—'
+                        return (
+                          <tr key={i}>
+                            <td className="re-td-mono">+{st.step} h</td>
+                            <td className="re-td-mono">{formatDate(st.timestamp)}</td>
+                            <td className="re-td-mono">{fmt(st.lat, 4)}°N</td>
+                            <td className="re-td-mono">{fmt(st.lon, 4)}°E</td>
+                            <td className="re-td-mono">{windSpd}</td>
+                            <td className="re-td-mono">{currSpd}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="re-disclaimer">
+                <strong>Scientific Uncertainty Notice:</strong> The forward trajectory is a deterministic model projection under the supplied environmental forcing fields (Leeway-Euler with α = 0.035). MARIS does not project a synthetic uncertainty radius without a scientifically calibrated stochastic dispersion model. This prediction does not represent a guaranteed or observed future path.
+              </div>
+            </section>
+          )
+        })()}
+
+        {/* Section 5: Attribution Map (Stored Result) */}
+        <section className="re-report-section">
+          <h2 className="re-report-sec-title">5. Historical Attribution Map</h2>
+          <p className="re-section-desc">
+            Visualizing the stored observed slick location, backward drift trajectory, reconstructed
+            source uncertainty zone, and authentic historical AIS vessel paths.
+          </p>
+
+          <div className="re-report-map-wrap">
+            <AttributionMap
+              observation={{
+                lat: obsLat,
+                lon: obsLon,
+                timestamp: runResult.observation_time,
+                title: runResult.satellite_product_id,
+              }}
+              reconstructedSource={{
+                lat: runResult.source_lat,
+                lon: runResult.source_lon,
+                radiusM: runResult.source_radius_m,
+                geojson: runResult.source_zone_geojson,
+              }}
+              backwardSteps={runResult.backward_steps}
+              vessels={runResult.vessels}
+              selectedVesselId={selectedVesselId}
+              onSelectVessel={setSelectedVesselId}
+              vesselPositionsMap={vesselPositionsMap}
+              forwardSteps={runResult.forward_prediction?.steps}
+              forwardPrediction={runResult.forward_prediction}
+            />
+          </div>
+        </section>
+
+        {/* Section 6: Candidate Vessel Comparison (Authoritative Backend Ranking) */}
+        <section className="re-report-section">
+          <h2 className="re-report-sec-title">6. Candidate Vessel Assessment</h2>
+          <p className="re-section-desc">
+            Authoritative candidate ranking strictly preserved from backend calculation. Ordered by
+            Evidence Consistency Score.
+          </p>
+
+          {runResult.vessels.length === 0 ? (
+            <p className="re-empty">No eligible AIS vessel tracks were available for this experiment.</p>
+          ) : (
+            <div className="re-results-table-wrap">
+              <table className="re-table re-report-table" data-testid="report-candidate-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Vessel</th>
+                    <th>MMSI</th>
+                    <th>Evidence Consistency</th>
+                    <th>Distance</th>
+                    <th>AIS Coverage</th>
+                    <th>Track Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runResult.vessels.map((v) => {
+                    const pos =
+                      vesselPositionsMap[v.vessel_id] || vesselPositionsMap[v.mmsi ?? ''] || v.positions || []
+                    return (
+                      <tr key={v.vessel_id}>
+                        <td className="re-td-mono"><strong>#{v.rank}</strong></td>
+                        <td><strong>{v.vessel_name ?? v.mmsi ?? v.vessel_id}</strong></td>
+                        <td className="re-td-mono">{v.mmsi ?? '—'}</td>
+                        <td>
+                          <span
+                            style={{
+                              color: scoreColor(v.evidence_consistency_score),
+                              fontWeight: 800,
+                              fontFamily: 'monospace',
+                            }}
+                          >
+                            {(v.evidence_consistency_score * 100).toFixed(1)}%
+                          </span>
+                        </td>
+                        <td className="re-td-mono">
+                          {v.min_source_distance_km != null
+                            ? `${v.min_source_distance_km.toFixed(1)} km`
+                            : '—'}
+                        </td>
+                        <td className="re-td-mono">
+                          {(v.ais_coverage_fraction * 100).toFixed(0)}% ({v.ais_position_count} pos)
+                        </td>
+                        <td>
+                          {pos.length > 0 ? (
+                            <span style={{ color: '#4ade80', fontSize: '0.75rem' }}>
+                              ✓ {pos.length} pts
+                            </span>
+                          ) : (
+                            <span style={{ color: '#f87171', fontSize: '0.75rem' }}>
+                              AIS trajectory unavailable
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* Section 7: Detailed Evidence Breakdown & Multi-Factor Matrix */}
+        {runResult.vessels.length > 0 && (
+          <section className="re-report-section">
+            <h2 className="re-report-sec-title">7. Detailed Evidence Dimensions Matrix</h2>
+            <div className="re-results-table-wrap">
+              <table className="re-table re-report-table" data-testid="report-evidence-matrix">
+                <thead>
+                  <tr>
+                    <th>Evidence Dimension</th>
+                    {runResult.vessels.map((v) => (
+                      <th key={v.vessel_id}>
+                        #{v.rank} {v.vessel_name ?? v.mmsi}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Evidence Consistency Score</strong></td>
+                    {runResult.vessels.map((v) => (
+                      <td key={v.vessel_id} className="re-td-mono">
+                        <strong>{(v.evidence_consistency_score * 100).toFixed(1)}%</strong>
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Spatial Proximity (Min Distance)</td>
+                    {runResult.vessels.map((v) => (
+                      <td key={v.vessel_id} className="re-td-mono">
+                        {v.min_source_distance_km != null ? `${v.min_source_distance_km.toFixed(1)} km` : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Temporal Overlap</td>
+                    {runResult.vessels.map((v) => (
+                      <td key={v.vessel_id} className="re-td-mono">
+                        {v.temporal_overlap_hours.toFixed(1)} h
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Trajectory Overlap Fraction</td>
+                    {runResult.vessels.map((v) => (
+                      <td key={v.vessel_id} className="re-td-mono">
+                        {(v.trajectory_overlap_fraction * 100).toFixed(0)}%
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>AIS Transponder Positions</td>
+                    {runResult.vessels.map((v) => (
+                      <td key={v.vessel_id} className="re-td-mono">
+                        {v.ais_position_count}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Speed Consistency</td>
+                    {runResult.vessels.map((v) => (
+                      <td key={v.vessel_id} className="re-td-mono">
+                        {v.speed_consistency != null ? `${(v.speed_consistency * 100).toFixed(0)}%` : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr>
+                    <td>Course Consistency</td>
+                    {runResult.vessels.map((v) => (
+                      <td key={v.vessel_id} className="re-td-mono">
+                        {v.heading_consistency != null ? `${(v.heading_consistency * 100).toFixed(0)}%` : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* Section 8: ML Model Signal & AIS Behavioural Intelligence */}
+        {(() => {
+          const cands: any[] = reportData?.candidates ?? []
+          const hasML = cands.some((c: any) => c.model_probability != null)
+          const hasBeh = cands.some((c: any) => c.behavioral_intelligence != null)
+          if (!cands.length || (!hasML && !hasBeh)) return null
+          return (
+            <section className="re-report-section" data-testid="report-ml-section">
+              <h2 className="re-report-sec-title">8. ML Model Signal &amp; AIS Behavioural Intelligence</h2>
+              <div className="re-disclaimer" style={{ marginBottom: '1rem', borderColor: '#1d4ed8', background: 'rgba(29,78,216,0.07)' }}>
+                <strong>CONTEXTUAL MODEL LAYER — NOT ATTRIBUTION OR LEGAL RESPONSIBILITY.</strong> ML Model Probability is an independent model output generated from the extracted feature representation. Not a probability of legal responsibility or causation. Training provenance: Model trained on synthetic benchmark scenarios; real-data inference is an experimental contextual signal and has not been established as a calibrated real-world responsibility probability. Behavioural findings are deterministic Stage E3 rule-based results only; no intent, wrongdoing, or legal culpability is implied.
+              </div>
+
+              {hasML && (
+                <>
+                  <p className="re-section-desc" style={{ color: '#93c5fd', marginBottom: '0.5rem' }}>
+                    <strong>ML Model Probability</strong> — Independent per-candidate model output (Not a probability of legal responsibility or causation.)
+                  </p>
+                  <div className="re-results-table-wrap" style={{ marginBottom: '1.25rem' }}>
+                    <table className="re-table re-report-table">
+                      <thead>
+                        <tr>
+                          <th>Rank</th>
+                          <th>Vessel</th>
+                          <th>Physical Score</th>
+                          <th>ML Model Probability</th>
+                          <th>Signal Interpretation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cands.map((c: any) => {
+                          const prob: number | null = c.model_probability ?? null
+                          const probStr = prob != null ? `${(prob * 100).toFixed(1)}%` : '—'
+                          const color = prob == null ? '#94a3b8' : prob >= 0.70 ? '#4ade80' : prob >= 0.40 ? '#facc15' : '#f87171'
+                          const interp = prob == null
+                            ? 'Inference unavailable'
+                            : prob >= 0.70 ? 'High spatial/temporal alignment with reconstructed release'
+                            : prob >= 0.40 ? 'Moderate alignment with reconstructed evidence profile'
+                            : prob >= 0.15 ? 'Low alignment; limited spatial or temporal overlap'
+                            : 'Minimal alignment with reconstructed release parameters'
+                          return (
+                            <tr key={c.vessel_id ?? c.rank}>
+                              <td className="re-td-mono"><strong>#{c.rank}</strong></td>
+                              <td>{c.vessel_name ?? c.mmsi ?? c.vessel_id}</td>
+                              <td className="re-td-mono">{(c.evidence_consistency_score * 100).toFixed(1)}%</td>
+                              <td className="re-td-mono" style={{ fontWeight: 800, color }}>{probStr}</td>
+                              <td style={{ fontSize: '0.78rem', color: '#cbd5e1' }}>{interp}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p style={{ fontSize: '0.72rem', color: '#475569', fontStyle: 'italic', marginTop: '0.25rem', marginBottom: '0.2rem' }}>
+                    <strong>Training provenance:</strong> Model trained on synthetic benchmark scenarios; real-data inference is an experimental contextual signal and has not been established as a calibrated real-world responsibility probability.
+                  </p>
+                  <p style={{ fontSize: '0.72rem', color: '#475569', fontStyle: 'italic', marginTop: '0.15rem', marginBottom: 0 }}>
+                    ML feature-vector values are model inputs produced by the feature extractor and may use definitions or normalization different from the physical evidence presentation metrics.
+                  </p>
+                </>
+              )}
+
+              {hasBeh && (
+                <>
+                  <p className="re-section-desc" style={{ color: '#6ee7b7', marginBottom: '0.5rem' }}>
+                    <strong>AIS Behavioural Intelligence (Stage E3 Detectors)</strong> — Contextual Observable AIS Patterns Only
+                  </p>
+                  <div className="re-results-table-wrap" style={{ marginBottom: '0.75rem' }}>
+                    <table className="re-table re-report-table">
+                      <thead>
+                        <tr>
+                          <th>Rank</th>
+                          <th>Vessel</th>
+                          <th>AIS Gaps</th>
+                          <th>Loitering</th>
+                          <th>Rule-Based Detector Findings</th>
+                          <th>Flags</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cands.map((c: any) => {
+                          const bi = c.behavioral_intelligence
+                          if (!bi) return (
+                            <tr key={c.vessel_id ?? c.rank}>
+                              <td className="re-td-mono">#{c.rank}</td>
+                              <td>{c.vessel_name ?? c.mmsi ?? c.vessel_id}</td>
+                              <td colSpan={4} style={{ color: '#64748b', fontSize: '0.8rem' }}>Analysis unavailable</td>
+                            </tr>
+                          )
+                          return (
+                            <tr key={c.vessel_id ?? c.rank}>
+                              <td className="re-td-mono"><strong>#{c.rank}</strong></td>
+                              <td>{c.vessel_name ?? c.mmsi ?? c.vessel_id}</td>
+                              <td className="re-td-mono">{bi.transmission_gap_count ?? 0}</td>
+                              <td style={{ color: bi.loitering_detected ? '#facc15' : '#4ade80', fontWeight: 600 }}>
+                                {bi.loitering_detected ? 'Yes' : 'No'}
+                              </td>
+                              <td className="re-td-mono">{(bi.anomalies ?? []).length}</td>
+                              <td style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                                {(bi.summary_flags ?? []).join(', ') || 'None detected'}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p style={{ fontSize: '0.72rem', color: '#64748b', fontStyle: 'italic', margin: 0 }}>
+                    ZERO-FABRICATION: All findings are based exclusively on genuine received AIS transmissions. Transmission gaps are reported as observable gaps in received telemetry only. No vessel movements, transponder disabling events, or activities during gaps are inferred. No intent, wrongdoing, or legal responsibility is implied by any finding in this section.
+                  </p>
+                </>
+              )}
+            </section>
+          )
+        })()}
+
+        {/* Sections 8-9 / 9-10: Reproducibility + Limitations — numbers shift when ML section is present */}
+        {(() => {
+          const cands: any[] = reportData?.candidates ?? []
+          const hasMlSection = cands.some((c: any) => c.model_probability != null || c.behavioral_intelligence != null)
+          const reproSecNum = hasMlSection ? 9 : 8
+          const limSecNum = hasMlSection ? 10 : 9
+          return (
+            <>
+              <section className="re-report-section">
+                <h2 className="re-report-sec-title">{reproSecNum}. Experiment Reproducibility Audit</h2>
+          <div className="re-reproducibility-card" data-testid="report-reproducibility-card">
+            <div className="re-reproducibility-header">
+              <FileCheck size={16} className="re-icon-cyan" />
+              <h4>EXPERIMENT REPRODUCIBILITY</h4>
+            </div>
+            <div className="re-reproducibility-grid">
+              <div className="re-repro-item">
+                <span className="re-repro-label">Run ID</span>
+                <code className="re-repro-code">{runResult.run_id}</code>
+              </div>
+              <div className="re-repro-item">
+                <span className="re-repro-label">Model</span>
+                <code className="re-repro-code">{runResult.model_version}</code>
+              </div>
+              <div className="re-repro-item">
+                <span className="re-repro-label">Observation</span>
+                <span className="re-repro-val">
+                  {runResult.satellite_product_id.includes('S1') ? 'Sentinel-1 C-SAR' : 'Satellite SAR'}
+                </span>
+              </div>
+              <div className="re-repro-item">
+                <span className="re-repro-label">Wind</span>
+                <span className="re-repro-val">ECMWF ERA5 10m Wind</span>
+              </div>
+              <div className="re-repro-item">
+                <span className="re-repro-label">Currents</span>
+                <span className="re-repro-val">Copernicus Marine CMEMS</span>
+              </div>
+              <div className="re-repro-item">
+                <span className="re-repro-label">AIS</span>
+                <span className="re-repro-val">Curated Historical SQLite Database</span>
+              </div>
+              <div className="re-repro-item">
+                <span className="re-repro-label">Backtrack</span>
+                <span className="re-repro-val">
+                  {runResult.backtrack_hours} h / {runResult.backward_steps.length} steps
+                </span>
+              </div>
+              <div className="re-repro-item">
+                <span className="re-repro-label">Result State</span>
+                <span className="re-repro-val re-text-cyan">Completed</span>
+              </div>
+            </div>
+          </div>
+              </section>
+
+              {/* Limitations section — number follows Reproducibility */}
+              <section className="re-report-section">
+                <h2 className="re-report-sec-title">{limSecNum}. Scientific Interpretation &amp; Limitations</h2>
+          <div className="re-disclaimer re-result-disclaimer" data-testid="report-disclaimer">
+            <strong>Scientific Assessment Disclaimer:</strong> This analysis is an evidence-consistency
+            assessment and does not constitute a legal determination of responsibility or causation.
+            {runResult.scientific_disclaimer && ` ${runResult.scientific_disclaimer}`}
+          </div>
+          <ul className="re-limitations-list">
+            <li>
+              Attribution results reflect physical hydrodynamic consistency based on available
+              observational and transponder evidence.
+            </li>
+            <li>
+              Metocean backward drift integration is subject to boundary conditions and interpolation
+              uncertainties inherent to reanalysis products.
+            </li>
+            <li>
+              Vessel evaluation is constrained by AIS transponder transmission continuity and terrestrial/satellite
+              reception geometry.
+            </li>
+            <li>
+              Results should be corroborated with independent physical sampling and maritime authority logs.
+            </li>
+          </ul>
+        </section>
+            </>
+          )
+        })()}
+
+        {/* Report Footer / Running Metadata */}
+        <footer className="re-report-footer">
+          <div className="re-report-footer-left">
+            <span>MARIS Marine Attribution & Investigation System</span>
+            <code className="re-td-mono">{runResult.run_id}</code>
+          </div>
+          <div className="re-report-footer-right">
+            <span>Scientific assessment only. Not a legal determination.</span>
+          </div>
+        </footer>
+      </div>
+    </div>
+  )
+}

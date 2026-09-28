@@ -41,9 +41,9 @@ export class ApiError extends Error {
 }
 
 export function getApiBaseUrl(): string {
-  // Use import.meta.env when available. Otherwise match the active backend port for this workspace.
+  // Use import.meta.env when available. Otherwise match the active backend port (default 8000).
   const envUrl = typeof import.meta !== 'undefined' && import.meta.env ? (import.meta.env.VITE_API_BASE_URL as string | undefined) : undefined
-  return (envUrl && envUrl.trim().length > 0) ? envUrl.replace(/\/+$/, '') : 'http://127.0.0.1:8001'
+  return (envUrl && envUrl.trim().length > 0) ? envUrl.replace(/\/+$/, '') : 'http://127.0.0.1:8000'
 }
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes

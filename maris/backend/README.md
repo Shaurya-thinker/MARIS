@@ -1052,6 +1052,70 @@ Candidate Vessels (Stage E1) + D3 Source Estimate + Kinematics (Stage E2)
 - **Kinematic Loitering vs Legitimate Maritime Operations**: Slow steaming, drifting awaiting pilot/berth, or waiting out weather can produce low-speed maneuvering patterns identical to searching or discharge. E3 detects the kinematic pattern without attributing maritime motive.
 - **Absence of Culpability**: Detection of a behavioral anomaly does **NOT** indicate polluter responsibility. Culpability assessment requires multi-source evidence fusion in Stage F.
 
+---
+
+## Stage B2.75 — Maritime Domain Masker
+
+### Purpose
+Stage B2.75 restricts Stage B3 dark-anomaly detection exclusively to genuine maritime and oceanic waters. It prevents inland terrain (such as Alpine radar shadows, steep mountain valleys, and agricultural plains) and coastal edge artifacts (such as surf breaking zones, intertidal flats, and coastal cliff layover) from entering B3.
+
+### Pipeline Architecture
+```text
+B2.5 Geocoded SAR (EPSG:4326)
+        │
+        ▼
+B2.75 Maritime Domain Masker (out-of-core block streaming)
+        │  • Filters out land & nearshore coastal buffer
+        │  • Sets non-maritime pixels to NaN before B3 stats
+        ▼
+B3 Adaptive Threshold Detector (CFAR local background stats)
+        │  • Local statistics computed ONLY on valid marine pixels
+        ▼
+B3 Geometry Extraction (connected component polygonization)
+```
+
+The mask is applied **BEFORE** Stage B3 adaptive detection. This ensures that B3's local background statistical windows ($\mu_{bg}, \sigma_{bg}$) are sampled purely from genuine sea surface pixels, eliminating background corruption by land backscatter.
+
+### Authoritative Dataset & Source
+- **Dataset**: Natural Earth 1:10m Ocean Polygons (`ne_10m_ocean.geojson`).
+- **Location**: `backend/data/geospatial/ne_10m_ocean.geojson`.
+- **Format**: GeoJSON MultiPolygon representing the global contiguous ocean with enclosed island cutouts.
+- **Why Explicit Ocean Polygons vs Land Inversion**: Inverting land polygons treats all "non-land" areas as ocean. Large inland lakes (such as Lake Geneva, Lake Garda, and Lake Como in the Alpine basin) are not land, and would therefore be erroneously treated as open water. Using an explicit marine ocean dataset ensures that inland water bodies evaluate to zero ocean pixels.
+
+### Coastal Exclusion Buffer
+- **Default Buffer**: `coastal_buffer_m = 50.0` meters (configurable via `MARIS_COASTAL_BUFFER_M` environment variable).
+- **Buffer Direction**: The buffer is strictly a **seaward exclusion zone**. Mathematically, land (`~ocean`) is dilated seaward into the ocean by the configured physical buffer distance using `scipy.ndimage.binary_dilation`. This erodes nearshore ocean pixels and ensures that land is never expanded into the sea.
+- **Seam-Free Window Padding**: When processing blocks, each $2048 \times 2048$ window is padded by `buffer_pixels` during the dilation step, preventing boundary seam artifacts across adjacent tile edges.
+
+### Block-wise / Out-of-Core Processing
+- Processes the full SAR raster in streaming $2048 \times 2048$ tile blocks, matching B2.5 and B3 architecture.
+- Memory usage is bounded to $O(\text{block\_size}^2)$ without generating a persistent multi-gigabyte masked raster artifact on disk.
+- Tiles that contain zero ocean pixels (100% inland land or coastal buffer) are immediately skipped, setting the underlying SAR block to `np.nan` and bypassing all detector convolution for those tiles.
+
+### Fail-Closed Behavior
+Stage B2.75 strictly fails closed by raising `MaritimeMaskError`:
+1. If the authoritative ocean dataset file does not exist or cannot be read.
+2. If the ocean dataset contains malformed or unsupported geometry types.
+3. If the input raster CRS is `None` or not a geographic coordinate system (e.g. requires `EPSG:4326`).
+4. If the raster transform is an unreferenced identity matrix or is not north-up.
+Under no circumstances will MARIS silently fall back to unmasked detection.
+
+### Diagnostic Metrics
+The mask execution exposes rich diagnostic metadata:
+- `total_pixels`: Total raster pixel count across the scene footprint.
+- `finite_sar_pixels`: Count of finite (non-collar, non-NaN) SAR data pixels.
+- `maritime_pixels`: Valid oceanic pixels inside the maritime domain.
+- `excluded_land_coastal_pixels`: Pixels rejected as land or coastal buffer zone.
+- `maritime_percentage`: Percentage of finite SAR data that is valid ocean.
+- `land_only_blocks_skipped`: Number of $2048 \times 2048$ tile blocks completely bypassed.
+- `processed_blocks`: Total number of tile blocks evaluated.
+- `mask_runtime_sec`: Total wall-clock time spent computing the maritime domain mask.
+
+### Scientific Caveats & Limitations
+- **Domain Restriction, Not Spill Classification**: The maritime mask defines the spatial boundary of valid open marine water. It does **NOT** classify or identify oil spills.
+- **Look-alike Discrimination**: Downstream detections within the maritime domain may include natural look-alikes (low wind areas, biogenic slicks, internal waves, ship wakes). Oil-vs-lookalike discrimination is handled strictly downstream through AIS vessel correlation, environmental drift reconstruction, and multi-criteria evidence fusion.
+
+
 
 
 

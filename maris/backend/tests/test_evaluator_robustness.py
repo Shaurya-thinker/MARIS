@@ -168,7 +168,7 @@ def test_wind_speed_and_direction_sensitivity():
 def test_current_direction_reversal_sensitivity():
     """Verify that reversing ocean current direction shifts reconstructed source displacement."""
     obs_time = datetime(2025, 8, 20, 6, 0, tzinfo=timezone.utc)
-    origin_lon, origin_lat = 2.85, 39.45
+    origin_lon, origin_lat = 3.5, 39.5
 
     # Zero wind, current flowing East (from 270 towards 90 deg)
     drift_east = calculate_backward_drift_preview(
@@ -460,25 +460,25 @@ def test_attribution_ranking_changes_when_physics_change():
     backtrack_hours = 6.0
     rel_time = obs_time - timedelta(hours=backtrack_hours)
 
-    # Candidate Alpha is located North-East at release time (10.15, 40.15)
+    # Candidate Alpha is located North-East at release time (40.042, 10.054)
     cand_alpha = {
         "id": "cand_alpha",
         "vessel_name": "ALPHA_NORTHEAST",
         "mmsi": "111000111",
         "positions": [
-            {"timestamp": rel_time.isoformat(), "lat": 40.15, "lon": 10.15, "speed": 12.0, "heading": 45.0},
-            {"timestamp": obs_time.isoformat(), "lat": 40.25, "lon": 10.30, "speed": 12.0, "heading": 45.0},
+            {"timestamp": rel_time.isoformat(), "lat": 40.042, "lon": 10.054, "speed": 10.0, "heading": 45.0},
+            {"timestamp": obs_time.isoformat(), "lat": 40.10, "lon": 10.10, "speed": 10.0, "heading": 45.0},
         ],
     }
 
-    # Candidate Beta is located South-West at release time (9.85, 39.85)
+    # Candidate Beta is located South-West at release time (39.958, 9.946)
     cand_beta = {
         "id": "cand_beta",
         "vessel_name": "BETA_SOUTHWEST",
         "mmsi": "222000222",
         "positions": [
-            {"timestamp": rel_time.isoformat(), "lat": 39.85, "lon": 9.85, "speed": 12.0, "heading": 225.0},
-            {"timestamp": obs_time.isoformat(), "lat": 39.75, "lon": 9.70, "speed": 12.0, "heading": 225.0},
+            {"timestamp": rel_time.isoformat(), "lat": 39.958, "lon": 9.946, "speed": 10.0, "heading": 225.0},
+            {"timestamp": obs_time.isoformat(), "lat": 39.90, "lon": 9.90, "speed": 10.0, "heading": 225.0},
         ],
     }
 

@@ -161,7 +161,7 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
       setLoadingReferences(true)
       try {
         const refs = await fetchEvaluatorReferenceObservations()
-        setReferenceImages(refs)
+        setReferenceImages(Array.isArray(refs) ? refs : [])
       } catch (err) {
         setErrorMessage(err instanceof Error ? err.message : 'Failed to load reference observations.')
       } finally {
@@ -1008,6 +1008,13 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
               <span>
                 Relative attribution score normalized across all eligible candidates in this scenario (P_i / &Sigma; P_j).
                 Sums to 100% across all eligible candidate vessels to represent relative likelihood within the incident envelope.
+              </span>
+            </div>
+            <div className="eval-explainer-item">
+              <strong>Scientific &amp; Legal Disclaimer</strong>
+              <span>
+                Attribution scores indicate physical consistency with modeled backward drift and AIS telemetry.
+                Results do not establish causation, legal responsibility, or culpability.
               </span>
             </div>
           </div>

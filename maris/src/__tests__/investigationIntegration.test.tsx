@@ -1316,16 +1316,36 @@ describe('Stage G3 — End-to-End Investigation Workflow Tests', () => {
     const newInvBtn = screen.getByRole('button', { name: /\+ New Investigation/i })
     fireEvent.click(newInvBtn)
 
-    // Fill form and submit
-    const nameInput = screen.getByLabelText(/Investigation Title/i)
-    fireEvent.change(nameInput, { target: { value: 'Brand New Spill Case' } })
+    // Modal opens with button taking to Real-Data Observation Wizard
+    const wizardBtn = screen.getByRole('button', { name: /Take to Real-Data Observation Wizard/i })
+    expect(wizardBtn).toBeDefined()
+    fireEvent.click(wizardBtn)
 
-    const submitBtn = screen.getByRole('button', { name: /Create Investigation/i })
-    fireEvent.click(submitBtn)
-
-    // After creation, list should refresh and new investigation appears in header
+    // Navigates to Real-Data Observation Wizard
     await waitFor(() => {
-      expect(screen.getByText(/Brand New Spill Case/i)).toBeDefined()
+      expect(screen.getByText(/Real-Data Observation Wizard/i)).toBeDefined()
+    })
+  })
+
+  it('33. Clicking Evaluator tab in header switches view and opens the first tab Evaluator Investigation Workflow', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/api/v1/investigations')) {
+        return { ok: true, status: 200, json: async () => [] }
+      }
+      return { ok: true, status: 200, json: async () => ({}) }
+    })
+
+    render(<App />)
+
+    // Click Evaluator tab in top header
+    const evaluatorNavBtn = screen.getByRole('button', { name: /^Evaluator$/i })
+    fireEvent.click(evaluatorNavBtn)
+
+    // Should open at first tab: Evaluator Investigation Workflow
+    await waitFor(() => {
+      const activeTab = screen.getByRole('button', { name: /Evaluator Investigation Workflow/i })
+      expect(activeTab).toBeDefined()
+      expect(activeTab.className).toContain('active')
     })
   })
 })

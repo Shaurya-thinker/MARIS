@@ -4,16 +4,55 @@ Marine Intelligence & Spill Attribution System for SIH26143.
 
 MARIS is a React/TypeScript/MapLibre prototype for investigating the historical Ulysse-CSL Virginia oil-spill incident near Cap Corse, Corsica, on 7 October 2018. The current application is a single-case demonstration platform, not an operational spill-detection or legal-attribution system.
 
-## State Snapshot
+## System State & Evaluator Quickstart
 
 ```text
-Phase 1: COMPLETE
-Phase 2: COMPLETE
-Phase 3 Prototype Polish: COMPLETE
-Real AI Intelligence: NOT STARTED
+Stages B1–H Pipeline: COMPLETE & VALIDATED (856 Backend Tests Passing, 84 Frontend Tests Passing)
+Terminal Stage: Stage H
+Real Data Provenance: Verified (Sentinel-1 SAR, ERA5 NetCDF, CMEMS NetCDF, AIS Reconstructions)
 ```
 
-The prototype displays a real Sentinel-1 historical image, reconstructed spill geometry, prepared environmental drift reconstruction, reconstructed AIS event evidence, transparent evidence factors, candidate prioritization, and an optional presentation playback flow.
+### Evaluator Quickstart Guide
+
+#### 1. Start the Backend API (Port 8000)
+```bash
+cd backend
+python -m venv .venv
+# On Windows:
+.venv\Scripts\activate
+# On Linux/macOS:
+# source .venv/bin/activate
+
+pip install -r requirements.txt
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+- Health Check: `http://127.0.0.1:8000/health`
+- Evaluator Investigations API: `http://127.0.0.1:8000/api/experiment/evaluator/investigations`
+
+#### 2. Start the Frontend Application (Port 5173)
+From the frontend application root (`maris/`):
+```bash
+npm install
+npm run dev
+```
+- Open browser at: `http://localhost:5173`
+- The frontend defaults to backend URL `http://127.0.0.1:8000`. To customize, copy `.env.example` to `.env`:
+  ```bash
+  cp .env.example .env
+  ```
+
+#### 3. Run Automated Validation Suites
+```bash
+# Backend Regression Test Suite (856 tests)
+cd backend
+pytest -q
+
+# Frontend Test Suite (84 tests)
+npm test
+
+# Frontend Production Build
+npm run build
+```
 
 ## Technology
 
