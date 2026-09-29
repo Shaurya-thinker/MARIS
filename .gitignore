@@ -1,14 +1,44 @@
+# Dependencies & Builds
 node_modules/
+**/node_modules/
 dist/
+**/dist/
+dist-ssr/
+*.local
+
+# Environment variables & secrets
 .env
 .env.*
 **/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Python virtual environment & caches
+.venv/
+**/.venv/
+__pycache__/
 **/__pycache__/
-maris/backend/data/acquisitions/
-maris/backend/acquisitions/
-**/acquisitions/
-**/models/
-**/derived/
+*.py[cod]
+*$py.class
+
+# Large satellite & raster archives
 *.SAFE.zip
-maris/ais_vessels.db
-maris/real_experiments.db
+*.tif
+*.tiff
+**/acquisitions/
+**/derived/
+**/models/
+**/synthetic/
+*.joblib
+*.pkl
+
+# Databases (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# Large geospatial boundaries
+**/geospatial/*.geojson
+ne_10m_ocean.geojson
+

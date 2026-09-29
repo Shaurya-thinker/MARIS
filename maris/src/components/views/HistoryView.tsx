@@ -168,10 +168,14 @@ export function RunComparisonSection({
   const obsA =
     runA.observation_lat != null && runA.observation_lon != null
       ? `${fmt(runA.observation_lat, 4)}°N, ${fmt(runA.observation_lon, 4)}°E`
+      : runA.slick_characterization?.centroid_lat != null && runA.slick_characterization?.centroid_lon != null
+      ? `${fmt(runA.slick_characterization.centroid_lat, 4)}°N, ${fmt(runA.slick_characterization.centroid_lon, 4)}°E`
       : '43.2483°N, 9.4783°E'
   const obsB =
     runB.observation_lat != null && runB.observation_lon != null
       ? `${fmt(runB.observation_lat, 4)}°N, ${fmt(runB.observation_lon, 4)}°E`
+      : runB.slick_characterization?.centroid_lat != null && runB.slick_characterization?.centroid_lon != null
+      ? `${fmt(runB.slick_characterization.centroid_lat, 4)}°N, ${fmt(runB.slick_characterization.centroid_lon, 4)}°E`
       : '43.2483°N, 9.4783°E'
 
   return (
@@ -336,12 +340,16 @@ export function HistoricalRunDetail({
   const obsLat =
     detailRun.observation_lat != null && detailRun.observation_lat !== 0
       ? detailRun.observation_lat
+      : detailRun.slick_characterization?.centroid_lat != null
+      ? detailRun.slick_characterization.centroid_lat
       : detailRun.satellite_product_id.includes('20181008')
       ? 43.2483
       : detailRun.source_lat
   const obsLon =
     detailRun.observation_lon != null && detailRun.observation_lon !== 0
       ? detailRun.observation_lon
+      : detailRun.slick_characterization?.centroid_lon != null
+      ? detailRun.slick_characterization.centroid_lon
       : detailRun.satellite_product_id.includes('20181008')
       ? 9.4783
       : detailRun.source_lon
@@ -1052,6 +1060,8 @@ export default function HistoryView({ experiment }: { experiment: ReturnType<typ
                 const obsDisplay =
                   run.observation_lat != null && run.observation_lon != null
                     ? `${fmt(run.observation_lat, 3)}°N, ${fmt(run.observation_lon, 3)}°E`
+                    : run.slick_characterization?.centroid_lat != null && run.slick_characterization?.centroid_lon != null
+                    ? `${fmt(run.slick_characterization.centroid_lat, 3)}°N, ${fmt(run.slick_characterization.centroid_lon, 3)}°E`
                     : run.satellite_product_id.includes('20181008')
                     ? '43.248°N, 9.478°E'
                     : run.satellite_product_id.slice(0, 16)

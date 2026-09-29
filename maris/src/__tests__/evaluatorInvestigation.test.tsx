@@ -296,6 +296,35 @@ describe('EvaluatorInvestigationSection Component', () => {
     expect(screen.getByText(/Central Arabian Sea Transit Corridor/i)).toBeDefined()
   })
 
+  it('displays physical SAR raster badge and detected metrics when has_physical_raster is true', async () => {
+    const rasterObservation: EvaluatorReferenceObservation = {
+      ...mockObservations[0],
+      has_physical_raster: true,
+      raster_provenance: 'Development Test Fixture (Calibrated SAR GeoTIFF)',
+      detected_slick_metrics: {
+        detected: true,
+        status: 'DETECTED (Adaptive Thresholding on SAR Raster)',
+        centroid_lon: 9.4913,
+        centroid_lat: 43.2736,
+        area_km2: 9.52,
+        area_m2: 9520000,
+        damping_contrast_db: 6.7,
+        confidence: 0.933,
+        pixel_count: 17236,
+        detection_method: 'Stage B3 Adaptive Thresholding (Physical SAR Raster)',
+        provenance: 'Development Test Fixture (Calibrated SAR GeoTIFF)',
+      },
+    }
+
+    vi.spyOn(experimentApi, 'fetchEvaluatorReferenceObservations').mockResolvedValue([rasterObservation])
+    render(<EvaluatorInvestigationSection />)
+
+    expect(await screen.findByText(/PHYSICAL SAR RASTER/i)).toBeDefined()
+    expect(screen.getByText(/Stage B3 Active/i)).toBeDefined()
+    expect(screen.getByText(/6.7 dB contrast/i)).toBeDefined()
+    expect(screen.getByText(/9.52 km²/i)).toBeDefined()
+  })
+
   // -------------------------------------------------------------------------
   // 12 Mandatory Sequential Navigation & State Gating Scenarios
   // -------------------------------------------------------------------------

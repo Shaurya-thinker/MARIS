@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     created_at              TEXT NOT NULL,
     scientific_disclaimer   TEXT NOT NULL,
     slick_characterization_json TEXT,
-    forward_prediction_json TEXT
+    forward_prediction_json TEXT,
+    observation_source      TEXT DEFAULT 'BENCHMARK_FALLBACK'
 );
 
 CREATE TABLE IF NOT EXISTS experiment_run_tags (
@@ -150,7 +151,7 @@ class ExperimentStore:
                     """
                     INSERT OR REPLACE INTO experiment_runs (
                         run_id, satellite_product_id, observation_time,
-                        observation_lon, observation_lat,
+                        observation_lon, observation_lat, observation_source,
                         backtrack_hours, step_hours, model_version,
                         source_lon, source_lat, source_radius_m,
                         source_zone_geojson, backward_steps, vessels_json,
@@ -158,7 +159,7 @@ class ExperimentStore:
                         slick_characterization_json, forward_prediction_json
                     ) VALUES (
                         :run_id, :satellite_product_id, :observation_time,
-                        :observation_lon, :observation_lat,
+                        :observation_lon, :observation_lat, :observation_source,
                         :backtrack_hours, :step_hours, :model_version,
                         :source_lon, :source_lat, :source_radius_m,
                         :source_zone_geojson, :backward_steps, :vessels_json,
@@ -399,7 +400,8 @@ class ExperimentStore:
                     """
                     SELECT investigation_id, selected_image_id, image_title, image_path,
                            acquisition_timestamp, model_version, created_at,
-                           candidate_probabilities_json, final_attribution_json
+                           candidate_probabilities_json, final_attribution_json,
+                           full_result_json
                     FROM evaluator_investigations
                     ORDER BY created_at DESC
                     LIMIT ?
@@ -412,9 +414,13 @@ class ExperimentStore:
         results = []
         for row in rows:
             top_cand = None
+            obs_src = "BENCHMARK_FALLBACK"
             try:
                 final_attr = json.loads(row[8]) if row[8] else {}
                 top_cand = final_attr.get("top_candidate")
+                if len(row) > 9 and row[9]:
+                    full_res = json.loads(row[9])
+                    obs_src = full_res.get("observation_source", "BENCHMARK_FALLBACK")
             except Exception:
                 pass
             results.append({
@@ -425,6 +431,7 @@ class ExperimentStore:
                 "acquisition_timestamp": row[4],
                 "model_version": row[5],
                 "created_at": row[6],
+                "observation_source": obs_src,
                 "top_candidate": top_cand,
             })
         return results
@@ -444,6 +451,7 @@ class ExperimentStore:
                 ("observation_lat", "REAL"),
                 ("slick_characterization_json", "TEXT"),
                 ("forward_prediction_json", "TEXT"),
+                ("observation_source", "TEXT"),
             ):
                 try:
                     conn.execute(f"ALTER TABLE experiment_runs ADD COLUMN {col} {col_type}")
@@ -498,6 +506,7 @@ class ExperimentStore:
             "observation_time": obs_time,
             "observation_lon": obs_lon,
             "observation_lat": obs_lat,
+            "observation_source": getattr(result, "observation_source", "BENCHMARK_FALLBACK"),
             "backtrack_hours": result.backtrack_hours,
             "step_hours": result.step_hours,
             "model_version": result.model_version,
@@ -591,6 +600,7 @@ class ExperimentStore:
             scientific_disclaimer=row.get("scientific_disclaimer", ""),
             observation_lon=obs_lon or 0.0,
             observation_lat=obs_lat or 0.0,
+            observation_source=row.get("observation_source") or "BENCHMARK_FALLBACK",
             status="completed",
             slick_characterization=slick_char,
             forward_prediction=fwd_pred,

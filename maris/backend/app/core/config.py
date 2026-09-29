@@ -55,6 +55,13 @@ class Settings:
             "CDSE_DOWNLOAD_URL",
             "https://zipper.dataspace.copernicus.eu/odata/v1",
         )
+        self.cdse_process_url = _env(
+            "CDSE_PROCESS_URL",
+            "https://sh.dataspace.copernicus.eu/api/v1/process",
+        )
+        self.sar_subscenes_dir = Path(
+            _env("MARIS_SAR_SUBSCENES_DIR", str(self.data_dir / "sar_subscenes"))
+        )
         self.cds_url = _env("CDSAPI_URL", "https://cds.climate.copernicus.eu/api")
         self.cds_api_key = _env("CDSAPI_KEY")
         self.cmems_username = _env("COPERNICUSMARINE_SERVICE_USERNAME") or _env("CMEMS_USERNAME")

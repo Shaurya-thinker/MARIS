@@ -33,6 +33,8 @@ from app.api.experiment_schemas import (
     SentinelProductItem,
     SentinelCharacterizeRequest,
     SentinelCharacterizeResponse,
+    SarAcquisitionRequest,
+    SarAcquisitionResponse,
     SlickCharacterizationItem,
     ForwardDriftStepItem,
     ForwardPredictionRequest,
@@ -200,8 +202,75 @@ def characterize_sentinel_observation(body: SentinelCharacterizeRequest) -> Sent
         polarisation=body.polarisation,
         footprint=body.footprint,
         backtrack_hours=body.backtrack_hours,
+        sar_raster_path=body.sar_raster_path,
     )
     return SentinelCharacterizeResponse(characterization=SlickCharacterizationItem(**char_dict))
+
+
+@router.post(
+    "/sentinel/acquire-subscene",
+    response_model=SarAcquisitionResponse,
+    summary="Acquire a lightweight calibrated SAR subscene GeoTIFF via CDSE Process API",
+)
+def acquire_sentinel_sar_subscene(body: SarAcquisitionRequest) -> SarAcquisitionResponse:
+    """Acquire or retrieve from cache an analysis-ready Sentinel-1 SAR subscene GeoTIFF.
+
+    Uses Copernicus Data Space Ecosystem (CDSE) / Sentinel Hub Process API for on-demand crops,
+    or falls back to verified pre-staged local fixtures when offline.
+    """
+    from app.services.real_experiment.sar_acquisition import (
+        SarAcquisitionService,
+        SarAcquisitionError,
+        SarAcquisitionAuthError,
+    )
+    svc = SarAcquisitionService()
+    try:
+        raster_path, meta, is_cached = svc.acquire_subscene(
+            product_id=body.product_id,
+            bbox=body.bbox,
+            centroid_lon=body.centroid_lon,
+            centroid_lat=body.centroid_lat,
+            sensing_time=body.sensing_time,
+            aoi_radius_km=body.aoi_radius_km,
+            width_px=body.width_px,
+            height_px=body.height_px,
+            force_refresh=body.force_refresh,
+        )
+        return SarAcquisitionResponse(
+            success=True,
+            sar_raster_path=str(raster_path),
+            product_id=meta.product_id,
+            file_size_bytes=meta.file_size_bytes,
+            is_cached=is_cached,
+            source_provider=meta.source_provider,
+            data_authenticity=meta.data_authenticity,
+            is_test_fixture=meta.is_test_fixture,
+            crs=meta.crs,
+            bands=meta.bands,
+            bbox=meta.bbox,
+            message=(
+                f"SAR subscene ready ({'cached' if is_cached else 'acquired'}). "
+                f"Provenance: {meta.source_provider}."
+            ),
+        )
+    except SarAcquisitionAuthError as exc:
+        logger.warning("SAR acquisition authentication error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        )
+    except SarAcquisitionError as exc:
+        logger.error("SAR acquisition failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"SAR subscene acquisition failed: {exc}",
+        )
+    except Exception as exc:
+        logger.error("Unexpected SAR acquisition error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal acquisition error: {exc}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -984,11 +1053,46 @@ def get_evaluator_reference_observations() -> list[dict[str, Any]]:
 )
 def post_evaluator_drift_preview(body: EvaluatorDriftPreviewRequest) -> dict[str, Any]:
     """Execute real backward drift physics using evaluator wind and current vectors."""
-    from app.services.real_experiment.evaluator_workflow import calculate_backward_drift_preview
+    from app.services.real_experiment.evaluator_workflow import (
+        calculate_backward_drift_preview,
+        get_reference_observation,
+    )
+    obs_source = body.observation_source
+    effective_lon = body.origin_lon
+    effective_lat = body.origin_lat
+    effective_area = body.spill_area_m2
+
+    if body.selected_image_id:
+        ref_obs = get_reference_observation(body.selected_image_id)
+        if ref_obs and ref_obs.get("detected_slick_metrics") and ref_obs["detected_slick_metrics"].get("detected"):
+            det = ref_obs["detected_slick_metrics"]
+            c_lon = det.get("centroid_lon")
+            c_lat = det.get("centroid_lat")
+            catalog_lon = ref_obs.get("observation_lon")
+            catalog_lat = ref_obs.get("observation_lat")
+
+            if c_lon is not None and c_lat is not None:
+                matches_catalog = (
+                    catalog_lon is not None
+                    and catalog_lat is not None
+                    and abs(body.origin_lon - catalog_lon) < 0.01
+                    and abs(body.origin_lat - catalog_lat) < 0.01
+                )
+                matches_sar = (
+                    abs(body.origin_lon - float(c_lon)) < 0.005
+                    and abs(body.origin_lat - float(c_lat)) < 0.005
+                )
+                if matches_catalog or matches_sar or obs_source == "SAR_DERIVED":
+                    effective_lon = float(c_lon)
+                    effective_lat = float(c_lat)
+                    if det.get("area_m2"):
+                        effective_area = float(det["area_m2"])
+                    obs_source = "SAR_DERIVED"
+
     try:
         return calculate_backward_drift_preview(
-            origin_lon=body.origin_lon,
-            origin_lat=body.origin_lat,
+            origin_lon=effective_lon,
+            origin_lat=effective_lat,
             observation_time=body.observation_time,
             wind_speed_ms=body.wind_speed_ms,
             wind_direction_deg=body.wind_direction_deg,
@@ -996,7 +1100,8 @@ def post_evaluator_drift_preview(body: EvaluatorDriftPreviewRequest) -> dict[str
             current_direction_deg=body.current_direction_deg,
             backtrack_hours=body.backtrack_hours,
             step_hours=body.step_hours,
-            spill_area_m2=body.spill_area_m2,
+            spill_area_m2=effective_area,
+            observation_source=obs_source or "BENCHMARK_FALLBACK",
         )
     except Exception as exc:
         logger.error("Failed to calculate backward drift preview: %s", exc, exc_info=True)

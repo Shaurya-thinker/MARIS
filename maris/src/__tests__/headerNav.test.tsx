@@ -41,7 +41,7 @@ describe('Header Top Navigation Bar UI', () => {
 
     // All 4 advanced views must be accessible
     const evidenceItem = screen.getByRole('menuitem', { name: /Evidence & Artifacts/i })
-    const vesselsItem = screen.getByRole('menuitem', { name: /Candidate Vessels/i })
+    const vesselsItem = screen.getByRole('menuitem', { name: /AIS Fleet Registry|Candidate Vessels/i })
     const analyticsItem = screen.getByRole('menuitem', { name: /Attribution Analytics/i })
     const pipelineItem = screen.getByRole('menuitem', { name: /Pipeline Architecture/i })
 

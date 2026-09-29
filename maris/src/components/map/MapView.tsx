@@ -526,13 +526,17 @@ function addMapSourcesAndLayers(
   aisData: ReconstructedAisData,
   driftData: DriftReconstructionData
 ) {
+  const centroidCoords =
+    driftData.trajectory && driftData.trajectory.length > 0
+      ? [driftData.trajectory[0].lon, driftData.trajectory[0].lat]
+      : [9.478333, 43.248333]
   const spillCentroid: FeatureCollection<Point, Record<string, unknown>> = {
     type: 'FeatureCollection',
     features: [
       {
         type: 'Feature',
         properties: { kind: 'observed-slick-reference' },
-        geometry: { type: 'Point', coordinates: [9.478333, 43.248333] },
+        geometry: { type: 'Point', coordinates: centroidCoords },
       },
     ],
   }

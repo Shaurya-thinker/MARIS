@@ -22,6 +22,8 @@ vi.mock('../real-experiment/experimentApi', () => ({
   runExperiment: vi.fn(),
   listExperimentRuns: vi.fn().mockResolvedValue({ runs: [], count: 0 }),
   getExperimentRun: vi.fn(),
+  characterizeSentinelObservation: vi.fn().mockResolvedValue(null),
+  acquireSarSubscene: vi.fn().mockResolvedValue({ success: false }),
 }))
 
 describe('Real-Data Observation Wizard — AIS Integration Flow (Step 4 -> Step 5 -> Step 6)', () => {

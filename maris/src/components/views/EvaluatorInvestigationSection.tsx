@@ -209,9 +209,14 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
     setSimulatingDrift(true)
     setErrorMessage(null)
     try {
+      const originLon = selectedImage.detected_slick_metrics?.centroid_lon ?? selectedImage.observation_lon
+      const originLat = selectedImage.detected_slick_metrics?.centroid_lat ?? selectedImage.observation_lat
+      const spillAreaM2 = selectedImage.detected_slick_metrics?.area_m2 ?? (selectedImage.slick_area_km2 * 1e6)
+
+      const isSar = Boolean(selectedImage.detected_slick_metrics?.detected)
       const preview = await previewEvaluatorDrift({
-        origin_lon: selectedImage.observation_lon,
-        origin_lat: selectedImage.observation_lat,
+        origin_lon: originLon,
+        origin_lat: originLat,
         observation_time: selectedImage.observation_time,
         wind_speed_ms: windSpeed,
         wind_direction_deg: windDirection,
@@ -219,6 +224,9 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
         current_direction_deg: currentDirection,
         backtrack_hours: backtrackHours,
         step_hours: 0.5,
+        spill_area_m2: spillAreaM2,
+        selected_image_id: selectedImage.id,
+        observation_source: isSar ? 'SAR_DERIVED' : 'BENCHMARK_FALLBACK',
       })
       setDriftPreview(preview)
       setActiveStep(3)
@@ -262,10 +270,14 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
     setRunningAttribution(true)
     setErrorMessage(null)
     try {
+      const originLon = selectedImage.detected_slick_metrics?.centroid_lon ?? selectedImage.observation_lon
+      const originLat = selectedImage.detected_slick_metrics?.centroid_lat ?? selectedImage.observation_lat
+      const spillAreaM2 = selectedImage.detected_slick_metrics?.area_m2 ?? (selectedImage.slick_area_km2 * 1e6)
+
       const result = await runEvaluatorInvestigation({
         selected_image_id: selectedImage.id,
-        observation_lon: selectedImage.observation_lon,
-        observation_lat: selectedImage.observation_lat,
+        observation_lon: originLon,
+        observation_lat: originLat,
         observation_time: selectedImage.observation_time,
         wind_speed_ms: windSpeed,
         wind_direction_deg: windDirection,
@@ -274,6 +286,7 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
         corridor_km: corridorKm,
         backtrack_hours: backtrackHours,
         step_hours: 0.5,
+        spill_area_m2: spillAreaM2,
         custom_vessels: selectedImage.benchmark_candidates,
       })
       setInvestigationRecord(result)
@@ -296,7 +309,10 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
       setInvestigationRecord(record)
       // Set preview state from saved immutable record
       setDriftPreview({
-        observation_point: record.coordinates,
+        observation_point: {
+          lon: record.coordinates.observation_lon ?? (record.coordinates as any).lon,
+          lat: record.coordinates.observation_lat ?? (record.coordinates as any).lat,
+        },
         observation_time: record.acquisition_timestamp,
         backtrack_hours: record.drift_parameters.backtrack_hours,
         step_hours: record.drift_parameters.step_hours,
@@ -351,8 +367,8 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
         setSelectedImage({
           id: record.selected_image_id,
           title: record.image_title || 'Archived S-1 Reference Observation',
-          observation_lon: record.coordinates.lon,
-          observation_lat: record.coordinates.lat,
+          observation_lon: record.coordinates.observation_lon ?? (record.coordinates as any).lon,
+          observation_lat: record.coordinates.observation_lat ?? (record.coordinates as any).lat,
           observation_time: record.acquisition_timestamp,
           image_path: '/satellite/corsica_2018_s1.jpg',
           historical_context: 'Archived investigation reference observation.',
@@ -463,7 +479,11 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                   >
                     <div className="eval-ref-thumb-wrapper">
                       <img src={obs.image_path} alt={obs.title} className="eval-ref-thumb" />
-                      {obs.is_historical_demo ? (
+                      {obs.has_physical_raster ? (
+                        <span className="eval-badge-verified" style={{ background: '#059669', color: '#ffffff', borderColor: '#10b981' }}>
+                          ● PHYSICAL SAR RASTER
+                        </span>
+                      ) : obs.is_historical_demo ? (
                         <span className="eval-badge-historical">HISTORICAL DEMO</span>
                       ) : (
                         <span className="eval-badge-verified">VERIFIED S-1 SAR</span>
@@ -474,10 +494,32 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                       <h5>{obs.title}</h5>
                       <p className="eval-ref-desc">{obs.historical_context}</p>
 
+                      {obs.has_physical_raster && (
+                        <div style={{
+                          fontSize: '11px',
+                          color: '#34d399',
+                          background: 'rgba(5, 150, 105, 0.12)',
+                          padding: '4px 8px',
+                          borderRadius: '4px',
+                          marginBottom: '8px',
+                          border: '1px solid rgba(5, 150, 105, 0.3)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '2px'
+                        }}>
+                          <span><strong>Stage B3 Active:</strong> Adaptive Thresholding on calibrated SAR raster</span>
+                          <span style={{ color: '#94a3b8', fontSize: '10px' }}>Provenance: {obs.raster_provenance || 'SAR GeoTIFF Subscene'}</span>
+                        </div>
+                      )}
+
                       <div className="eval-ref-meta-grid">
                         <div className="eval-meta-cell">
                           <span className="eval-meta-lbl">Coordinates:</span>
-                          <span className="eval-meta-val">{fmt(obs.observation_lat, 4)}°N, {fmt(obs.observation_lon, 4)}°E</span>
+                          <span className="eval-meta-val">
+                            {obs.has_physical_raster && obs.detected_slick_metrics
+                              ? `${fmt(obs.detected_slick_metrics.centroid_lat, 4)}°N, ${fmt(obs.detected_slick_metrics.centroid_lon, 4)}°E (Raster)`
+                              : `${fmt(obs.observation_lat, 4)}°N, ${fmt(obs.observation_lon, 4)}°E`}
+                          </span>
                         </div>
                         <div className="eval-meta-cell">
                           <span className="eval-meta-lbl">Acquired:</span>
@@ -488,9 +530,25 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                           <span className="eval-meta-val">{obs.sensor} ({obs.mode})</span>
                         </div>
                         <div className="eval-meta-cell">
-                          <span className="eval-meta-lbl">Slick Area:</span>
-                          <span className="eval-meta-val">{obs.slick_area_km2} km²</span>
+                          <span className="eval-meta-lbl">{obs.has_physical_raster ? 'Calculated Area:' : 'Slick Area:'}</span>
+                          <span className="eval-meta-val" style={obs.has_physical_raster ? { color: '#34d399', fontWeight: 'bold' } : {}}>
+                            {obs.has_physical_raster && obs.detected_slick_metrics?.area_km2 != null
+                              ? `${obs.detected_slick_metrics.area_km2} km² (${obs.detected_slick_metrics.pixel_count?.toLocaleString()} px)`
+                              : `${obs.slick_area_km2} km²`}
+                          </span>
                         </div>
+                        {obs.has_physical_raster && obs.detected_slick_metrics && (
+                          <>
+                            <div className="eval-meta-cell">
+                              <span className="eval-meta-lbl">Bragg Damping:</span>
+                              <span className="eval-meta-val">{obs.detected_slick_metrics.damping_contrast_db} dB contrast</span>
+                            </div>
+                            <div className="eval-meta-cell">
+                              <span className="eval-meta-lbl">Confidence:</span>
+                              <span className="eval-meta-val">{(Number(obs.detected_slick_metrics.confidence || 0) * 100).toFixed(1)}%</span>
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       <button
@@ -528,10 +586,16 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
             <div className="eval-selected-summary-bar">
               <span className="eval-summary-tag">Selected Observation:</span>
               <strong>{selectedImage.title}</strong>
-              <span>({fmt(selectedImage.observation_lat, 4)}°N, {fmt(selectedImage.observation_lon, 4)}°E)</span>
-              {selectedImage.is_historical_demo && (
+              <span>
+                ({fmt(selectedImage.detected_slick_metrics?.centroid_lat ?? selectedImage.observation_lat, 4)}°N, {fmt(selectedImage.detected_slick_metrics?.centroid_lon ?? selectedImage.observation_lon, 4)}°E)
+              </span>
+              {selectedImage.has_physical_raster ? (
+                <span className="eval-badge-verified" style={{ background: '#059669', color: '#fff', fontSize: '11px', padding: '2px 8px' }}>
+                  ● PHYSICAL SAR RASTER DETECTED ({selectedImage.detected_slick_metrics?.area_km2 ?? selectedImage.slick_area_km2} km²)
+                </span>
+              ) : selectedImage.is_historical_demo ? (
                 <span className="eval-badge-historical-mini">Corsica Historical Benchmark</span>
-              )}
+              ) : null}
             </div>
           )}
 
@@ -893,14 +957,34 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
 
           <div className="eval-run-confirmation-card">
             <h5>Attribution Execution Checklist</h5>
-            <ul className="eval-checklist">
-              <li>✓ Sentinel-1 Observation: {selectedImage?.title}</li>
-              <li>✓ Backward Drift Origin: {fmt(selectedImage?.observation_lat, 4)}°N, {fmt(selectedImage?.observation_lon, 4)}°E</li>
-              <li>✓ Wind Forcing: {windSpeed.toFixed(1)} m/s @ {windDirection}°</li>
-              <li>✓ Ocean Current: {currentSpeed.toFixed(2)} m/s @ {currentDirection}°</li>
-              <li>✓ Corridor Constraint: {corridorKm} km spatial corridor limit</li>
-              <li>✓ Eligible Candidates: {filteringResponse?.eligible_count || 0} vessels will be scored</li>
-            </ul>
+            {(() => {
+              const step4OriginLat =
+                driftPreview?.observation_point?.lat ??
+                selectedImage?.detected_slick_metrics?.centroid_lat ??
+                selectedImage?.observation_lat
+              const step4OriginLon =
+                driftPreview?.observation_point?.lon ??
+                selectedImage?.detected_slick_metrics?.centroid_lon ??
+                selectedImage?.observation_lon
+              return (
+                <ul className="eval-checklist">
+                  <li>✓ Sentinel-1 Observation: {selectedImage?.title}</li>
+                  <li>
+                    ✓ Backward Drift Origin:{' '}
+                    {step4OriginLat != null ? `${fmt(step4OriginLat, 4)}°N, ${fmt(step4OriginLon, 4)}°E` : 'Pending'}
+                    {selectedImage?.has_physical_raster && selectedImage?.detected_slick_metrics?.detected && (
+                      <span style={{ marginLeft: '6px', color: '#34d399', fontSize: '11px', fontWeight: 'bold' }}>
+                        (SAR-derived)
+                      </span>
+                    )}
+                  </li>
+                  <li>✓ Wind Forcing: {windSpeed.toFixed(1)} m/s @ {windDirection}°</li>
+                  <li>✓ Ocean Current: {currentSpeed.toFixed(2)} m/s @ {currentDirection}°</li>
+                  <li>✓ Corridor Constraint: {corridorKm} km spatial corridor limit</li>
+                  <li>✓ Eligible Candidates: {filteringResponse?.eligible_count || 0} vessels will be scored</li>
+                </ul>
+              )
+            })()}
 
             <button
               type="button"
@@ -934,6 +1018,25 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                 )}
                 <div className="eval-model-badge-inline">
                   <span>Model Version:</span> <code>{investigationRecord?.model_version || ACTIVE_MODEL_VERSION}</code>
+                </div>
+                <div
+                  className="eval-model-badge-inline"
+                  style={{
+                    borderColor:
+                      investigationRecord?.observation_source === 'SAR_DERIVED' ? '#22c55e' : '#eab308',
+                  }}
+                >
+                  <span>Observation Source:</span>{' '}
+                  <strong
+                    style={{
+                      color:
+                        investigationRecord?.observation_source === 'SAR_DERIVED' ? '#4ade80' : '#facc15',
+                    }}
+                  >
+                    {investigationRecord?.observation_source === 'SAR_DERIVED'
+                      ? 'SAR-derived detection'
+                      : 'Benchmark fallback'}
+                  </strong>
                 </div>
               </div>
             </div>
@@ -1038,7 +1141,19 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
 
             {/* Synthetic Vector / GIS Canvas Visualization */}
             <div className="eval-gis-canvas">
-              {driftPreview && selectedImage && (
+              {driftPreview && selectedImage && (() => {
+                const activeObsLat =
+                  investigationRecord?.coordinates?.observation_lat ??
+                  driftPreview.observation_point?.lat ??
+                  selectedImage.detected_slick_metrics?.centroid_lat ??
+                  selectedImage.observation_lat
+                const activeObsLon =
+                  investigationRecord?.coordinates?.observation_lon ??
+                  driftPreview.observation_point?.lon ??
+                  selectedImage.detected_slick_metrics?.centroid_lon ??
+                  selectedImage.observation_lon
+
+                return (
                 <svg viewBox="0 0 800 450" className="eval-svg-overlay">
                   {/* Grid Lines */}
                   <defs>
@@ -1080,7 +1195,7 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                   {/* Spill Observation Point */}
                   <circle cx="560" cy="200" r="7" fill="#38bdf8" stroke="#fff" strokeWidth="2" />
                   <text x="575" y="205" fill="#e0f2fe" fontSize="12" fontWeight="bold">
-                    SAR Slick Centroid ({fmt(selectedImage.observation_lat, 3)}°N, {fmt(selectedImage.observation_lon, 3)}°E)
+                    SAR Slick Centroid ({fmt(activeObsLat, 4)}°N, {fmt(activeObsLon, 4)}°E)
                   </text>
 
                   {/* Environmental Wind Vector Arrow (Origin top-left) */}
@@ -1114,7 +1229,8 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                     Secondary Candidate (Outside Source)
                   </text>
                 </svg>
-              )}
+                )
+              })()}
             </div>
           </div>
 
@@ -1423,8 +1539,30 @@ export default function EvaluatorInvestigationSection({ initialInvestigationId }
                   <span className="val mono">{investigationRecord.model_version || ACTIVE_MODEL_VERSION}</span>
                 </div>
                 <div className="eval-im-cell">
+                  <span className="lbl">Observation Source:</span>
+                  <span
+                    className="val"
+                    style={{
+                      color:
+                        investigationRecord.observation_source === 'SAR_DERIVED' ? '#4ade80' : '#facc15',
+                    }}
+                  >
+                    {investigationRecord.observation_source === 'SAR_DERIVED'
+                      ? 'SAR-derived detection'
+                      : 'Benchmark fallback'}
+                  </span>
+                </div>
+                <div className="eval-im-cell">
                   <span className="lbl">Observation Scene:</span>
                   <span className="val">{investigationRecord.image_title}</span>
+                </div>
+                <div className="eval-im-cell">
+                  <span className="lbl">Slick Centroid Coordinates:</span>
+                  <span className="val">
+                    {investigationRecord.coordinates
+                      ? `${fmt(investigationRecord.coordinates.observation_lat ?? (investigationRecord.coordinates as any).lat, 4)}°N, ${fmt(investigationRecord.coordinates.observation_lon ?? (investigationRecord.coordinates as any).lon, 4)}°E`
+                      : '—'}
+                  </span>
                 </div>
                 <div className="eval-im-cell">
                   <span className="lbl">Top Attributed Vessel:</span>

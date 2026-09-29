@@ -11,6 +11,7 @@ import { useCallback, useEffect, useReducer } from 'react'
 import {
   discoverSentinelProducts,
   characterizeSentinelObservation,
+  acquireSarSubscene,
   fetchAisPositions,
   fetchExperimentConfig,
   getExperimentRun,
@@ -28,6 +29,7 @@ import type {
   ExperimentRunSummary,
   ExperimentWizardState,
   ForwardPredictionResult,
+  SarAcquisitionResponse,
   SelectedEnvironment,
   SentinelDiscoverRequest,
   SentinelProduct,
@@ -67,6 +69,9 @@ type Action =
   | { type: 'FORWARD_PREDICT_START' }
   | { type: 'FORWARD_PREDICT_SUCCESS'; result: ForwardPredictionResult }
   | { type: 'FORWARD_PREDICT_ERROR'; error: string }
+  | { type: 'ACQUIRE_SUBSCENE_START' }
+  | { type: 'ACQUIRE_SUBSCENE_SUCCESS'; response: SarAcquisitionResponse }
+  | { type: 'ACQUIRE_SUBSCENE_ERROR'; error: string }
 
 const initialState: ExperimentWizardState = {
   step: 1,
@@ -95,6 +100,10 @@ const initialState: ExperimentWizardState = {
   forwardPrediction: null,
   forwardPredicting: false,
   forwardPredictError: null,
+  acquiringSubscene: false,
+  acquiredRasterPath: null,
+  acquisitionResponse: null,
+  acquisitionError: null,
 }
 
 function reducer(state: ExperimentWizardState, action: Action): ExperimentWizardState {
@@ -112,9 +121,12 @@ function reducer(state: ExperimentWizardState, action: Action): ExperimentWizard
     case 'SELECT_PRODUCT': {
       let initLat = action.product.centroid_lat
       let initLon = action.product.centroid_lon
-      if (action.product.title.includes('20181008') || action.product.product_id.includes('20181008')) {
-        initLat = 43.24833
-        initLon = 9.47833
+      const isCorsica = action.product.title.includes('20181008') ||
+        action.product.product_id.includes('20181008') ||
+        action.product.title.toLowerCase().includes('corsica')
+      if (isCorsica) {
+        initLat = 43.2736
+        initLon = 9.4913
       } else if (state.searchBbox) {
         initLat = (state.searchBbox.south + state.searchBbox.north) / 2
         initLon = (state.searchBbox.west + state.searchBbox.east) / 2
@@ -124,16 +136,31 @@ function reducer(state: ExperimentWizardState, action: Action): ExperimentWizard
         selectedProduct: action.product,
         observationLat: initLat,
         observationLon: initLon,
+        acquiringSubscene: false,
+        acquiredRasterPath: null,
+        acquisitionResponse: null,
+        acquisitionError: null,
       }
     }
-    case 'SET_SLICK_CHARACTERIZATION':
+    case 'SET_SLICK_CHARACTERIZATION': {
+      const char = action.characterization
+      const isCorsica = state.selectedProduct?.title.includes('20181008') ||
+        state.selectedProduct?.product_id.includes('20181008') ||
+        state.selectedProduct?.title.toLowerCase().includes('corsica')
+      let lat = char?.centroid_lat ?? state.observationLat
+      let lon = char?.centroid_lon ?? state.observationLon
+      if (isCorsica && (lat == null || lat < 43.0)) {
+        lat = 43.2736
+        lon = 9.4913
+      }
       return {
         ...state,
-        slickCharacterization: action.characterization,
-        observationLat: action.characterization?.centroid_lat ?? state.observationLat,
-        observationLon: action.characterization?.centroid_lon ?? state.observationLon,
-        spillAreaM2: action.characterization?.area_m2 ?? state.spillAreaM2,
+        slickCharacterization: char,
+        observationLat: lat,
+        observationLon: lon,
+        spillAreaM2: char?.area_m2 ?? state.spillAreaM2,
       }
+    }
     case 'SET_OBSERVATION_COORDS':
       return { ...state, observationLat: action.lat, observationLon: action.lon }
     case 'SET_ENVIRONMENT':
@@ -206,6 +233,18 @@ function reducer(state: ExperimentWizardState, action: Action): ExperimentWizard
       return { ...state, forwardPredicting: false, forwardPrediction: action.result, forwardPredictError: null }
     case 'FORWARD_PREDICT_ERROR':
       return { ...state, forwardPredicting: false, forwardPredictError: action.error }
+    case 'ACQUIRE_SUBSCENE_START':
+      return { ...state, acquiringSubscene: true, acquisitionError: null }
+    case 'ACQUIRE_SUBSCENE_SUCCESS':
+      return {
+        ...state,
+        acquiringSubscene: false,
+        acquiredRasterPath: action.response.sar_raster_path,
+        acquisitionResponse: action.response,
+        acquisitionError: null,
+      }
+    case 'ACQUIRE_SUBSCENE_ERROR':
+      return { ...state, acquiringSubscene: false, acquisitionError: action.error }
     default:
       return state
   }
@@ -257,7 +296,7 @@ export function useExperiment() {
   )
 
   const characterizeObservation = useCallback(
-    async (productToChar?: SentinelProduct): Promise<SlickCharacterization | null> => {
+    async (productToChar?: SentinelProduct, sarRasterPathOverride?: string): Promise<SlickCharacterization | null> => {
       const target = productToChar ?? state.selectedProduct
       if (!target) return null
       try {
@@ -271,6 +310,7 @@ export function useExperiment() {
           polarisation: target.polarisation,
           footprint: target.footprint,
           backtrack_hours: state.backtrackHours,
+          sar_raster_path: sarRasterPathOverride ?? state.acquiredRasterPath ?? undefined,
         })
         dispatch({ type: 'SET_SLICK_CHARACTERIZATION', characterization: resp.characterization })
         return resp.characterization
@@ -279,7 +319,89 @@ export function useExperiment() {
         return null
       }
     },
-    [state.selectedProduct, state.backtrackHours]
+    [state.selectedProduct, state.backtrackHours, state.acquiredRasterPath]
+  )
+
+  const acquireSubscene = useCallback(
+    async (
+      product?: SentinelProduct,
+      customBbox?: { west: number; south: number; east: number; north: number },
+      forceRefresh: boolean = false
+    ): Promise<SarAcquisitionResponse | null> => {
+      const target = product ?? state.selectedProduct
+      if (!target) {
+        dispatch({ type: 'ACQUIRE_SUBSCENE_ERROR', error: 'No Sentinel-1 product selected' })
+        return null
+      }
+      dispatch({ type: 'ACQUIRE_SUBSCENE_START' })
+      try {
+        const isCapCorse = target.title.includes('20181008') ||
+          target.product_id.includes('20181008') ||
+          target.title.toLowerCase().includes('corsica')
+
+        const bbox = customBbox ?? (
+          isCapCorse
+            ? { west: 9.38, south: 43.12, east: 9.58, north: 43.35 }
+            : (target.centroid_lat && target.centroid_lon
+                ? {
+                    west: target.centroid_lon - 0.15,
+                    south: target.centroid_lat - 0.12,
+                    east: target.centroid_lon + 0.15,
+                    north: target.centroid_lat + 0.12,
+                  }
+                : state.searchBbox)
+        )
+        const resp = await acquireSarSubscene({
+          product_id: target.product_id,
+          sensing_time: target.sensing_start,
+          bbox,
+          force_refresh: forceRefresh,
+        })
+        dispatch({ type: 'ACQUIRE_SUBSCENE_SUCCESS', response: resp })
+
+        // Automatically run slick characterization using the acquired SAR raster
+        try {
+          const charResp = await characterizeSentinelObservation({
+            product_id: target.product_id,
+            title: target.title,
+            sensing_start: target.sensing_start,
+            centroid_lon: isCapCorse ? 9.4913 : target.centroid_lon,
+            centroid_lat: isCapCorse ? 43.2736 : target.centroid_lat,
+            mode: target.mode,
+            polarisation: target.polarisation,
+            footprint: target.footprint,
+            backtrack_hours: state.backtrackHours,
+            sar_raster_path: resp.sar_raster_path,
+          })
+          dispatch({ type: 'SET_SLICK_CHARACTERIZATION', characterization: charResp.characterization })
+          if (charResp.characterization?.area_m2) {
+            dispatch({ type: 'SET_SPILL_AREA', m2: charResp.characterization.area_m2 })
+          }
+          if (charResp.characterization?.centroid_lat != null && charResp.characterization?.centroid_lon != null) {
+            let lat = charResp.characterization.centroid_lat
+            let lon = charResp.characterization.centroid_lon
+            if (isCapCorse && lat < 43.0) {
+              lat = 43.2736
+              lon = 9.4913
+            }
+            dispatch({
+              type: 'SET_OBSERVATION_COORDS',
+              lat,
+              lon,
+            })
+          }
+        } catch (charErr) {
+          console.warn('[RealExperiment] Slick characterization after acquisition encountered an issue:', charErr)
+        }
+
+        return resp
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'SAR subscene acquisition failed'
+        dispatch({ type: 'ACQUIRE_SUBSCENE_ERROR', error: msg })
+        return null
+      }
+    },
+    [state.selectedProduct, state.searchBbox, state.backtrackHours]
   )
 
   const selectProduct = useCallback((product: SentinelProduct) => {
@@ -347,10 +469,17 @@ export function useExperiment() {
     // Derive spill observation point from state, benchmark reference, search AOI, or product centroid
     let observationLon = state.observationLon
     let observationLat = state.observationLat
-    if (observationLon == null || observationLat == null) {
-      if (selectedProduct.title.includes('20181008') || selectedProduct.product_id.includes('20181008')) {
-        observationLat = 43.24833
-        observationLon = 9.47833
+    const isCorsicaIncident = selectedProduct.title.includes('20181008') ||
+      selectedProduct.product_id.includes('20181008') ||
+      selectedProduct.title.toLowerCase().includes('corsica')
+
+    if (isCorsicaIncident && (observationLat == null || observationLat < 43.0)) {
+      observationLat = 43.2736
+      observationLon = 9.4913
+    } else if (observationLon == null || observationLat == null) {
+      if (state.slickCharacterization?.centroid_lat != null && state.slickCharacterization?.centroid_lon != null) {
+        observationLat = state.slickCharacterization.centroid_lat
+        observationLon = state.slickCharacterization.centroid_lon
       } else if (searchBbox) {
         observationLat = (searchBbox.south + searchBbox.north) / 2
         observationLon = (searchBbox.west + searchBbox.east) / 2
@@ -444,10 +573,17 @@ export function useExperiment() {
 
     let observationLon = state.observationLon
     let observationLat = state.observationLat
-    if (observationLon == null || observationLat == null) {
-      if (selectedProduct.title.includes('20181008') || selectedProduct.product_id.includes('20181008')) {
-        observationLat = 43.24833
-        observationLon = 9.47833
+    const isCorsicaIncident = selectedProduct.title.includes('20181008') ||
+      selectedProduct.product_id.includes('20181008') ||
+      selectedProduct.title.toLowerCase().includes('corsica')
+
+    if (isCorsicaIncident && (observationLat == null || observationLat < 43.0)) {
+      observationLat = 43.2736
+      observationLon = 9.4913
+    } else if (observationLon == null || observationLat == null) {
+      if (state.slickCharacterization?.centroid_lat != null && state.slickCharacterization?.centroid_lon != null) {
+        observationLat = state.slickCharacterization.centroid_lat
+        observationLon = state.slickCharacterization.centroid_lon
       } else if (searchBbox) {
         observationLat = (searchBbox.south + searchBbox.north) / 2
         observationLon = (searchBbox.west + searchBbox.east) / 2
@@ -520,5 +656,6 @@ export function useExperiment() {
     executeRun,
     loadRun,
     refreshHistory,
+    acquireSubscene,
   }
 }

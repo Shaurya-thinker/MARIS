@@ -74,6 +74,9 @@ class SlickCharacterizationItem(BaseModel):
     detection_method: str = Field(description="Algorithmic or metadata method used to locate/characterize the slick")
     provenance: str = Field(description="Data provenance / source organization")
     data_fidelity: str = Field(description="Honest statement of measurement fidelity")
+    sar_raster_path: str | None = Field(default=None, description="Path to calibrated SAR raster if physically processed")
+    has_physical_raster: bool = Field(default=False, description="Whether detection was performed on physical SAR raster pixels")
+    pixel_count: int | None = Field(default=None, description="Number of detected slick pixels in raster")
 
 
 class SentinelCharacterizeRequest(BaseModel):
@@ -86,10 +89,38 @@ class SentinelCharacterizeRequest(BaseModel):
     polarisation: str | None = None
     footprint: dict[str, Any] | None = None
     backtrack_hours: float = 12.0
+    sar_raster_path: str | None = None
 
 
 class SentinelCharacterizeResponse(BaseModel):
     characterization: SlickCharacterizationItem
+
+
+class SarAcquisitionRequest(BaseModel):
+    product_id: str
+    bbox: dict[str, float] | None = None
+    centroid_lon: float | None = None
+    centroid_lat: float | None = None
+    sensing_time: str | None = None
+    width_px: int = 800
+    height_px: int = 800
+    aoi_radius_km: float = 12.0
+    force_refresh: bool = False
+
+
+class SarAcquisitionResponse(BaseModel):
+    success: bool
+    sar_raster_path: str
+    product_id: str
+    file_size_bytes: int
+    is_cached: bool
+    source_provider: str
+    data_authenticity: str
+    is_test_fixture: bool
+    crs: str
+    bands: list[str]
+    bbox: dict[str, float]
+    message: str
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +448,7 @@ class ExperimentRunResponse(BaseModel):
     scientific_disclaimer: str
     observation_lon: float | None = None
     observation_lat: float | None = None
+    observation_source: str = "BENCHMARK_FALLBACK"
     status: str = "completed"
     slick_characterization: SlickCharacterizationItem | None = None
     forward_prediction: ForwardPredictionResultItem | None = None
@@ -434,6 +466,7 @@ class ExperimentRunSummary(BaseModel):
     created_at: str
     observation_lon: float | None = None
     observation_lat: float | None = None
+    observation_source: str = "BENCHMARK_FALLBACK"
     candidate_count: int = 0
     status: str = "completed"
     slick_characterization: SlickCharacterizationItem | None = None
@@ -617,6 +650,10 @@ class EvaluatorReferenceObservationItem(BaseModel):
     default_current_direction_deg: float
     backtrack_hours: float
     benchmark_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    sar_subscene_path: str | None = None
+    has_physical_raster: bool = False
+    raster_provenance: str | None = None
+    detected_slick_metrics: dict[str, Any] | None = None
 
 
 class EvaluatorDriftPreviewRequest(BaseModel):
@@ -630,11 +667,14 @@ class EvaluatorDriftPreviewRequest(BaseModel):
     backtrack_hours: float = Field(default=6.0, ge=0.5, le=72.0)
     step_hours: float = Field(default=0.5, ge=0.1, le=4.0)
     spill_area_m2: float = Field(default=100000.0, ge=1000.0)
+    selected_image_id: str | None = None
+    observation_source: str | None = None
 
 
 class EvaluatorDriftPreviewResponse(BaseModel):
     observation_point: dict[str, float]
     observation_time: str
+    observation_source: str = "BENCHMARK_FALLBACK"
     backtrack_hours: float
     step_hours: float
     reconstructed_source: dict[str, Any]
@@ -691,5 +731,6 @@ class EvaluatorInvestigationSummaryItem(BaseModel):
     acquisition_timestamp: str
     model_version: str
     created_at: str
+    observation_source: str = "BENCHMARK_FALLBACK"
     top_candidate: dict[str, Any] | None = None
 

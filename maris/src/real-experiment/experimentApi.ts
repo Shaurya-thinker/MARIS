@@ -14,6 +14,8 @@ import type {
   SentinelDiscoverResponse,
   SentinelCharacterizeRequest,
   SentinelCharacterizeResponse,
+  SarAcquisitionRequest,
+  SarAcquisitionResponse,
   SlickCharacterization,
   EnvironmentSelectRequest,
   SelectedEnvironment,
@@ -129,6 +131,19 @@ export async function characterizeSentinelObservation(
     method: 'POST',
     body: JSON.stringify(body),
     timeoutMs: 15_000,
+  })
+}
+
+/**
+ * Step 1b.5 — Acquire lightweight calibrated SAR subscene GeoTIFF via CDSE Process API.
+ */
+export async function acquireSarSubscene(
+  body: SarAcquisitionRequest
+): Promise<SarAcquisitionResponse> {
+  return experimentRequest<SarAcquisitionResponse>('/sentinel/acquire-subscene', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    timeoutMs: 60_000,
   })
 }
 

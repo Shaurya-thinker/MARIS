@@ -225,7 +225,7 @@ describe('InvestigationsView Component', () => {
     expect(screen.getByLabelText(/Investigation workspace/i)).toBeTruthy()
   })
 
-  it('switches to interactive real-data experiment wizard on tab click', () => {
+  it('filters by Real Runs category pill', () => {
     render(
       <InvestigationsView
         investigations={mockLiveInvestigations}
@@ -237,19 +237,14 @@ describe('InvestigationsView Component', () => {
       />
     )
 
-    // Click "Interactive Real-Data Experiment" tab
-    const experimentTab = screen.getByRole('button', { name: /Interactive Real-Data Experiment/i })
-    fireEvent.click(experimentTab)
+    // Click "Real Runs" pill
+    const realRunsBtn = screen.getByRole('button', { name: /Real Runs/i })
+    expect(realRunsBtn).toBeTruthy()
+    fireEvent.click(realRunsBtn)
 
-    // Wizard header and Step 1 components should now be visible
-    expect(screen.getByText(/REAL DATA/i)).toBeTruthy()
-    expect(screen.getByText(/Interactive Attribution Experiment/i)).toBeTruthy()
-    expect(screen.getByText(/Select Sentinel-1 Observation/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Search CDSE Catalogue/i })).toBeTruthy()
-
-    // Can switch back to Case Catalog
-    const catalogTab = screen.getByRole('button', { name: /Catalog & Benchmarks/i })
-    fireEvent.click(catalogTab)
+    // Can switch back to All Cases
+    const allCasesBtn = screen.getByRole('button', { name: /All Cases/i })
+    fireEvent.click(allCasesBtn)
     expect(screen.getByText(/Corsica 2018 Reconstruction/i)).toBeTruthy()
   })
 })

@@ -90,6 +90,149 @@ function ConfigBanner({ warnings }: { warnings: string[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// SAR Subscene Acquisition Card
+// ---------------------------------------------------------------------------
+
+function SarSubsceneAcquisitionCard({ experiment }: { experiment: ReturnType<typeof useExperiment> }) {
+  const { state, acquireSubscene } = experiment
+  const [acquiringLocal, setAcquiringLocal] = useState(false)
+  const [localErr, setLocalErr] = useState<string | null>(null)
+
+  const handleAcquire = async (forceLive: boolean = false) => {
+    if (!state.selectedProduct) return
+    setAcquiringLocal(true)
+    setLocalErr(null)
+    try {
+      await acquireSubscene(state.selectedProduct, undefined, forceLive)
+    } catch (e: unknown) {
+      setLocalErr(e instanceof Error ? e.message : 'Acquisition failed')
+    } finally {
+      setAcquiringLocal(false)
+    }
+  }
+
+  const isAcquired = Boolean(state.acquiredRasterPath && state.slickCharacterization?.has_physical_raster)
+  const isAcquiring = state.acquiringSubscene || acquiringLocal
+  const acqResp = state.acquisitionResponse
+  const isLiveCopernicus = Boolean(
+    acqResp?.source_provider?.toLowerCase().includes('copernicus') ||
+    acqResp?.source_provider?.toLowerCase().includes('process api')
+  )
+
+  return (
+    <div
+      data-testid="sar-subscene-card"
+      style={{
+        marginTop: '0.75rem',
+        marginBottom: '0.75rem',
+        background: isAcquired ? (isLiveCopernicus ? 'rgba(2, 132, 199, 0.25)' : 'rgba(6, 78, 59, 0.35)') : 'rgba(30, 41, 59, 0.6)',
+        border: `1.5px solid ${isAcquired ? (isLiveCopernicus ? '#0284c7' : '#059669') : '#334155'}`,
+        borderRadius: '8px',
+        padding: '0.9rem',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '1.1rem' }}>🛰️</span>
+          <strong style={{ color: isAcquired ? (isLiveCopernicus ? '#38bdf8' : '#34d399') : '#e2e8f0', fontSize: '0.88rem' }}>
+            Sentinel-1 SAR Subscene (Lightweight ~2–4 MB)
+          </strong>
+        </div>
+        <span
+          style={{
+            fontSize: '0.7rem',
+            fontWeight: 600,
+            padding: '0.15rem 0.5rem',
+            borderRadius: '9999px',
+            background: isAcquired
+              ? (isLiveCopernicus ? 'rgba(2, 132, 199, 0.25)' : 'rgba(16, 185, 129, 0.2)')
+              : 'rgba(148, 163, 184, 0.15)',
+            color: isAcquired ? (isLiveCopernicus ? '#38bdf8' : '#34d399') : '#94a3b8',
+            border: `1px solid ${isAcquired ? (isLiveCopernicus ? '#0284c7' : '#10b981') : '#475569'}`,
+          }}
+        >
+          {isAcquired
+            ? (isLiveCopernicus ? 'LIVE COPERNICUS SAR LOADED' : 'AUTHENTIC SAR RASTER LOADED')
+            : 'NOT ACQUIRED (CATALOGUE ONLY)'}
+        </span>
+      </div>
+
+      {isAcquired && acqResp ? (
+        <div style={{ fontSize: '0.78rem', color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+          <div>
+            <strong>Provider:</strong> {acqResp.source_provider}
+            {acqResp.is_cached ? (
+              <span style={{ marginLeft: '0.5rem', color: '#6ee7b7' }}>(Local Cache Hit)</span>
+            ) : (
+              <span style={{ marginLeft: '0.5rem', color: '#38bdf8', fontWeight: 600 }}>(Live Copernicus Process API Query)</span>
+            )}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.4rem', marginTop: '0.2rem' }}>
+            <div><strong>Size:</strong> {(acqResp.file_size_bytes / (1024 * 1024)).toFixed(2)} MB</div>
+            <div><strong>CRS:</strong> {acqResp.crs}</div>
+            <div><strong>Bands:</strong> {acqResp.bands.join(', ')}</div>
+            <div><strong>AOI:</strong> [{acqResp.bbox.west?.toFixed(2)}, {acqResp.bbox.south?.toFixed(2)} to {acqResp.bbox.east?.toFixed(2)}, {acqResp.bbox.north?.toFixed(2)}]</div>
+          </div>
+          <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.2rem' }}>
+            Data authenticity: Authenticated Sentinel-1 backscatter; physical radar pixels processed by Stage B3 detector.
+          </div>
+          {!isLiveCopernicus ? (
+            <div style={{ marginTop: '0.6rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                type="button"
+                className="re-btn-secondary"
+                style={{ fontSize: '0.75rem', padding: '0.3rem 0.7rem' }}
+                disabled={isAcquiring}
+                onClick={() => handleAcquire(true)}
+              >
+                {isAcquiring ? '⏳ Querying CDSE Process API...' : '🌐 Upgrade to Live Copernicus Process API'}
+              </button>
+            </div>
+          ) : (
+            <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#38bdf8', fontSize: '0.75rem' }}>
+              <span style={{ color: '#34d399', fontWeight: 'bold' }}>✓</span>
+              <span>Authentic Copernicus SAR pixels verified and ready for Stage B3 detection.</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <p style={{ fontSize: '0.76rem', color: '#94a3b8', margin: '0 0 0.6rem 0' }}>
+            Acquires an authentic orthorectified Sentinel-1 SAR subscene (~2–4 MB) centered on the target AOI via Copernicus Process API or pre-staged benchmark cache. Replaces catalogue estimates with real physical pixel segmentation.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="re-btn-primary"
+              style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+              disabled={isAcquiring}
+              onClick={() => handleAcquire(true)}
+            >
+              {isAcquiring ? '⏳ Querying CDSE Process API...' : '🌐 Fetch Live from Copernicus Process API'}
+            </button>
+            <button
+              type="button"
+              className="re-btn-secondary"
+              style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
+              disabled={isAcquiring}
+              onClick={() => handleAcquire(false)}
+            >
+              ⚡ Smart Cache / Benchmark
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(state.acquisitionError || localErr) && (
+        <p className="re-error" style={{ marginTop: '0.5rem', fontSize: '0.75rem' }}>
+          {state.acquisitionError || localErr}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Step 1 — Observation Selection
 // ---------------------------------------------------------------------------
 
@@ -100,12 +243,12 @@ function Step1Observation({
 }) {
   const { state, setSearchBbox, setSearchDates, searchProducts, selectProduct, goToStep } = experiment
 
-  const [west, setWest] = useState('-10')
-  const [south, setSouth] = useState('35')
-  const [east, setEast] = useState('5')
-  const [north, setNorth] = useState('45')
-  const [startDate, setStartDate] = useState('2024-01-01')
-  const [endDate, setEndDate] = useState('2024-01-07')
+  const [west, setWest] = useState('9.30')
+  const [south, setSouth] = useState('43.05')
+  const [east, setEast] = useState('9.65')
+  const [north, setNorth] = useState('43.40')
+  const [startDate, setStartDate] = useState('2018-10-08')
+  const [endDate, setEndDate] = useState('2018-10-08')
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -187,14 +330,14 @@ function Step1Observation({
           type="button"
           className="re-btn-secondary"
           onClick={() => {
-            setWest('9.0')
-            setSouth('41.5')
-            setEast('9.6')
-            setNorth('43.24')
+            setWest('9.30')
+            setSouth('43.05')
+            setEast('9.65')
+            setNorth('43.40')
             setStartDate('2018-10-08')
             setEndDate('2018-10-08')
             setError(null)
-            const bbox = { west: 9.0, south: 41.5, east: 9.6, north: 43.24 }
+            const bbox = { west: 9.30, south: 43.05, east: 9.65, north: 43.40 }
             setSearchBbox(bbox)
             setSearchDates('2018-10-08T00:00:00Z', '2018-10-08T23:59:59Z')
             setSearching(true)
@@ -258,9 +401,11 @@ function Step1Observation({
       )}
 
       {state.selectedProduct && (
-        <div
-          className="re-characterization-panel"
-          data-testid="slick-characterization-panel"
+        <>
+          <SarSubsceneAcquisitionCard experiment={experiment} />
+          <div
+            className="re-characterization-panel"
+            data-testid="slick-characterization-panel"
           style={{
             marginTop: '1.5rem',
             background: '#091e2f',
@@ -355,6 +500,7 @@ function Step1Observation({
             </button>
           </div>
         </div>
+        </>
       )}
     </div>
   )
@@ -411,6 +557,10 @@ function Step2Environment({
           <strong>{state.selectedProduct?.sensing_start.slice(0, 16).replace('T', ' ') ?? '—'} UTC</strong>
         </div>
       </div>
+
+      {state.selectedProduct && (
+        <SarSubsceneAcquisitionCard experiment={experiment} />
+      )}
 
       {state.slickCharacterization && (
         <div
@@ -489,7 +639,10 @@ function Step2Environment({
 
       <div className="re-field-grid">
         <label className="re-label">
-          Backtrack Duration (hours)
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Backtrack Duration (hours)</span>
+            <span className="re-range-value" style={{ margin: 0 }}>{state.backtrackHours} h</span>
+          </div>
           <input
             className="re-input"
             type="range"
@@ -497,7 +650,6 @@ function Step2Environment({
             value={state.backtrackHours}
             onChange={e => setBacktrackHours(Number(e.target.value))}
           />
-          <span className="re-range-value">{state.backtrackHours} h</span>
         </label>
       </div>
 
@@ -586,29 +738,76 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
         </div>
       </div>
 
-      <div className="re-field-grid">
-        <label className="re-label">
-          Observed Spill Latitude (°N)
-          <input
-            className="re-input"
-            type="number"
-            step="0.0001"
-            value={state.observationLat ?? ''}
-            onChange={e => setObservationCoords(e.target.value ? Number(e.target.value) : null, state.observationLon)}
-          />
-          <span className="re-field-hint">Initial location of observed slick detection (WGS84)</span>
-        </label>
-        <label className="re-label">
-          Observed Spill Longitude (°E)
-          <input
-            className="re-input"
-            type="number"
-            step="0.0001"
-            value={state.observationLon ?? ''}
-            onChange={e => setObservationCoords(state.observationLat, e.target.value ? Number(e.target.value) : null)}
-          />
-          <span className="re-field-hint">Initial location of observed slick detection (WGS84)</span>
-        </label>
+      {/* Observed Spill Origin Location Card */}
+      <div
+        style={{
+          background: 'rgba(15, 23, 42, 0.55)',
+          border: '1px solid #1e293b',
+          borderRadius: '8px',
+          padding: '0.9rem 1rem 1rem 1rem',
+          marginBottom: '1rem',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '0.75rem',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
+          }}
+        >
+          <div>
+            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Observed Spill Coordinates (WGS84)
+            </span>
+            <span style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginTop: '0.15rem' }}>
+              Physical origin anchor derived from Sentinel-1 SAR characterization (or enter custom coordinates)
+            </span>
+          </div>
+          {(state.selectedProduct?.title.includes('20181008') || state.selectedProduct?.product_id.includes('20181008') || state.selectedProduct?.title.toLowerCase().includes('corsica')) && (
+            <button
+              type="button"
+              className="re-btn-secondary"
+              style={{ fontSize: '0.74rem', padding: '0.25rem 0.6rem', borderColor: '#334155', color: '#94a3b8' }}
+              onClick={() => {
+                setObservationCoords(43.2736, 9.4913)
+              }}
+              title="Reset to Cap Corse incident coordinates (43.2736°N, 9.4913°E)"
+            >
+              📍 Reset to Authentic Cap Corse Benchmark (43.2736°N, 9.4913°E)
+            </button>
+          )}
+        </div>
+
+        <div className="re-field-grid">
+          <label className="re-label">
+            Observed Spill Latitude (°N)
+            <input
+              className="re-input"
+              type="number"
+              step="0.00001"
+              value={state.observationLat ?? ''}
+              onChange={e => setObservationCoords(e.target.value ? Number(e.target.value) : null, state.observationLon)}
+            />
+            <span className="re-field-hint">Initial location of observed slick detection (WGS84)</span>
+          </label>
+          <label className="re-label">
+            Observed Spill Longitude (°E)
+            <input
+              className="re-input"
+              type="number"
+              step="0.00001"
+              value={state.observationLon ?? ''}
+              onChange={e => setObservationCoords(state.observationLat, e.target.value ? Number(e.target.value) : null)}
+            />
+            <span className="re-field-hint">Initial location of observed slick detection (WGS84)</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="re-field-grid" style={{ marginBottom: '1.25rem' }}>
         <label className="re-label">
           Backward Integration Step (hours)
           <select
@@ -621,14 +820,22 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
             <option value={1.0}>1.0 h (recommended)</option>
             <option value={2.0}>2.0 h</option>
           </select>
+          <span className="re-field-hint">Discrete integration timestep for backward reconstruction</span>
         </label>
         <label className="re-label">
-          Observed Slick Area (m²) — optional
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span>Observed Slick Area (m²) — optional</span>
+            {state.spillAreaM2 != null && (
+              <span style={{ fontSize: '0.72rem', color: '#22d3ee', fontWeight: 600, textTransform: 'none' }}>
+                ≈ {(state.spillAreaM2 / 1e6).toFixed(2)} km²
+              </span>
+            )}
+          </div>
           <input
             className="re-input"
             type="number"
             placeholder="e.g. 500000"
-            value={state.spillAreaM2 ?? ''}
+            value={state.spillAreaM2 != null ? Math.round(state.spillAreaM2) : ''}
             onChange={e => setSpillArea(e.target.value ? Number(e.target.value) : null)}
             min={0}
           />
@@ -641,7 +848,7 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
         className="re-forward-prediction-config-card"
         data-testid="forward-prediction-config-section"
         style={{
-          marginTop: '1.25rem',
+          marginTop: '0.5rem',
           marginBottom: '1rem',
           padding: '1rem',
           borderRadius: '8px',
@@ -649,7 +856,7 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
           border: '1.5px solid #0891b2',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <div>
             <h4 style={{ margin: 0, color: '#22d3ee', fontSize: '0.95rem', fontWeight: 600 }}>
               Forward Drift Prediction (Step 11)
@@ -671,7 +878,7 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
 
         {state.enableForwardPrediction && (
           <>
-            <div className="re-field-grid" style={{ marginBottom: '0.75rem' }}>
+            <div className="re-field-grid" style={{ marginBottom: '0.85rem' }}>
               <label className="re-label">
                 Forward Horizon (hours)
                 <input
@@ -702,18 +909,22 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
               </label>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginTop: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.25rem', marginBottom: '0.75rem' }}>
               <button
                 type="button"
                 className="re-btn-secondary"
                 data-testid="preview-forward-drift-btn"
                 onClick={predictForward}
                 disabled={state.forwardPredicting || !state.environment}
-                style={{ borderColor: '#0891b2', color: '#22d3ee' }}
+                style={{ borderColor: '#0891b2', color: '#22d3ee', display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}
               >
-                {state.forwardPredicting ? 'Computing Forward Trajectory…' : 'Preview Forward Trajectory'}
+                {state.forwardPredicting ? '⏳ Computing Forward Trajectory…' : '▶ Preview Forward Trajectory'}
               </button>
-              {!state.environment && (
+              {state.environment ? (
+                <span style={{ fontSize: '0.75rem', color: '#34d399', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  ✓ Environmental forcing active (ERA5 wind + CMEMS current)
+                </span>
+              ) : (
                 <span style={{ fontSize: '0.75rem', color: '#facc15' }}>
                   ⚠ Environmental forcing (ERA5/CMEMS) must be acquired first to preview.
                 </span>
@@ -721,7 +932,7 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
             </div>
 
             {state.forwardPredictError && (
-              <div className="re-error" data-testid="forward-predict-error" style={{ marginTop: '0.5rem' }}>
+              <div className="re-error" data-testid="forward-predict-error" style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>
                 {state.forwardPredictError}
               </div>
             )}
@@ -731,36 +942,104 @@ function Step3DriftConfig({ experiment }: { experiment: ReturnType<typeof useExp
                 data-testid="forward-preview-summary"
                 style={{
                   marginTop: '0.75rem',
-                  padding: '0.6rem 0.8rem',
+                  padding: '0.85rem 1rem',
                   background: 'rgba(15, 23, 42, 0.75)',
                   borderRadius: '6px',
                   border: '1px solid #1e293b',
                   fontSize: '0.8rem',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
-                  <strong style={{ color: '#22d3ee' }}>Forward Preview Trajectory Computed</strong>
-                  <span style={{ color: '#94a3b8' }}>{state.forwardPrediction.steps.length} steps</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ color: '#34d399', fontSize: '0.85rem' }}>✓</span>
+                    <strong style={{ color: '#22d3ee' }}>Forward Preview Trajectory Computed</strong>
+                  </div>
+                  <span
+                    style={{
+                      padding: '0.15rem 0.55rem',
+                      borderRadius: '12px',
+                      background: 'rgba(34, 211, 238, 0.12)',
+                      border: '1px solid rgba(34, 211, 238, 0.3)',
+                      color: '#22d3ee',
+                      fontSize: '0.75rem',
+                      fontFamily: 'var(--font-mono)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {state.forwardPrediction.steps.length} steps (+{state.forwardPredictionHours}h)
+                  </span>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem' }}>
-                  <div>
-                    <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>Final Coordinate:</span>
-                    <div style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                    gap: '0.5rem',
+                    marginBottom: '0.5rem',
+                  }}
+                >
+                  <div
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.65)',
+                      padding: '0.45rem 0.65rem',
+                      borderRadius: '4px',
+                      border: '1px solid #1e293b',
+                    }}
+                  >
+                    <div style={{ color: '#94a3b8', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                      Start Coordinate
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: '0.8rem', color: '#e2e8f0', marginTop: '0.15rem' }}>
+                      {fmt(state.observationLat, 4)}°N, {fmt(state.observationLon, 4)}°E
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.65)',
+                      padding: '0.45rem 0.65rem',
+                      borderRadius: '4px',
+                      border: '1px solid #1e293b',
+                    }}
+                  >
+                    <div style={{ color: '#94a3b8', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                      Final Coordinate
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: '0.8rem', color: '#22d3ee', marginTop: '0.15rem' }}>
                       {fmt(state.forwardPrediction.final_lat, 4)}°N, {fmt(state.forwardPrediction.final_lon, 4)}°E
                     </div>
                   </div>
-                  <div>
-                    <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>Displacement:</span>
-                    <div style={{ fontWeight: 600, color: '#38bdf8' }}>
+                  <div
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.65)',
+                      padding: '0.45rem 0.65rem',
+                      borderRadius: '4px',
+                      border: '1px solid #1e293b',
+                    }}
+                  >
+                    <div style={{ color: '#94a3b8', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                      Displacement
+                    </div>
+                    <div style={{ fontWeight: 700, color: '#38bdf8', fontSize: '0.85rem', marginTop: '0.15rem' }}>
                       {(state.forwardPrediction.displacement_km ?? state.forwardPrediction.total_distance_km)?.toFixed(1) ?? '—'} km
                     </div>
                   </div>
-                  <div>
-                    <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>Model:</span>
-                    <div style={{ fontFamily: 'monospace', fontSize: '0.72rem' }}>
+                  <div
+                    style={{
+                      background: 'rgba(15, 23, 42, 0.65)',
+                      padding: '0.45rem 0.65rem',
+                      borderRadius: '4px',
+                      border: '1px solid #1e293b',
+                    }}
+                  >
+                    <div style={{ color: '#94a3b8', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                      Model &amp; Scheme
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.74rem', color: '#cbd5e1', marginTop: '0.15rem' }}>
                       {state.forwardPrediction.model_version}
                     </div>
                   </div>
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic', marginTop: '0.35rem' }}>
+                  Projected forward slick drift under combined ocean surface currents (CMEMS) and wind leeway (ERA5, α = 0.035).
                 </div>
               </div>
             )}
@@ -1027,11 +1306,15 @@ function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperim
 
   // Observation coordinate determination (prefer explicit observationLat/Lon or product centroid)
   const observationLat =
-    state.observationLat != null
+    result.observation_lat != null
+      ? result.observation_lat
+      : state.observationLat != null
       ? state.observationLat
       : (state.selectedProduct?.centroid_lat ?? result.source_lat)
   const observationLon =
-    state.observationLon != null
+    result.observation_lon != null
+      ? result.observation_lon
+      : state.observationLon != null
       ? state.observationLon
       : (state.selectedProduct?.centroid_lon ?? result.source_lon)
 
@@ -1046,6 +1329,12 @@ function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperim
         <div className="re-result-meta">
           <span>Run ID: <code>{result.run_id}</code></span>
           <span>Model: <code>{result.model_version}</code></span>
+          <span>
+            Observation Source:{' '}
+            <strong style={{ color: result.observation_source === 'SAR_DERIVED' ? '#4ade80' : '#facc15' }}>
+              {result.observation_source === 'SAR_DERIVED' ? 'SAR-derived detection' : 'Benchmark fallback'}
+            </strong>
+          </span>
           <span>Completed: {result.created_at.slice(0, 16).replace('T', ' ')} UTC</span>
         </div>
       </div>

@@ -83,6 +83,9 @@ export interface SlickCharacterization {
   detection_method: string;
   provenance: string;
   data_fidelity: string;
+  sar_raster_path?: string | null;
+  has_physical_raster?: boolean;
+  pixel_count?: number | null;
 }
 
 export interface SentinelCharacterizeRequest {
@@ -95,10 +98,38 @@ export interface SentinelCharacterizeRequest {
   polarisation?: string | null;
   footprint?: Record<string, unknown> | null;
   backtrack_hours?: number;
+  sar_raster_path?: string | null;
 }
 
 export interface SentinelCharacterizeResponse {
   characterization: SlickCharacterization;
+}
+
+export interface SarAcquisitionRequest {
+  product_id: string;
+  bbox?: { west: number; south: number; east: number; north: number } | null;
+  centroid_lon?: number | null;
+  centroid_lat?: number | null;
+  sensing_time?: string | null;
+  width_px?: number;
+  height_px?: number;
+  aoi_radius_km?: number;
+  force_refresh?: boolean;
+}
+
+export interface SarAcquisitionResponse {
+  success: boolean;
+  sar_raster_path: string;
+  product_id: string;
+  file_size_bytes: number;
+  is_cached: boolean;
+  source_provider: string;
+  data_authenticity: string;
+  is_test_fixture: boolean;
+  crs: string;
+  bands: string[];
+  bbox: { west: number; south: number; east: number; north: number };
+  message: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +373,7 @@ export interface ExperimentRunResult {
   observation_time: string;
   observation_lon?: number | null;
   observation_lat?: number | null;
+  observation_source?: string;
   candidate_count?: number;
   status?: string;
   backtrack_hours: number;
@@ -367,6 +399,7 @@ export interface ExperimentRunSummary {
   observation_time: string;
   observation_lon?: number | null;
   observation_lat?: number | null;
+  observation_source?: string;
   candidate_count?: number;
   status?: string;
   backtrack_hours: number;
@@ -426,6 +459,11 @@ export interface ExperimentWizardState {
   runHistory: ExperimentRunSummary[];
   // Step 10 — Detected Slick Characterization
   slickCharacterization: SlickCharacterization | null;
+  // Step 1b.5 — SAR Subscene Acquisition
+  acquiringSubscene: boolean;
+  acquiredRasterPath: string | null;
+  acquisitionResponse: SarAcquisitionResponse | null;
+  acquisitionError: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +585,24 @@ export interface EvaluatorReferenceObservation {
   default_current_speed_ms: number;
   default_current_direction_deg: number;
   backtrack_hours: number;
+  sar_subscene_path?: string | null;
+  has_physical_raster?: boolean;
+  raster_provenance?: string | null;
+  detected_slick_metrics?: {
+    detected: boolean;
+    status: string;
+    centroid_lon: number;
+    centroid_lat: number;
+    area_km2: number;
+    area_m2?: number;
+    damping_contrast_db?: number;
+    confidence?: number;
+    pixel_count?: number;
+    detection_method?: string;
+    provenance?: string;
+    sar_raster_path?: string;
+    slick_geometry?: Record<string, unknown>;
+  } | null;
   benchmark_candidates?: Array<{
     id: string;
     vessel_name: string;
@@ -567,11 +623,14 @@ export interface EvaluatorDriftPreviewRequest {
   backtrack_hours?: number;
   step_hours?: number;
   spill_area_m2?: number;
+  selected_image_id?: string;
+  observation_source?: string;
 }
 
 export interface EvaluatorDriftPreviewResponse {
   observation_point: { lon: number; lat: number };
   observation_time: string;
+  observation_source?: string;
   backtrack_hours: number;
   step_hours: number;
   reconstructed_source: {
@@ -761,6 +820,7 @@ export interface EvaluatorInvestigationRecord {
     model_type: string;
     confidence_assessment: string;
   };
+  observation_source?: string;
   created_at: string;
 }
 
@@ -771,6 +831,7 @@ export interface EvaluatorInvestigationSummary {
   image_path: string;
   acquisition_timestamp: string;
   model_version: string;
+  observation_source?: string;
   created_at: string;
   top_candidate?: EvaluatorCandidateScored | null;
 }

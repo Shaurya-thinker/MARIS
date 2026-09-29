@@ -58,6 +58,11 @@ backend/derived/
 *.SAFE.zip
 *.tif
 *.tiff
+backend/data/sar_subscenes/*.tif
+backend/data/sar_subscenes/*.tiff
+backend/data/sar_subscenes/acquired_*
+backend/data/sar_subscenes/cache/
+backend/data/sar_subscenes/*.json
 
 # Databases (SQLite)
 *.db

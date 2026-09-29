@@ -180,12 +180,16 @@ export default function ScientificReportView({
   const obsLat =
     runResult.observation_lat != null && runResult.observation_lat !== 0
       ? runResult.observation_lat
+      : runResult.slick_characterization?.centroid_lat != null
+      ? runResult.slick_characterization.centroid_lat
       : runResult.satellite_product_id.includes('20181008')
       ? 43.2483
       : runResult.source_lat
   const obsLon =
     runResult.observation_lon != null && runResult.observation_lon !== 0
       ? runResult.observation_lon
+      : runResult.slick_characterization?.centroid_lon != null
+      ? runResult.slick_characterization.centroid_lon
       : runResult.satellite_product_id.includes('20181008')
       ? 9.4783
       : runResult.source_lon

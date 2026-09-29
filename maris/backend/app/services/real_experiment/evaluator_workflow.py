@@ -71,6 +71,9 @@ REFERENCE_OBSERVATIONS: list[dict[str, Any]] = [
         "default_current_speed_ms": 0.22,
         "default_current_direction_deg": 35.0,
         "backtrack_hours": 8.0,
+        "sar_subscene_path": "data/sar_subscenes/corsica_2018_sar_subscene.tif",
+        "has_physical_raster": True,
+        "raster_provenance": "Development Test Fixture (Calibrated SAR GeoTIFF)",
         "benchmark_candidates": [
             {
                 "id": "vessel_ulysse",
@@ -582,16 +585,94 @@ REFERENCE_OBSERVATIONS: list[dict[str, Any]] = [
 ]
 
 
+_CHARACTERIZATION_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _get_observation_raster_metrics(obs: dict[str, Any]) -> dict[str, Any] | None:
+    raster_rel = obs.get("sar_subscene_path")
+    if not raster_rel:
+        return None
+
+    obs_id = obs["id"]
+    if obs_id in _CHARACTERIZATION_CACHE:
+        return _CHARACTERIZATION_CACHE[obs_id]
+
+    try:
+        from app.services.real_experiment.slick_characterization import characterize_observation
+
+        metrics = characterize_observation(
+            product_id=obs_id,
+            title=obs.get("title"),
+            sensing_start=obs.get("observation_time"),
+            centroid_lon=obs.get("observation_lon"),
+            centroid_lat=obs.get("observation_lat"),
+            mode=obs.get("mode"),
+            polarisation="VV",
+            backtrack_hours=obs.get("backtrack_hours", 8.0),
+            sar_raster_path=raster_rel,
+        )
+        if metrics.get("has_physical_raster"):
+            _CHARACTERIZATION_CACHE[obs_id] = metrics
+            return metrics
+    except Exception as exc:
+        logger.warning("Failed to characterize SAR raster for %s: %s", obs_id, exc)
+
+    return None
+
+
 def list_reference_observations() -> list[dict[str, Any]]:
-    """Return all registered reference observations with verified metadata."""
-    return REFERENCE_OBSERVATIONS
+    """Return all registered reference observations enriched with dynamic SAR raster metrics when available."""
+    enriched: list[dict[str, Any]] = []
+    for obs in REFERENCE_OBSERVATIONS:
+        obs_copy = dict(obs)
+        metrics = _get_observation_raster_metrics(obs)
+        if metrics:
+            obs_copy["has_physical_raster"] = True
+            obs_copy["raster_provenance"] = metrics.get("provenance")
+            obs_copy["detected_slick_metrics"] = {
+                "detected": metrics.get("detected", False),
+                "status": metrics.get("status"),
+                "centroid_lon": metrics.get("centroid_lon"),
+                "centroid_lat": metrics.get("centroid_lat"),
+                "area_km2": metrics.get("area_km2"),
+                "area_m2": metrics.get("area_m2"),
+                "damping_contrast_db": metrics.get("damping_contrast_db"),
+                "confidence": metrics.get("confidence"),
+                "pixel_count": metrics.get("pixel_count"),
+                "detection_method": metrics.get("detection_method"),
+                "provenance": metrics.get("provenance"),
+                "slick_geometry": metrics.get("slick_geometry"),
+                "sar_raster_path": metrics.get("sar_raster_path"),
+            }
+        enriched.append(obs_copy)
+    return enriched
 
 
 def get_reference_observation(ref_id: str) -> dict[str, Any] | None:
-    """Fetch reference observation by identifier."""
+    """Fetch reference observation by identifier enriched with dynamic SAR raster metrics."""
     for obs in REFERENCE_OBSERVATIONS:
         if obs["id"] == ref_id:
-            return obs
+            obs_copy = dict(obs)
+            metrics = _get_observation_raster_metrics(obs)
+            if metrics:
+                obs_copy["has_physical_raster"] = True
+                obs_copy["raster_provenance"] = metrics.get("provenance")
+                obs_copy["detected_slick_metrics"] = {
+                    "detected": metrics.get("detected", False),
+                    "status": metrics.get("status"),
+                    "centroid_lon": metrics.get("centroid_lon"),
+                    "centroid_lat": metrics.get("centroid_lat"),
+                    "area_km2": metrics.get("area_km2"),
+                    "area_m2": metrics.get("area_m2"),
+                    "damping_contrast_db": metrics.get("damping_contrast_db"),
+                    "confidence": metrics.get("confidence"),
+                    "pixel_count": metrics.get("pixel_count"),
+                    "detection_method": metrics.get("detection_method"),
+                    "provenance": metrics.get("provenance"),
+                    "slick_geometry": metrics.get("slick_geometry"),
+                    "sar_raster_path": metrics.get("sar_raster_path"),
+                }
+            return obs_copy
     return None
 
 
@@ -705,6 +786,7 @@ def calculate_backward_drift_preview(
     backtrack_hours: float = 6.0,
     step_hours: float = 0.5,
     spill_area_m2: float = 100000.0,
+    observation_source: str = "BENCHMARK_FALLBACK",
 ) -> dict[str, Any]:
     """Execute real backward drift calculation and return source reconstruction + vector geometry."""
     obs_utc = observation_time if observation_time.tzinfo else observation_time.replace(tzinfo=timezone.utc)
@@ -788,6 +870,7 @@ def calculate_backward_drift_preview(
             "u": float(uo),
             "v": float(vo),
         },
+        "observation_source": observation_source,
     }
 
 
@@ -1043,10 +1126,44 @@ def run_evaluator_investigation(
     image_title = ref_obs["title"] if ref_obs else f"Observation {selected_image_id}"
     image_path = ref_obs["image_path"] if ref_obs else "/satellite/corsica_2018_s1.jpg"
 
+    # Priority #2: Resolve whether observation is SAR-derived or benchmark fallback
+    effective_lon = observation_lon
+    effective_lat = observation_lat
+    effective_area = spill_area_m2
+    is_sar_derived = False
+
+    if ref_obs and ref_obs.get("detected_slick_metrics") and ref_obs["detected_slick_metrics"].get("detected"):
+        det = ref_obs["detected_slick_metrics"]
+        c_lon = det.get("centroid_lon")
+        c_lat = det.get("centroid_lat")
+        catalog_lon = ref_obs.get("observation_lon")
+        catalog_lat = ref_obs.get("observation_lat")
+
+        # If the input coordinates correspond to the catalog default or match the SAR centroid, prioritize SAR
+        if c_lon is not None and c_lat is not None:
+            matches_catalog = (
+                catalog_lon is not None
+                and catalog_lat is not None
+                and abs(observation_lon - catalog_lon) < 0.01
+                and abs(observation_lat - catalog_lat) < 0.01
+            )
+            matches_sar = (
+                abs(observation_lon - float(c_lon)) < 0.005
+                and abs(observation_lat - float(c_lat)) < 0.005
+            )
+            if matches_catalog or matches_sar:
+                effective_lon = float(c_lon)
+                effective_lat = float(c_lat)
+                if det.get("area_m2"):
+                    effective_area = float(det["area_m2"])
+                is_sar_derived = True
+
+    observation_source = "SAR_DERIVED" if is_sar_derived else "BENCHMARK_FALLBACK"
+
     # 2. Backward Drift Execution
     drift_preview = calculate_backward_drift_preview(
-        origin_lon=observation_lon,
-        origin_lat=observation_lat,
+        origin_lon=effective_lon,
+        origin_lat=effective_lat,
         observation_time=obs_utc,
         wind_speed_ms=wind_speed_ms,
         wind_direction_deg=wind_direction_deg,
@@ -1054,7 +1171,8 @@ def run_evaluator_investigation(
         current_direction_deg=current_direction_deg,
         backtrack_hours=backtrack_hours,
         step_hours=step_hours,
-        spill_area_m2=spill_area_m2,
+        spill_area_m2=effective_area,
+        observation_source=observation_source,
     )
 
     reconstructed_source = drift_preview["reconstructed_source"]
@@ -1224,9 +1342,10 @@ def run_evaluator_investigation(
         "image_title": image_title,
         "is_historical_demo": ref_obs.get("is_historical_demo", False) if ref_obs else False,
         "coordinates": {
-            "observation_lon": observation_lon,
-            "observation_lat": observation_lat,
+            "observation_lon": effective_lon,
+            "observation_lat": effective_lat,
         },
+        "observation_source": observation_source,
         "acquisition_timestamp": obs_utc.isoformat(),
         "wind_inputs": {
             "speed_ms": wind_speed_ms,
@@ -1264,6 +1383,10 @@ def run_evaluator_investigation(
         "model_version": model.model_id,
         "candidate_probabilities": evaluated_candidates,
         "final_attribution": final_attribution,
+        "has_physical_raster": bool(ref_obs.get("has_physical_raster", False)) if ref_obs else False,
+        "raster_provenance": ref_obs.get("raster_provenance") if ref_obs else None,
+        "sar_subscene_path": ref_obs.get("sar_subscene_path") if ref_obs else None,
+        "detected_slick_metrics": ref_obs.get("detected_slick_metrics") if ref_obs else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
