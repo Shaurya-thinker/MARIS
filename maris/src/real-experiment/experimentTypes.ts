@@ -174,6 +174,17 @@ export interface AisSearchRequest {
   start: string;
   end: string;
   investigation_id?: string;
+  backward_steps?: BackwardStep[];
+  observation_time?: string;
+  backtrack_hours?: number;
+  source_candidate_zone?: Record<string, unknown>;
+  observation_lat?: number;
+  observation_lon?: number;
+  era5_netcdf_path?: string;
+  cmems_netcdf_path?: string;
+  step_hours?: number;
+  spill_area_m2?: number;
+  satellite_product_id?: string;
 }
 
 export interface VesselSummary {
@@ -185,6 +196,12 @@ export interface VesselSummary {
   last_timestamp: string;
   source_adapter: string;
   positions?: AisPosition[];
+  min_trajectory_distance_km?: number | null;
+  trajectory_time_delta_hours?: number | null;
+  source_zone_intersection?: boolean;
+  min_source_distance_km?: number | null;
+  source_type?: string;
+  provider_name?: string;
 }
 
 export interface AisSearchResponse {
@@ -195,6 +212,7 @@ export interface AisSearchResponse {
   search_window_end: string;
   adapter_id: string;
   configured: boolean;
+  backward_steps?: BackwardStep[];
 }
 
 export interface AisPositionsRequest {
@@ -245,6 +263,22 @@ export interface ExperimentRunRequest {
   slick_characterization?: SlickCharacterization | null;
   forward_prediction_hours?: number;
   forward_step_hours?: number;
+  monte_carlo?: MonteCarloConfig;
+}
+
+export interface MonteCarloConfig {
+  enabled: boolean;
+  ensemble_size: number;
+  seed?: number | null;
+  perturb_origin: boolean;
+  origin_std_m: number;
+  perturb_leeway: boolean;
+  leeway_std: number;
+  perturb_wind: boolean;
+  wind_speed_std_ms: number;
+  wind_dir_std_deg: number;
+  perturb_current: boolean;
+  current_std_ms: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +310,21 @@ export interface VesselBehavioralIntelligence {
 }
 
 // ---------------------------------------------------------------------------
+// Phase #4 — Attribution & Explainability
+// ---------------------------------------------------------------------------
+
+export interface EvidenceComponent {
+  score: number;
+  weight: number;
+}
+
+export interface EvidenceBreakdown {
+  spatial: EvidenceComponent;
+  temporal: EvidenceComponent;
+  trajectory: EvidenceComponent;
+}
+
+// ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
 
@@ -294,6 +343,11 @@ export interface VesselFeatures {
   rank: number;
   has_meaningful_support: boolean;
   positions?: AisPosition[];
+  min_trajectory_distance_km?: number | null;
+  trajectory_time_delta_hours?: number | null;
+  source_zone_intersection?: boolean;
+  source_type?: string;
+  provider_name?: string;
   /** Step 12 — Independent ML Model Probability in [0,1].
    *  Not a probability of legal responsibility or causation.
    *  NOT forced to sum to 1 across candidates; NOT used to re-rank. */
@@ -304,6 +358,68 @@ export interface VesselFeatures {
   ml_feature_vector?: Record<string, number> | null;
   /** Step 12 — Contextual AIS Rule-Based Detector Findings. Does NOT alter evidence_consistency_score. */
   behavioral_intelligence?: VesselBehavioralIntelligence | null;
+  /** Phase #4 — Evidence Consistency Breakdown (Spatial 50%, Temporal 25%, Trajectory 25%) */
+  evidence_breakdown?: EvidenceBreakdown | null;
+  /** Phase #4 — 2–3 factual statements explaining spatiotemporal evidence consistency */
+  explanation?: string[];
+  /** Phase #4 — Evidence Consistency Level ('HIGH' | 'MODERATE' | 'LOW') */
+  consistency_level?: "HIGH" | "MODERATE" | "LOW" | string;
+  /** Phase #4 — Scientific neutral disclaimer */
+  scientific_disclaimer?: string;
+  /** Phase #5 — Monte Carlo Ensemble Evidence & Sensitivity */
+  ensemble_evidence?: EnsembleEvidence | null;
+}
+
+// ---------------------------------------------------------------------------
+// Phase #5 — Monte Carlo Ensemble Result Schemas
+// ---------------------------------------------------------------------------
+
+export interface EnsembleTrajectoryStep {
+  step: number;
+  lat: number;
+  lon: number;
+  timestamp?: string | null;
+  uncertainty_radius_m?: number | null;
+  drift_u_ms?: number | null;
+  drift_v_ms?: number | null;
+}
+
+export interface EnsembleRealization {
+  realization_id: number;
+  steps: EnsembleTrajectoryStep[];
+  final_source_lon: number;
+  final_source_lat: number;
+  final_uncertainty_radius_m: number;
+  perturbation_parameters: Record<string, number>;
+  termination_status: string;
+  provenance: string;
+}
+
+export interface EnsembleEvidence {
+  ensemble_support_fraction: number;
+  trajectory_consistency_across_ensemble?: number | null;
+  source_intersection_fraction?: number | null;
+  score_mean?: number | null;
+  score_std?: number | null;
+  score_p05?: number | null;
+  score_p95?: number | null;
+  ensemble_disclaimer: string;
+}
+
+export interface MonteCarloEnsembleResult {
+  ensemble_size: number;
+  realizations: EnsembleRealization[];
+  mean_trajectory: Array<Record<string, unknown>>;
+  final_source_centroid: { lat: number; lon: number };
+  dispersion_radius_km: number;
+  p05_source_lon: number;
+  p95_source_lon: number;
+  p05_source_lat: number;
+  p95_source_lat: number;
+  effective_seed?: number | null;
+  execution_time_ms: number;
+  provenance: string;
+  scientific_disclaimer: string;
 }
 
 export interface BackwardStep {
@@ -391,6 +507,7 @@ export interface ExperimentRunResult {
   scientific_disclaimer: string;
   slick_characterization?: SlickCharacterization | null;
   forward_prediction?: ForwardPredictionResult | null;
+  monte_carlo_ensemble?: MonteCarloEnsembleResult | null;
 }
 
 export interface ExperimentRunSummary {
@@ -410,6 +527,7 @@ export interface ExperimentRunSummary {
   created_at: string;
   slick_characterization?: SlickCharacterization | null;
   forward_prediction?: ForwardPredictionResult | null;
+  monte_carlo_ensemble?: MonteCarloEnsembleResult | null;
 }
 
 export interface ExperimentListResponse {
@@ -450,6 +568,19 @@ export interface ExperimentWizardState {
   // Step 4 — Vessel selection
   aisSearchResult: AisSearchResponse | null;
   selectedVessels: VesselInput[];
+  // Phase #5 — Monte Carlo Ensemble Configuration
+  enableMonteCarlo: boolean;
+  monteCarloEnsembleSize: number;
+  monteCarloSeed: number | null;
+  monteCarloPerturbOrigin: boolean;
+  monteCarloOriginStdM: number;
+  monteCarloPerturbLeeway: boolean;
+  monteCarloLeewayStd: number;
+  monteCarloPerturbWind: boolean;
+  monteCarloWindSpeedStdMs: number;
+  monteCarloWindDirStdDeg: number;
+  monteCarloPerturbCurrent: boolean;
+  monteCarloCurrentStdMs: number;
   // Step 5 — Run status
   runStatus: 'idle' | 'running' | 'success' | 'error';
   runError: string | null;

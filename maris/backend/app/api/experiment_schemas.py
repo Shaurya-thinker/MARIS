@@ -8,7 +8,7 @@ and the service layer DTOs.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -271,24 +271,41 @@ class EnvironmentSelectResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class AisSearchRequest(BaseModel):
-    west: float = Field(ge=-180.0, le=180.0)
-    south: float = Field(ge=-90.0, le=90.0)
-    east: float = Field(ge=-180.0, le=180.0)
-    north: float = Field(ge=-90.0, le=90.0)
-    start: datetime
-    end: datetime
+    west: float = Field(default=0.0, ge=-180.0, le=180.0)
+    south: float = Field(default=0.0, ge=-90.0, le=90.0)
+    east: float = Field(default=0.0, ge=-180.0, le=180.0)
+    north: float = Field(default=0.0, ge=-90.0, le=90.0)
+    start: datetime | None = None
+    end: datetime | None = None
     investigation_id: str = Field(default="real-experiment")
+    backward_steps: list[dict[str, Any]] | None = None
+    observation_time: datetime | None = None
+    backtrack_hours: float | None = None
+    source_candidate_zone: dict[str, Any] | None = None
+    observation_lat: float | None = None
+    observation_lon: float | None = None
+    era5_netcdf_path: str | None = None
+    cmems_netcdf_path: str | None = None
+    step_hours: float | None = None
+    spill_area_m2: float | None = None
+    satellite_product_id: str | None = None
 
 
 class VesselSummaryItem(BaseModel):
     mmsi: str | None
     vessel_name: str | None
-    imo: str | None
+    imo: str | None = None
     position_count: int
     first_timestamp: str
     last_timestamp: str
     source_adapter: str
     positions: list[dict[str, Any]] = Field(default_factory=list)
+    min_trajectory_distance_km: float | None = None
+    trajectory_time_delta_hours: float | None = None
+    source_zone_intersection: bool = False
+    min_source_distance_km: float | None = None
+    source_type: str | None = "sqlite_ais"
+    provider_name: str | None = "ais_vessels.db"
 
 
 class AisSearchResponse(BaseModel):
@@ -299,6 +316,7 @@ class AisSearchResponse(BaseModel):
     search_window_end: str
     adapter_id: str
     configured: bool
+    backward_steps: list[dict[str, Any]] | None = None
 
 
 class AisPositionsRequest(BaseModel):
@@ -363,6 +381,22 @@ class VesselInput(BaseModel):
     )
 
 
+class MonteCarloConfigRequest(BaseModel):
+    """Configuration for Phase #5 Monte Carlo Ensemble Uncertainty Propagation."""
+    enabled: bool = Field(default=False, description="Enable Monte Carlo ensemble uncertainty propagation")
+    ensemble_size: int = Field(default=50, ge=10, le=500, description="Number of Monte Carlo realizations")
+    seed: int | None = Field(default=None, description="Optional random seed for reproducibility")
+    perturb_origin: bool = Field(default=True, description="Perturb initial spill origin position")
+    origin_std_m: float = Field(default=1000.0, ge=0.0, description="Initial origin position standard deviation in meters")
+    perturb_leeway: bool = Field(default=True, description="Perturb wind leeway fraction")
+    leeway_std: float = Field(default=0.005, ge=0.0, description="Leeway standard deviation around baseline 0.035")
+    perturb_wind: bool = Field(default=True, description="Perturb wind velocity and direction")
+    wind_speed_std_ms: float = Field(default=1.0, ge=0.0, description="Wind speed standard deviation in m/s")
+    wind_dir_std_deg: float = Field(default=10.0, ge=0.0, description="Wind direction standard deviation in degrees")
+    perturb_current: bool = Field(default=True, description="Perturb near-surface current velocity")
+    current_std_ms: float = Field(default=0.05, ge=0.0, description="Current velocity standard deviation in m/s")
+
+
 class ExperimentRunRequest(BaseModel):
     satellite_product_id: str = Field(description="CDSE Sentinel-1 product ID")
     observation_lon: float = Field(ge=-180.0, le=180.0)
@@ -393,6 +427,25 @@ class ExperimentRunRequest(BaseModel):
         default=1.0,
         description="Step 11 forward integration step size in hours"
     )
+    monte_carlo: MonteCarloConfigRequest | None = Field(
+        default=None,
+        description="Optional Step 5 Monte Carlo Ensemble configuration"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase #4 — Attribution & Explainability Schemas
+# ---------------------------------------------------------------------------
+
+class EvidenceComponent(BaseModel):
+    score: float = Field(description="Normalized component score in [0, 1]")
+    weight: float = Field(description="Weight of this component in the final score")
+
+
+class EvidenceBreakdown(BaseModel):
+    spatial: EvidenceComponent = Field(description="Spatial proximity component")
+    temporal: EvidenceComponent = Field(description="Temporal overlap component")
+    trajectory: EvidenceComponent = Field(description="Trajectory and kinematic alignment component")
 
 
 class VesselFeaturesItem(BaseModel):
@@ -413,6 +466,11 @@ class VesselFeaturesItem(BaseModel):
         default_factory=list,
         description="Authentic AIS positions for this candidate: [{timestamp, lat, lon, speed?, heading?}]"
     )
+    min_trajectory_distance_km: float | None = None
+    trajectory_time_delta_hours: float | None = None
+    source_zone_intersection: bool = False
+    source_type: str | None = "sqlite_ais"
+    provider_name: str | None = "ais_vessels.db"
     # Step 12 — ML Model Probability
     model_probability: float | None = Field(
         default=None,
@@ -426,6 +484,77 @@ class VesselFeaturesItem(BaseModel):
     behavioral_intelligence: VesselBehavioralIntelligenceItem | None = Field(
         default=None,
         description="Contextual rule-based detector findings. Does NOT modify evidence_consistency_score."
+    )
+    # Phase #4 — Attribution & Explainability
+    evidence_breakdown: EvidenceBreakdown | None = None
+    explanation: list[str] = Field(
+        default_factory=list,
+        description="Factual statements explaining spatiotemporal evidence consistency"
+    )
+    consistency_level: Literal["HIGH", "MODERATE", "LOW"] | str = Field(
+        default="LOW",
+        description="Consistency classification (HIGH >= 0.75, MODERATE >= 0.50, LOW < 0.50)"
+    )
+    scientific_disclaimer: str = Field(
+        default="Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability.",
+        description="Neutral scientific disclaimer"
+    )
+    # Phase #5 — Monte Carlo Ensemble Evidence & Sensitivity
+    ensemble_evidence: EnsembleEvidenceItem | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase #5 — Monte Carlo Ensemble Result Schemas
+# ---------------------------------------------------------------------------
+
+class EnsembleTrajectoryStepItem(BaseModel):
+    step: int
+    lat: float
+    lon: float
+    timestamp: str | None = None
+    uncertainty_radius_m: float | None = None
+    drift_u_ms: float | None = None
+    drift_v_ms: float | None = None
+
+
+class EnsembleRealizationItem(BaseModel):
+    realization_id: int
+    steps: list[EnsembleTrajectoryStepItem]
+    final_source_lon: float
+    final_source_lat: float
+    final_uncertainty_radius_m: float
+    perturbation_parameters: dict[str, float]
+    termination_status: str = "completed"
+    provenance: str = "MODEL_GENERATED_MONTE_CARLO_REALIZATION"
+
+
+class EnsembleEvidenceItem(BaseModel):
+    ensemble_support_fraction: float = Field(description="Fraction of realizations with spatiotemporal overlap")
+    trajectory_consistency_across_ensemble: float | None = None
+    score_mean: float | None = None
+    score_std: float | None = None
+    score_p05: float | None = None
+    score_p95: float | None = None
+    ensemble_disclaimer: str = Field(
+        default="Ensemble support represents the fraction of configured model realizations exhibiting spatiotemporal correlation under perturbed forcing. It is a sensitivity measure, not a probability of causation or legal liability."
+    )
+
+
+class MonteCarloEnsembleResultItem(BaseModel):
+    ensemble_size: int
+    realizations: list[EnsembleRealizationItem]
+    mean_trajectory: list[dict[str, Any]]
+    final_source_centroid: dict[str, float]
+    dispersion_radius_km: float
+    p05_source_lon: float
+    p95_source_lon: float
+    p05_source_lat: float
+    p95_source_lat: float
+    effective_seed: int | None = None
+    execution_time_ms: float = 0.0
+    provenance: str = "MODEL_GENERATED_MONTE_CARLO_REALIZATION"
+    scientific_disclaimer: str = Field(
+        default="Monte Carlo ensemble trajectories represent model-generated uncertainty realizations under configured physical parameter perturbations. They are NOT observed vessel tracks or satellite observations, and ensemble frequencies do NOT constitute a probability of legal responsibility."
     )
 
 
@@ -452,6 +581,7 @@ class ExperimentRunResponse(BaseModel):
     status: str = "completed"
     slick_characterization: SlickCharacterizationItem | None = None
     forward_prediction: ForwardPredictionResultItem | None = None
+    monte_carlo_ensemble: MonteCarloEnsembleResultItem | None = None
 
 
 class ExperimentRunSummary(BaseModel):

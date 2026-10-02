@@ -249,7 +249,7 @@ def test_runner_zero_positions_vessel(synthetic_netcdf):
 # ---------------------------------------------------------------------------
 
 def test_compute_score_inside_zone():
-    score = _compute_score(
+    score, sub_scores = _compute_score(
         min_dist_km=0.0,
         source_radius_km=10.0,
         temporal_overlap_h=6.0,
@@ -257,10 +257,11 @@ def test_compute_score_inside_zone():
         traj_overlap=1.0,
     )
     assert 0.8 <= score <= 1.0, f"Expected high score for vessel at source center, got {score}"
+    assert "spatial" in sub_scores and "temporal" in sub_scores and "trajectory" in sub_scores
 
 
 def test_compute_score_far_outside():
-    score = _compute_score(
+    score, sub_scores = _compute_score(
         min_dist_km=500.0,
         source_radius_km=10.0,
         temporal_overlap_h=0.0,
@@ -268,11 +269,12 @@ def test_compute_score_far_outside():
         traj_overlap=0.0,
     )
     assert score < 0.1, f"Expected near-zero score for vessel far outside zone, got {score}"
+    assert sub_scores["spatial"] < 0.1
 
 
 def test_compute_score_no_dist_signal():
     # min_dist_km=None means spatial signal absent; score should still be in [0,1]
-    score = _compute_score(
+    score, sub_scores = _compute_score(
         min_dist_km=None,
         source_radius_km=10.0,
         temporal_overlap_h=3.0,
@@ -280,12 +282,13 @@ def test_compute_score_no_dist_signal():
         traj_overlap=0.5,
     )
     assert 0.0 <= score <= 1.0
+    assert sub_scores["spatial"] == 0.0
 
 
 def test_compute_score_always_in_01():
     """Score must be bounded regardless of extreme inputs."""
     for dist in [0, 1000, None]:
-        score = _compute_score(
+        score, sub_scores = _compute_score(
             min_dist_km=float(dist) if dist is not None else None,
             source_radius_km=5.0,
             temporal_overlap_h=100.0,
@@ -880,7 +883,7 @@ def test_regression_test_6_end_to_end_regression(corsica_netcdf):
 def test_different_evidence_produces_different_scores():
     """Two vessels with different distances, headings, and speeds must not collapse to identical scores."""
     # Vessel A (like Ulysse: further away, but aligned heading and plausible speed)
-    score_a = _compute_score(
+    score_a, _ = _compute_score(
         min_dist_km=223.306,
         source_radius_km=6.5,
         temporal_overlap_h=8.467,
@@ -890,7 +893,7 @@ def test_different_evidence_produces_different_scores():
         speed_consistency=0.3654,
     )
     # Vessel B (like MedStar: closer distance, but misaligned heading and lower speed)
-    score_b = _compute_score(
+    score_b, _ = _compute_score(
         min_dist_km=171.934,
         source_radius_km=6.5,
         temporal_overlap_h=8.467,
@@ -1012,6 +1015,527 @@ def test_experiment_runner_preserves_authentic_slick_coordinates(corsica_netcdf)
     first_step = result.backward_steps[0]
     assert abs(first_step["lat"] - lat) < 0.05
     assert abs(first_step["lon"] - lon) < 0.05
+
+
+# ---------------------------------------------------------------------------
+# Phase #4 — Attribution + Explainability Verification Tests
+# ---------------------------------------------------------------------------
+
+def test_phase4_score_decomposition():
+    """Test 1 — Verify _compute_score returns composite_score and decomposed sub_scores with valid weights."""
+    score, sub_scores = _compute_score(
+        min_dist_km=5.0,
+        source_radius_km=10.0,
+        temporal_overlap_h=6.0,
+        backtrack_hours=12.0,
+        traj_overlap=0.8,
+        heading_consistency=0.75,
+        speed_consistency=0.90,
+    )
+    assert isinstance(score, float)
+    assert isinstance(sub_scores, dict)
+    assert "spatial" in sub_scores
+    assert "temporal" in sub_scores
+    assert "trajectory" in sub_scores
+    assert 0.0 <= sub_scores["spatial"] <= 1.0
+    assert 0.0 <= sub_scores["temporal"] <= 1.0
+    assert 0.0 <= sub_scores["trajectory"] <= 1.0
+
+
+def test_phase4_score_unchanged_for_fixture():
+    """Test 2 — Verify score calculation is mathematically identical to baseline."""
+    # Test with identical inputs
+    score, sub_scores = _compute_score(
+        min_dist_km=0.0,
+        source_radius_km=10.0,
+        temporal_overlap_h=6.0,
+        backtrack_hours=6.0,
+        traj_overlap=1.0,
+        heading_consistency=1.0,
+        speed_consistency=1.0,
+    )
+    # Inside center, complete temporal and trajectory overlap -> exactly 1.0
+    assert round(score, 4) == 1.0
+    assert sub_scores["spatial"] == 1.0
+    assert sub_scores["temporal"] == 1.0
+    assert sub_scores["trajectory"] == 1.0
+
+
+def test_phase4_evidence_breakdown_structure(corsica_netcdf):
+    """Test 3 — Verify every scored vessel contains evidence_breakdown with spatial, temporal, trajectory."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[{"mmsi": "228308800", "vessel_name": "MV ULYSSE", "positions": []}],
+    )
+    assert len(result.vessels) > 0
+    v = result.vessels[0]
+    assert hasattr(v, "evidence_breakdown")
+    bd = v.evidence_breakdown
+    assert "spatial" in bd and "temporal" in bd and "trajectory" in bd
+    assert bd["spatial"]["weight"] == 0.50
+    assert bd["temporal"]["weight"] == 0.25
+    assert bd["trajectory"]["weight"] == 0.25
+    assert isinstance(bd["spatial"]["score"], (int, float))
+    assert isinstance(bd["temporal"]["score"], (int, float))
+    assert isinstance(bd["trajectory"]["score"], (int, float))
+
+
+def test_phase4_explanation_factual_statements(corsica_netcdf):
+    """Test 4 — Verify every scored candidate has explanation with 2–3 factual statements."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[{"mmsi": "228308800", "vessel_name": "MV ULYSSE", "positions": []}],
+    )
+    v = result.vessels[0]
+    assert hasattr(v, "explanation")
+    assert isinstance(v.explanation, list)
+    assert len(v.explanation) >= 2
+    for stmt in v.explanation:
+        assert isinstance(stmt, str) and len(stmt) > 10
+        # Zero liability assertions: never claims guilt or causation
+        assert "guilt" not in stmt.lower()
+        assert "caused the spill" not in stmt.lower()
+        assert "responsible" not in stmt.lower()
+
+
+def test_phase4_disclaimer_present(corsica_netcdf):
+    """Test 5 — Verify the required scientific-neutral disclaimer is present."""
+    expected_disclaimer = (
+        "Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability."
+    )
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[{"mmsi": "228308800", "vessel_name": "MV ULYSSE", "positions": []}],
+    )
+    v = result.vessels[0]
+    assert v.scientific_disclaimer == expected_disclaimer
+    as_dict = v.as_dict()
+    assert as_dict["scientific_disclaimer"] == expected_disclaimer
+
+
+def test_phase4_consistency_level_thresholds():
+    """Test 6 — Verify consistency_level thresholds: HIGH >= 0.75, MODERATE >= 0.50, LOW < 0.50."""
+    from datetime import datetime, timezone, timedelta
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    t_start = obs_time - timedelta(hours=12)
+    runner = ExperimentRunner()
+
+    steps = [
+        {"lat": 43.248, "lon": 9.478, "timestamp": obs_time.isoformat()},
+        {"lat": 43.200, "lon": 9.400, "timestamp": t_start.isoformat()},
+    ]
+
+    # 1. Close vessel inside source zone spanning the window -> HIGH (>= 0.75)
+    v_high = {
+        "mmsi": "111111111",
+        "vessel_name": "Vessel High",
+        "positions": [
+            {"timestamp": t_start.isoformat(), "lat": 43.200, "lon": 9.400, "speed": 10.0, "heading": 210.0},
+            {"timestamp": obs_time.isoformat(), "lat": 43.200, "lon": 9.400, "speed": 10.0, "heading": 210.0},
+        ],
+        "source_zone_intersection": True,
+    }
+    scored_high = runner._score_vessel(
+        vessel_data=v_high,
+        source_lon=9.400,
+        source_lat=43.200,
+        source_radius_m=10000.0,
+        observation_time=obs_time,
+        backtrack_hours=12.0,
+        backward_steps=steps,
+    )
+    assert scored_high.evidence_consistency_score >= 0.75
+    assert scored_high.consistency_level == "HIGH"
+
+    # 2. Medium consistency vessel (single point inside source) -> MODERATE (0.50 <= score < 0.75)
+    v_mod = {
+        "mmsi": "222222222",
+        "vessel_name": "Vessel Moderate",
+        "positions": [
+            {"timestamp": obs_time.isoformat(), "lat": 43.200, "lon": 9.400, "speed": 10.0, "heading": 210.0}
+        ],
+        "source_zone_intersection": True,
+    }
+    scored_mod = runner._score_vessel(
+        vessel_data=v_mod,
+        source_lon=9.400,
+        source_lat=43.200,
+        source_radius_m=10000.0,
+        observation_time=obs_time,
+        backtrack_hours=12.0,
+        backward_steps=steps,
+    )
+    assert 0.50 <= scored_mod.evidence_consistency_score < 0.75
+    assert scored_mod.consistency_level == "MODERATE"
+
+    # 3. Far vessel -> LOW (< 0.50)
+    v_low = {
+        "mmsi": "333333333",
+        "vessel_name": "Vessel Low",
+        "positions": [
+            {"timestamp": obs_time.isoformat(), "lat": 40.000, "lon": 5.000, "speed": 1.0, "heading": 0.0}
+        ],
+    }
+    scored_low = runner._score_vessel(
+        vessel_data=v_low,
+        source_lon=9.400,
+        source_lat=43.200,
+        source_radius_m=10000.0,
+        observation_time=obs_time,
+        backtrack_hours=12.0,
+        backward_steps=steps,
+    )
+    assert scored_low.evidence_consistency_score < 0.50
+    assert scored_low.consistency_level == "LOW"
+
+
+def test_phase4_provenance_exposure(corsica_netcdf):
+    """Test 7 — Verify source_type and provider_name are preserved and exposed with evidence."""
+    era5, cmems, obs_time, lon, lat = corsica_netcdf
+    runner = ExperimentRunner()
+    result = runner.run(
+        satellite_product_id="S1A_IW_GRDH_20181008T052807",
+        observation_lon=lon,
+        observation_lat=lat,
+        observation_time=obs_time,
+        era5_netcdf_path=era5,
+        cmems_netcdf_path=cmems,
+        backtrack_hours=12.0,
+        step_hours=1.0,
+        selected_vessels=[{"mmsi": "228308800", "vessel_name": "MV ULYSSE", "positions": []}],
+    )
+    v = result.vessels[0]
+    assert v.source_type is not None
+    assert v.provider_name is not None
+    assert "ais_vessels.db" in v.provider_name or "sqlite_ais" in v.source_type
+
+
+def test_phase4_sparse_ais_handling():
+    """Test 8 — For candidate with ais_position_count < 3, verify explanation includes sparse caveat."""
+    from datetime import datetime, timezone
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    runner = ExperimentRunner()
+
+    v_sparse = {
+        "mmsi": "999999999",
+        "vessel_name": "Sparse Vessel",
+        "positions": [
+            {"timestamp": obs_time.isoformat(), "lat": 43.210, "lon": 9.410, "speed": 8.0, "heading": 180.0}
+        ],  # 1 position < 3
+    }
+    scored = runner._score_vessel(
+        vessel_data=v_sparse,
+        source_lon=9.400,
+        source_lat=43.200,
+        source_radius_m=10000.0,
+        observation_time=obs_time,
+        backtrack_hours=12.0,
+        backward_steps=[],
+    )
+    assert scored.ais_position_count == 1
+    # Check caveat in explanation
+    assert any("sparse" in stmt.lower() and "caution" in stmt.lower() for stmt in scored.explanation)
+
+
+def test_phase4_zero_fabrication():
+    """Test 9 — Verify explanations never invent missing positions or claim guilt."""
+    from datetime import datetime, timezone
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    runner = ExperimentRunner()
+
+    v = {
+        "mmsi": "123456789",
+        "vessel_name": "Authentic Vessel",
+        "positions": [],  # 0 positions
+    }
+    scored = runner._score_vessel(
+        vessel_data=v,
+        source_lon=9.400,
+        source_lat=43.200,
+        source_radius_m=10000.0,
+        observation_time=obs_time,
+        backtrack_hours=12.0,
+        backward_steps=[],
+    )
+    for stmt in scored.explanation:
+        assert "interpolated" not in stmt.lower()
+        assert "fabricated" not in stmt.lower()
+        assert "guilt" not in stmt.lower()
+        assert "responsible" not in stmt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase #5 — Monte Carlo Ensemble & Uncertainty Propagation Tests
+# ---------------------------------------------------------------------------
+
+def test_phase5_monte_carlo_reproducibility(tmp_path: Path):
+    """Verify that Monte Carlo ensemble execution with the same seed produces identical results."""
+    from app.services.real_experiment.monte_carlo_service import (
+        MonteCarloConfig,
+        MonteCarloEnsembleService,
+    )
+    from app.services.drift_modelling import _open_netcdf
+
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    era5_path = tmp_path / "era5.nc"
+    cmems_path = tmp_path / "cmems.nc"
+    _make_era5_nc(era5_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+    _make_cmems_nc(cmems_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+
+    wind_ds = _open_netcdf(str(era5_path))
+    curr_ds = _open_netcdf(str(cmems_path))
+
+    svc = MonteCarloEnsembleService()
+    cfg1 = MonteCarloConfig(enabled=True, ensemble_size=15, seed=42)
+    res1 = svc.run_ensemble(
+        config=cfg1,
+        origin_lon=9.5,
+        origin_lat=43.5,
+        observation_time=obs_time,
+        wind_ds=wind_ds,
+        curr_ds=curr_ds,
+        lookback_hours=6.0,
+        step_hours=1.0,
+    )
+
+    cfg2 = MonteCarloConfig(enabled=True, ensemble_size=15, seed=42)
+    res2 = svc.run_ensemble(
+        config=cfg2,
+        origin_lon=9.5,
+        origin_lat=43.5,
+        observation_time=obs_time,
+        wind_ds=wind_ds,
+        curr_ds=curr_ds,
+        lookback_hours=6.0,
+        step_hours=1.0,
+    )
+
+    wind_ds.close()
+    curr_ds.close()
+
+    assert res1.ensemble_size == 15
+    assert res2.ensemble_size == 15
+    assert math.isclose(res1.final_source_centroid["lon"], res2.final_source_centroid["lon"], rel_tol=1e-5)
+    assert math.isclose(res1.final_source_centroid["lat"], res2.final_source_centroid["lat"], rel_tol=1e-5)
+    assert math.isclose(res1.dispersion_radius_km, res2.dispersion_radius_km, rel_tol=1e-5)
+
+
+def test_phase5_dataset_safety_in_memory(tmp_path: Path):
+    """Verify that Monte Carlo perturbations never mutate original ERA5 or CMEMS datasets."""
+    from app.services.real_experiment.monte_carlo_service import (
+        MonteCarloConfig,
+        MonteCarloEnsembleService,
+    )
+    from app.services.drift_modelling import _open_netcdf
+
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    era5_path = tmp_path / "era5.nc"
+    cmems_path = tmp_path / "cmems.nc"
+    _make_era5_nc(era5_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+    _make_cmems_nc(cmems_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+
+    wind_ds = _open_netcdf(str(era5_path))
+    curr_ds = _open_netcdf(str(cmems_path))
+
+    # Snapshot baseline values
+    u10_before = np.copy(wind_ds["u10"].values)
+    uo_before = np.copy(curr_ds["uo"].values)
+
+    svc = MonteCarloEnsembleService()
+    cfg = MonteCarloConfig(enabled=True, ensemble_size=20, seed=123, perturb_wind=True, perturb_current=True)
+    svc.run_ensemble(
+        config=cfg,
+        origin_lon=9.5,
+        origin_lat=43.5,
+        observation_time=obs_time,
+        wind_ds=wind_ds,
+        curr_ds=curr_ds,
+        lookback_hours=4.0,
+        step_hours=1.0,
+    )
+
+    # Verify original arrays are exactly equal (zero in-place mutation)
+    np.testing.assert_array_equal(wind_ds["u10"].values, u10_before)
+    np.testing.assert_array_equal(curr_ds["uo"].values, uo_before)
+
+    wind_ds.close()
+    curr_ds.close()
+
+
+def test_phase5_dispersion_and_bounds(tmp_path: Path):
+    """Verify dispersion radius, percentile bounds, and trajectory step tracking."""
+    from app.services.real_experiment.monte_carlo_service import (
+        MonteCarloConfig,
+        MonteCarloEnsembleService,
+    )
+    from app.services.drift_modelling import _open_netcdf
+
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    era5_path = tmp_path / "era5.nc"
+    cmems_path = tmp_path / "cmems.nc"
+    _make_era5_nc(era5_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+    _make_cmems_nc(cmems_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+
+    wind_ds = _open_netcdf(str(era5_path))
+    curr_ds = _open_netcdf(str(cmems_path))
+
+    svc = MonteCarloEnsembleService()
+    cfg = MonteCarloConfig(enabled=True, ensemble_size=25, seed=99)
+    res = svc.run_ensemble(
+        config=cfg,
+        origin_lon=9.5,
+        origin_lat=43.5,
+        observation_time=obs_time,
+        wind_ds=wind_ds,
+        curr_ds=curr_ds,
+        lookback_hours=6.0,
+        step_hours=1.0,
+    )
+
+    wind_ds.close()
+    curr_ds.close()
+
+    assert res.dispersion_radius_km > 0.0
+    assert res.p05_source_lon <= res.final_source_centroid["lon"] <= res.p95_source_lon
+    assert res.p05_source_lat <= res.final_source_centroid["lat"] <= res.p95_source_lat
+    assert len(res.mean_trajectory) > 0
+
+
+def test_phase5_provenance_and_disclaimer(tmp_path: Path):
+    """Verify that realizations and aggregate results carry strict model provenance and disclaimer."""
+    from app.services.real_experiment.monte_carlo_service import (
+        MonteCarloConfig,
+        MonteCarloEnsembleService,
+        PROVENANCE_MONTE_CARLO,
+    )
+    from app.services.drift_modelling import _open_netcdf
+
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    era5_path = tmp_path / "era5.nc"
+    cmems_path = tmp_path / "cmems.nc"
+    _make_era5_nc(era5_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+    _make_cmems_nc(cmems_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+
+    wind_ds = _open_netcdf(str(era5_path))
+    curr_ds = _open_netcdf(str(cmems_path))
+
+    svc = MonteCarloEnsembleService()
+    res = svc.run_ensemble(
+        config=MonteCarloConfig(enabled=True, ensemble_size=10, seed=7),
+        origin_lon=9.5,
+        origin_lat=43.5,
+        observation_time=obs_time,
+        wind_ds=wind_ds,
+        curr_ds=curr_ds,
+        lookback_hours=4.0,
+        step_hours=1.0,
+    )
+    wind_ds.close()
+    curr_ds.close()
+
+    assert res.provenance == PROVENANCE_MONTE_CARLO
+    assert "legal responsibility" in res.scientific_disclaimer.lower()
+    for r in res.realizations:
+        assert r.provenance == PROVENANCE_MONTE_CARLO
+
+
+def test_phase5_runner_end_to_end_with_monte_carlo(tmp_path: Path):
+    """Verify ExperimentRunner executes Monte Carlo ensemble when enabled, attaching ensemble data."""
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    era5_path = tmp_path / "era5.nc"
+    cmems_path = tmp_path / "cmems.nc"
+    _make_era5_nc(era5_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+    _make_cmems_nc(cmems_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+
+    runner = ExperimentRunner()
+    vessel = {
+        "mmsi": "228000000",
+        "vessel_name": "Test Vessel",
+        "positions": [
+            {"timestamp": (obs_time - timedelta(hours=6)).isoformat(), "lat": 43.4, "lon": 9.4, "speed": 10.0, "heading": 120.0},
+        ],
+    }
+
+    result = runner.run(
+        satellite_product_id="TEST_S1",
+        observation_lon=9.5,
+        observation_lat=43.5,
+        observation_time=obs_time,
+        era5_netcdf_path=str(era5_path),
+        cmems_netcdf_path=str(cmems_path),
+        backtrack_hours=6.0,
+        step_hours=1.0,
+        selected_vessels=[vessel],
+        monte_carlo_config={"enabled": True, "ensemble_size": 15, "seed": 42},
+    )
+
+    assert result.monte_carlo_ensemble is not None
+    assert result.monte_carlo_ensemble["ensemble_size"] == 15
+    assert len(result.vessels) == 1
+    assert result.vessels[0].ensemble_evidence is not None
+    assert 0.0 <= result.vessels[0].ensemble_evidence["ensemble_support_fraction"] <= 1.0
+
+
+def test_phase5_store_roundtrip(tmp_path: Path):
+    """Verify ExperimentStore saves and retrieves monte_carlo_ensemble and ensemble_evidence correctly."""
+    db_path = tmp_path / "test_store.db"
+    store = ExperimentStore(db_path=db_path)
+
+    obs_time = datetime(2018, 10, 8, 5, 28, tzinfo=timezone.utc)
+    era5_path = tmp_path / "era5.nc"
+    cmems_path = tmp_path / "cmems.nc"
+    _make_era5_nc(era5_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+    _make_cmems_nc(cmems_path, obs_time, [9.0, 9.5, 10.0], [43.0, 43.5, 44.0])
+
+    runner = ExperimentRunner()
+    result = runner.run(
+        satellite_product_id="TEST_S1",
+        observation_lon=9.5,
+        observation_lat=43.5,
+        observation_time=obs_time,
+        era5_netcdf_path=str(era5_path),
+        cmems_netcdf_path=str(cmems_path),
+        backtrack_hours=4.0,
+        step_hours=1.0,
+        selected_vessels=[{"mmsi": "111", "vessel_name": "V1", "positions": []}],
+        monte_carlo_config={"enabled": True, "ensemble_size": 10, "seed": 42},
+    )
+
+    store.save(result)
+    retrieved = store.get_run(result.run_id)
+
+    assert retrieved is not None
+    assert retrieved.monte_carlo_ensemble is not None
+    assert retrieved.monte_carlo_ensemble["ensemble_size"] == 10
+    assert retrieved.vessels[0].ensemble_evidence is not None
+
 
 
 

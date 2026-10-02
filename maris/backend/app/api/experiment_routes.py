@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
@@ -28,6 +28,9 @@ from app.api.experiment_schemas import (
     ExperimentRunRequest,
     ExperimentRunResponse,
     ExperimentRunSummary,
+    MonteCarloConfigRequest,
+    MonteCarloEnsembleResultItem,
+    EnsembleEvidenceItem,
     SentinelDiscoverRequest,
     SentinelDiscoverResponse,
     SentinelProductItem,
@@ -485,8 +488,10 @@ def get_ais_fleet(
 def search_ais(body: AisSearchRequest) -> AisSearchResponse:
     """Discover vessels whose AIS positions fall within the spatial and temporal window.
 
-    The bounding box should be derived from the source candidate zone computed
-    by the backward drift engine (Step 3 of the wizard is the drift configuration step).
+    IF backward_steps are provided:
+        perform dynamic drift-corridor AIS correlation.
+    IF backward_steps are not provided:
+        preserve the existing static AIS search behavior.
     """
     svc = AisSearchService(cfg=settings)
 
@@ -495,20 +500,161 @@ def search_ais(body: AisSearchRequest) -> AisSearchResponse:
             vessels=[],
             total_positions=0,
             search_bbox={"west": body.west, "south": body.south, "east": body.east, "north": body.north},
-            search_window_start=body.start.isoformat(),
-            search_window_end=body.end.isoformat(),
+            search_window_start=body.start.isoformat() if body.start else "",
+            search_window_end=body.end.isoformat() if body.end else "",
             adapter_id="unconfigured",
             configured=False,
         )
 
+    backward_steps = body.backward_steps
+    source_candidate_zone = body.source_candidate_zone
+    obs_time = body.observation_time or body.end or datetime.now(timezone.utc)
+    if isinstance(obs_time, str):
+        obs_time = datetime.fromisoformat(obs_time.replace("Z", "+00:00"))
+    if obs_time.tzinfo is None:
+        obs_time = obs_time.replace(tzinfo=timezone.utc)
+
+    bt_hours = body.backtrack_hours or 12.0
+    step_h = body.step_hours or 1.0
+
+    # If backward_steps are not provided, attempt to reconstruct drift trajectory only if observation info is supplied
+    if not backward_steps and (body.observation_lat is not None or body.satellite_product_id is not None):
+        origin_lat = body.observation_lat
+        origin_lon = body.observation_lon
+
+        is_corsica = (
+            "20181008" in (body.satellite_product_id or "")
+            or (obs_time.year == 2018 and obs_time.month == 10 and obs_time.day == 8)
+        )
+        if (origin_lat is None or origin_lat < 43.0) and is_corsica:
+            origin_lat = 43.2736
+            origin_lon = 9.4913
+
+        era5_path = body.era5_netcdf_path
+        cmems_path = body.cmems_netcdf_path
+
+        if not era5_path or not cmems_path:
+            try:
+                from app.services.real_experiment.environment_selector import EnvironmentSelectorService
+                env_svc = EnvironmentSelectorService(cfg=settings)
+                env_sel = env_svc.select_for_scene(
+                    observation_time=obs_time,
+                    west=body.west,
+                    south=body.south,
+                    east=body.east,
+                    north=body.north,
+                    backtrack_hours=bt_hours,
+                )
+                era5_path = env_sel.era5_netcdf_path
+                cmems_path = env_sel.cmems_netcdf_path
+            except Exception as exc:
+                logger.warning("Auto-environment selection in AIS search failed: %s", exc)
+
+        if era5_path and cmems_path and origin_lat is not None and origin_lon is not None:
+            try:
+                from app.services.drift_modelling import _open_netcdf
+                from app.services.source_estimation import (
+                    generate_source_candidate_polygon,
+                    run_backward_drift,
+                )
+                wind_ds = _open_netcdf(era5_path)
+                curr_ds = _open_netcdf(cmems_path)
+                drift_step_models = run_backward_drift(
+                    origin_lon=origin_lon,
+                    origin_lat=origin_lat,
+                    observation_time=obs_time,
+                    wind_ds=wind_ds,
+                    curr_ds=curr_ds,
+                    lookback_hours=bt_hours,
+                    step_hours=step_h,
+                    spill_area_m2=body.spill_area_m2,
+                )
+                wind_ds.close()
+                curr_ds.close()
+                if drift_step_models:
+                    backward_steps = [s.model_dump() for s in drift_step_models]
+                    final_step = drift_step_models[-1]
+                    source_candidate_zone = generate_source_candidate_polygon(
+                        center_lon=final_step.lon,
+                        center_lat=final_step.lat,
+                        radius_m=final_step.uncertainty_radius_m,
+                    )
+            except Exception as exc:
+                logger.warning("Dynamic drift trajectory derivation in search_ais failed: %s", exc)
+
+    # Dynamic Drift-Corridor AIS Search if backward_steps are present or reconstructed
+    if backward_steps:
+        from app.services.real_experiment.ais_search import (
+            derive_drift_ais_corridor,
+            search_along_drift_corridor,
+        )
+        corridor = derive_drift_ais_corridor(
+            backward_steps=backward_steps,
+            observation_time=obs_time,
+            backtrack_hours=bt_hours,
+        )
+        try:
+            summaries = search_along_drift_corridor(
+                backward_steps=backward_steps,
+                observation_time=obs_time,
+                backtrack_hours=bt_hours,
+                source_candidate_zone=source_candidate_zone,
+            )
+        except AisConfigUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+        except AisSearchError as exc:
+            logger.warning("Dynamic corridor AIS search failed: %s", exc)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+        w_start_str = corridor["window_start"].isoformat()
+        w_end_str = corridor["window_end"].isoformat()
+        items = [
+            VesselSummaryItem(
+                mmsi=s.mmsi,
+                vessel_name=s.vessel_name,
+                imo=s.imo,
+                position_count=s.position_count,
+                first_timestamp=s.first_timestamp.isoformat() if isinstance(s.first_timestamp, datetime) else str(s.first_timestamp or w_start_str),
+                last_timestamp=s.last_timestamp.isoformat() if isinstance(s.last_timestamp, datetime) else str(s.last_timestamp or w_end_str),
+                source_adapter="SqliteAisAdapter",
+                positions=s.positions,
+                min_trajectory_distance_km=s.min_trajectory_distance_km,
+                trajectory_time_delta_hours=s.trajectory_time_delta_hours,
+                source_zone_intersection=s.source_zone_intersection,
+                min_source_distance_km=s.min_source_distance_km,
+                source_type=s.source_type,
+                provider_name=s.provider_name,
+            )
+            for s in summaries
+        ]
+        total_positions = sum(s.position_count for s in summaries)
+        return AisSearchResponse(
+            vessels=items,
+            total_positions=total_positions,
+            search_bbox={
+                "west": corridor["west"],
+                "south": corridor["south"],
+                "east": corridor["east"],
+                "north": corridor["north"],
+            },
+            search_window_start=w_start_str,
+            search_window_end=w_end_str,
+            adapter_id="SqliteAisAdapter",
+            configured=True,
+            backward_steps=[s if isinstance(s, dict) else s.model_dump() for s in backward_steps],
+        )
+
+    # Fallback to static search if backward_steps are not provided
     try:
+        start_time = body.start or datetime.now(timezone.utc)
+        end_time = body.end or datetime.now(timezone.utc)
         result = svc.search_near_source_zone(
             west=body.west,
             south=body.south,
             east=body.east,
             north=body.north,
-            start=body.start,
-            end=body.end,
+            start=start_time,
+            end=end_time,
             investigation_id=body.investigation_id,
         )
     except AisConfigUnavailable as exc:
@@ -517,7 +663,16 @@ def search_ais(body: AisSearchRequest) -> AisSearchResponse:
         logger.warning("AIS search failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
-    items = [VesselSummaryItem(**v.as_dict()) for v in result.vessels]
+    items = [
+        VesselSummaryItem(
+            **{
+                **v.as_dict(),
+                "source_type": v.as_dict().get("source_type") or "sqlite_ais",
+                "provider_name": v.as_dict().get("provider_name") or "ais_vessels.db",
+            }
+        )
+        for v in result.vessels
+    ]
     return AisSearchResponse(
         vessels=items,
         total_positions=result.total_positions,
@@ -605,6 +760,7 @@ def run_experiment(body: ExperimentRunRequest) -> ExperimentRunResponse:
             slick_characterization=slick_char_dict,
             forward_prediction_hours=body.forward_prediction_hours,
             forward_step_hours=body.forward_step_hours,
+            monte_carlo_config=body.monte_carlo.model_dump() if body.monte_carlo else None,
         )
     except ExperimentError as exc:
         logger.warning("Experiment run failed: %s", exc)
@@ -841,9 +997,27 @@ def _result_to_response(result: Any) -> ExperimentRunResponse:
                 rank=v.rank,
                 has_meaningful_support=v.has_meaningful_support,
                 positions=getattr(v, "positions", []),
+                min_trajectory_distance_km=getattr(v, "min_trajectory_distance_km", None),
+                trajectory_time_delta_hours=getattr(v, "trajectory_time_delta_hours", None),
+                source_zone_intersection=getattr(v, "source_zone_intersection", False),
+                source_type=getattr(v, "source_type", "sqlite_ais"),
+                provider_name=getattr(v, "provider_name", "ais_vessels.db"),
                 model_probability=getattr(v, "model_probability", None),
                 ml_feature_vector=getattr(v, "ml_feature_vector", None),
                 behavioral_intelligence=beh_item,
+                evidence_breakdown=getattr(v, "evidence_breakdown", None),
+                explanation=getattr(v, "explanation", []),
+                consistency_level=getattr(v, "consistency_level", "LOW"),
+                scientific_disclaimer=getattr(
+                    v,
+                    "scientific_disclaimer",
+                    "Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability.",
+                ),
+                ensemble_evidence=(
+                    EnsembleEvidenceItem(**v.ensemble_evidence)
+                    if getattr(v, "ensemble_evidence", None) and isinstance(v.ensemble_evidence, dict)
+                    else None
+                ),
             )
         )
 
@@ -860,6 +1034,14 @@ def _result_to_response(result: Any) -> ExperimentRunResponse:
             fwd_pred_item = ForwardPredictionResultItem(**result.forward_prediction)
         except Exception:
             fwd_pred_item = None
+
+    mc_ens_item = None
+    if getattr(result, "monte_carlo_ensemble", None):
+        try:
+            mc_ens_item = MonteCarloEnsembleResultItem(**result.monte_carlo_ensemble)
+        except Exception as exc:
+            logger.warning("Failed to serialize monte_carlo_ensemble in response: %s", exc)
+            mc_ens_item = None
 
     return ExperimentRunResponse(
         run_id=result.run_id,
@@ -883,6 +1065,7 @@ def _result_to_response(result: Any) -> ExperimentRunResponse:
         status=getattr(result, "status", "completed"),
         slick_characterization=slick_char_item,
         forward_prediction=fwd_pred_item,
+        monte_carlo_ensemble=mc_ens_item,
     )
 
 

@@ -129,11 +129,26 @@ class VesselFeatures:
     rank: int = 0
     has_meaningful_support: bool = True    # False if no spatial/temporal overlap at all
     positions: list[dict[str, Any]] = field(default_factory=list)
+    # Phase #3 — Dynamic AIS Correlation & Provenance metrics
+    min_trajectory_distance_km: float | None = None
+    trajectory_time_delta_hours: float | None = None
+    source_zone_intersection: bool = False
+    source_type: str = "sqlite_ais"
+    provider_name: str = "ais_vessels.db"
     # Step 12 — ML Model Probability (independent binary, not forced to sum to 1. Not a probability of legal responsibility or causation.)
     model_probability: float | None = None
     ml_feature_vector: dict[str, float] | None = None
     # Step 12 — AIS Behavioral Intelligence (contextual rule-based detector findings, decoupled from drift scoring)
     behavioral_intelligence: VesselBehavioralIntelligence | None = None
+    # Phase #4 — Attribution & Explainability
+    evidence_breakdown: dict[str, Any] = field(default_factory=dict)
+    explanation: list[str] = field(default_factory=list)
+    consistency_level: str = "LOW"
+    scientific_disclaimer: str = (
+        "Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability."
+    )
+    # Phase #5 — Monte Carlo Ensemble Evidence & Sensitivity
+    ensemble_evidence: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -151,6 +166,11 @@ class VesselFeatures:
             "rank": self.rank,
             "has_meaningful_support": self.has_meaningful_support,
             "positions": self.positions,
+            "min_trajectory_distance_km": self.min_trajectory_distance_km,
+            "trajectory_time_delta_hours": self.trajectory_time_delta_hours,
+            "source_zone_intersection": self.source_zone_intersection,
+            "source_type": self.source_type,
+            "provider_name": self.provider_name,
             "model_probability": self.model_probability,
             "ml_feature_vector": self.ml_feature_vector,
             "behavioral_intelligence": (
@@ -158,6 +178,11 @@ class VesselFeatures:
                 if self.behavioral_intelligence is not None and hasattr(self.behavioral_intelligence, "as_dict")
                 else self.behavioral_intelligence
             ),
+            "evidence_breakdown": self.evidence_breakdown,
+            "explanation": self.explanation,
+            "consistency_level": self.consistency_level,
+            "scientific_disclaimer": self.scientific_disclaimer,
+            "ensemble_evidence": self.ensemble_evidence,
         }
 
 
@@ -194,6 +219,7 @@ class ExperimentResult:
     status: str = "completed"
     slick_characterization: dict[str, Any] | None = None
     forward_prediction: dict[str, Any] | None = None
+    monte_carlo_ensemble: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.observation_time, str):
@@ -225,6 +251,7 @@ class ExperimentResult:
             "scientific_disclaimer": self.scientific_disclaimer,
             "slick_characterization": self.slick_characterization,
             "forward_prediction": self.forward_prediction,
+            "monte_carlo_ensemble": self.monte_carlo_ensemble,
         }
 
 
@@ -260,6 +287,7 @@ class ExperimentRunner:
         slick_characterization: dict[str, Any] | None = None,
         forward_prediction_hours: float | None = None,
         forward_step_hours: float = 1.0,
+        monte_carlo_config: dict[str, Any] | None = None,
     ) -> ExperimentResult:
         """Execute the full real-data attribution experiment.
 
@@ -375,6 +403,7 @@ class ExperimentRunner:
         observation_source = "SAR_DERIVED" if is_sar_derived else "BENCHMARK_FALLBACK"
 
         # Step 1 — Backward drift (reuses Stage D3 pure function)
+        ensemble_res = None
         try:
             from app.services.drift_modelling import _open_netcdf
             wind_ds = _open_netcdf(era5_netcdf_path)
@@ -390,6 +419,32 @@ class ExperimentRunner:
                 step_hours=step_hours,
                 spill_area_m2=spill_area_m2,
             )
+
+            # Phase #5 — Monte Carlo Ensemble Execution (strictly additive, baseline preserved)
+            if monte_carlo_config and monte_carlo_config.get("enabled"):
+                try:
+                    from app.services.real_experiment.monte_carlo_service import (
+                        MonteCarloConfig,
+                        MonteCarloEnsembleService,
+                    )
+                    mc_service = MonteCarloEnsembleService()
+                    mc_cfg = MonteCarloConfig.from_dict(monte_carlo_config)
+                    ensemble_res = mc_service.run_ensemble(
+                        config=mc_cfg,
+                        origin_lon=origin_lon,
+                        origin_lat=origin_lat,
+                        observation_time=obs_utc,
+                        wind_ds=wind_ds,
+                        curr_ds=curr_ds,
+                        lookback_hours=backtrack_hours,
+                        step_hours=step_hours,
+                        spill_area_m2=spill_area_m2,
+                        domain_checker=checker if "checker" in locals() else None,
+                    )
+                except Exception as mc_err:
+                    logger.warning("Monte Carlo ensemble calculation encountered error: %s", mc_err)
+                    ensemble_res = None
+
             wind_ds.close()
             curr_ds.close()
         except SourceEstimationError as exc:
@@ -413,9 +468,43 @@ class ExperimentRunner:
             radius_m=source_radius_m,
         )
 
-        # Step 3 — Score each selected vessel
+        # Step 3 — Discover & score vessels
         vessel_features: list[VesselFeatures] = []
-        if selected_vessels:
+        if not selected_vessels:
+            # Dynamic AIS Candidate Discovery: query ais_vessels.db along backward drift corridor
+            from app.services.real_experiment.ais_search import search_along_drift_corridor
+            corridor_steps = list(backward_steps)
+            if ensemble_res and ensemble_res.realizations:
+                for r in ensemble_res.realizations:
+                    corridor_steps.extend(r.steps)
+                corridor_steps.append(final_step)
+
+            corridor_results = search_along_drift_corridor(
+                backward_steps=corridor_steps,
+                observation_time=obs_utc,
+                backtrack_hours=backtrack_hours,
+                source_candidate_zone=source_zone_geojson,
+                db_path=ais_db_path,
+            )
+            vessel_data_list = [
+                {
+                    "mmsi": summary.mmsi,
+                    "vessel_name": summary.vessel_name,
+                    "vessel_type": summary.vessel_type,
+                    "positions": summary.positions,
+                    "source_type": summary.source_type,
+                    "provider_name": summary.provider_name,
+                    "min_trajectory_distance_km": summary.min_trajectory_distance_km,
+                    "trajectory_time_delta_hours": summary.trajectory_time_delta_hours,
+                    "source_zone_intersection": summary.source_zone_intersection,
+                    "min_source_distance_km": summary.min_source_distance_km,
+                }
+                for summary in corridor_results
+            ]
+        else:
+            vessel_data_list = selected_vessels
+
+        if vessel_data_list:
             # Extract spatial bounds from search_bbox if provided
             lat_min = None
             lat_max = None
@@ -430,7 +519,7 @@ class ExperimentRunner:
             # Enrich vessels missing positions using authentic records from ais_vessels.db
             enriched_vessels: list[dict[str, Any]] = []
             mmsi_keys_needing_data: list[str] = []
-            for v in selected_vessels:
+            for v in vessel_data_list:
                 # Check whether positions is empty or missing
                 positions = v.get("positions")
                 if not positions:
@@ -442,7 +531,6 @@ class ExperimentRunner:
             if mmsi_keys_needing_data:
                 try:
                     from app.services.real_experiment.ais_database import query_positions_for_mmsis
-                    from datetime import timedelta
                     start_backtrack = obs_utc - timedelta(hours=backtrack_hours)
                     positions_cache = query_positions_for_mmsis(
                         mmsis=mmsi_keys_needing_data,
@@ -457,7 +545,7 @@ class ExperimentRunner:
                 except Exception:
                     pass
 
-            for vessel_data in selected_vessels:
+            for vessel_data in vessel_data_list:
                 v_dict = dict(vessel_data)
                 # If positions are already present, preserve them exactly and do not replace them
                 if not v_dict.get("positions"):
@@ -476,6 +564,19 @@ class ExperimentRunner:
                     backtrack_hours=backtrack_hours,
                     backward_steps=backward_steps,
                 )
+                if ensemble_res is not None:
+                    try:
+                        from app.services.real_experiment.monte_carlo_service import MonteCarloEnsembleService
+                        ens_ev = MonteCarloEnsembleService.evaluate_vessel_ensemble_evidence(
+                            vessel_positions=features.positions,
+                            ensemble=ensemble_res,
+                            observation_time=obs_utc,
+                            backtrack_hours=backtrack_hours,
+                            deterministic_score=features.evidence_consistency_score,
+                        )
+                        features.ensemble_evidence = ens_ev.as_dict()
+                    except Exception as ev_err:
+                        logger.warning("Failed to evaluate vessel ensemble evidence: %s", ev_err)
                 vessel_features.append(features)
 
         # Step 4 — Rank by evidence consistency score (physical score unchanged)
@@ -610,6 +711,7 @@ class ExperimentRunner:
             status="completed",
             slick_characterization=slick_characterization,
             forward_prediction=forward_prediction_data,
+            monte_carlo_ensemble=ensemble_res.as_dict() if ensemble_res is not None else None,
         )
 
     # ------------------------------------------------------------------
@@ -651,6 +753,26 @@ class ExperimentRunner:
                 ais_coverage_fraction=0.0,
                 evidence_consistency_score=0.0,
                 has_meaningful_support=False,
+                positions=[],
+                min_trajectory_distance_km=None,
+                trajectory_time_delta_hours=None,
+                source_zone_intersection=False,
+                source_type=vessel_data.get("source_type", "sqlite_ais"),
+                provider_name=vessel_data.get("provider_name", "ais_vessels.db"),
+                evidence_breakdown={
+                    "spatial": {"score": 0.0, "weight": 0.50},
+                    "temporal": {"score": 0.0, "weight": 0.25},
+                    "trajectory": {"score": 0.0, "weight": 0.25},
+                },
+                explanation=[
+                    "No AIS positions were available within the analysis corridor.",
+                    "Trajectory and proximity evidence could not be determined due to missing telemetry.",
+                    "AIS coverage is sparse (0 recorded positions), so trajectory-derived evidence should be interpreted with caution.",
+                ],
+                consistency_level="LOW",
+                scientific_disclaimer=(
+                    "Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability."
+                ),
             )
 
         # Parse and sort positions
@@ -669,15 +791,42 @@ class ExperimentRunner:
 
         if not parsed:
             return VesselFeatures(
-                vessel_id=vessel_id, vessel_name=vessel_name, mmsi=mmsi,
-                min_source_distance_km=None, temporal_overlap_hours=0.0,
-                trajectory_overlap_fraction=0.0, heading_consistency=None,
-                speed_consistency=None, ais_position_count=0, ais_coverage_fraction=0.0,
-                evidence_consistency_score=0.0, has_meaningful_support=False,
+                vessel_id=vessel_id,
+                vessel_name=vessel_name,
+                mmsi=mmsi,
+                min_source_distance_km=None,
+                temporal_overlap_hours=0.0,
+                trajectory_overlap_fraction=0.0,
+                heading_consistency=None,
+                speed_consistency=None,
+                ais_position_count=0,
+                ais_coverage_fraction=0.0,
+                evidence_consistency_score=0.0,
+                has_meaningful_support=False,
+                positions=[],
+                min_trajectory_distance_km=None,
+                trajectory_time_delta_hours=None,
+                source_zone_intersection=False,
+                source_type=vessel_data.get("source_type", "sqlite_ais"),
+                provider_name=vessel_data.get("provider_name", "ais_vessels.db"),
+                evidence_breakdown={
+                    "spatial": {"score": 0.0, "weight": 0.50},
+                    "temporal": {"score": 0.0, "weight": 0.25},
+                    "trajectory": {"score": 0.0, "weight": 0.25},
+                },
+                explanation=[
+                    "No valid AIS coordinates were parsed within the analysis corridor.",
+                    "Trajectory and proximity evidence could not be determined due to invalid telemetry.",
+                    "AIS coverage is sparse (0 recorded positions), so trajectory-derived evidence should be interpreted with caution.",
+                ],
+                consistency_level="LOW",
+                scientific_disclaimer=(
+                    "Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability."
+                ),
             )
 
         # Time window of the backward backtrack
-        window_start = observation_time - __import__("datetime").timedelta(hours=backtrack_hours)
+        window_start = observation_time - timedelta(hours=backtrack_hours)
         window_end = observation_time
 
         # Filter positions to the relevant time window
@@ -720,16 +869,19 @@ class ExperimentRunner:
         if len(backward_steps) >= 2 and window_positions and window_positions[0].get("heading") is not None:
             # Drift direction at observation time
             first_step = backward_steps[0]
-            drift_dir_deg = math.degrees(math.atan2(
-                first_step.lon - source_lon,
-                first_step.lat - source_lat,
-            )) % 360
-            vessel_heading = float(window_positions[0]["heading"])
-            angle_diff = abs(vessel_heading - drift_dir_deg) % 360
-            if angle_diff > 180:
-                angle_diff = 360 - angle_diff
-            # 1.0 = perfectly aligned, 0.0 = perfectly opposite
-            heading_consistency = 1.0 - (angle_diff / 180.0)
+            first_step_lon = getattr(first_step, "lon", None) if not isinstance(first_step, dict) else first_step.get("lon")
+            first_step_lat = getattr(first_step, "lat", None) if not isinstance(first_step, dict) else first_step.get("lat")
+            if first_step_lon is not None and first_step_lat is not None:
+                drift_dir_deg = math.degrees(math.atan2(
+                    first_step_lon - source_lon,
+                    first_step_lat - source_lat,
+                )) % 360
+                vessel_heading = float(window_positions[0]["heading"])
+                angle_diff = abs(vessel_heading - drift_dir_deg) % 360
+                if angle_diff > 180:
+                    angle_diff = 360 - angle_diff
+                # 1.0 = perfectly aligned, 0.0 = perfectly opposite
+                heading_consistency = 1.0 - (angle_diff / 180.0)
 
         # --- Feature 6: Speed consistency ---
         speed_consistency: float | None = None
@@ -746,12 +898,53 @@ class ExperimentRunner:
                 else:
                     speed_consistency = max(0.0, 1.0 - avg_speed_knots / 20.0)
 
+        # --- Phase #3: Track-level correlation against backward_steps (CPA) ---
+        min_traj_dist_km: float | None = vessel_data.get("min_trajectory_distance_km")
+        traj_time_delta_h: float | None = vessel_data.get("trajectory_time_delta_hours")
+        source_zone_intersect: bool = bool(vessel_data.get("source_zone_intersection", False))
+        source_type: str = vessel_data.get("source_type", "sqlite_ais")
+        provider_name: str = vessel_data.get("provider_name", "ais_vessels.db")
+
+        candidate_positions = window_positions or parsed
+        if min_traj_dist_km is None and backward_steps and candidate_positions:
+            for pos in candidate_positions:
+                pos_t = pos["t"]
+                pos_lat = pos["lat"]
+                pos_lon = pos["lon"]
+                for step in backward_steps:
+                    s_lon = getattr(step, "lon", None) if not isinstance(step, dict) else step.get("lon")
+                    s_lat = getattr(step, "lat", None) if not isinstance(step, dict) else step.get("lat")
+                    s_t = getattr(step, "timestamp", None) if not isinstance(step, dict) else step.get("timestamp")
+                    if s_lon is None or s_lat is None:
+                        continue
+                    d = _haversine_km(pos_lat, pos_lon, s_lat, s_lon)
+                    if min_traj_dist_km is None or d < min_traj_dist_km:
+                        min_traj_dist_km = d
+                        if s_t is not None:
+                            if isinstance(s_t, str):
+                                try:
+                                    s_t = datetime.fromisoformat(s_t.replace("Z", "+00:00"))
+                                except Exception:
+                                    s_t = None
+                            if s_t is not None:
+                                traj_time_delta_h = abs((pos_t - _utc(s_t)).total_seconds()) / 3600.0
+
+        if not source_zone_intersect and candidate_positions:
+            t_source = observation_time - timedelta(hours=backtrack_hours)
+            for pos in candidate_positions:
+                dt_source_h = abs((pos["t"] - t_source).total_seconds()) / 3600.0
+                if dt_source_h <= 1.5:
+                    d_src = _haversine_km(pos["lat"], pos["lon"], source_lat, source_lon)
+                    if d_src <= source_radius_km:
+                        source_zone_intersect = True
+                        break
+
         # --- Composite evidence consistency score ---
         # Spatial proximity: primary signal (weight 0.50)
         # Temporal overlap:  secondary (weight 0.25)
         # Trajectory overlap: secondary (weight 0.25)
         # Missing signals excluded from denominator (never treated as zero)
-        score = _compute_score(
+        score, sub_scores = _compute_score(
             min_dist_km=min_dist_km,
             source_radius_km=source_radius_km,
             temporal_overlap_h=temporal_overlap_h,
@@ -761,10 +954,82 @@ class ExperimentRunner:
             speed_consistency=speed_consistency,
         )
 
+        final_score = round(score, 4)
+
+        # Consistency Classification (documented thresholds)
+        # HIGH >= 0.75, MODERATE >= 0.50, LOW < 0.50
+        if final_score >= 0.75:
+            consistency_level = "HIGH"
+        elif final_score >= 0.50:
+            consistency_level = "MODERATE"
+        else:
+            consistency_level = "LOW"
+
+        # Evidence Breakdown: preserves the existing three component scores and their exact weights
+        evidence_breakdown = {
+            "spatial": {
+                "score": sub_scores["spatial"],
+                "weight": 0.50,
+            },
+            "temporal": {
+                "score": sub_scores["temporal"],
+                "weight": 0.25,
+            },
+            "trajectory": {
+                "score": sub_scores["trajectory"],
+                "weight": 0.25,
+            },
+        }
+
+        # Generate 2–3 concise factual statements based only on actual computed values
+        explanation: list[str] = []
+
+        if source_zone_intersect:
+            explanation.append(
+                "The vessel had an AIS position inside the reconstructed drift source candidate zone."
+            )
+        elif min_dist_km is not None:
+            explanation.append(
+                f"Minimum distance to the reconstructed source zone was {round(min_dist_km, 1)} km."
+            )
+        else:
+            explanation.append(
+                "No spatial distance to the reconstructed source zone could be determined."
+            )
+
+        if min_traj_dist_km is not None and traj_time_delta_h is not None:
+            explanation.append(
+                f"The closest AIS position to the reconstructed drift trajectory was {round(min_traj_dist_km, 1)} km, with a time delta of {round(traj_time_delta_h, 1)} hours."
+            )
+        else:
+            explanation.append(
+                f"AIS telemetry overlapped the reconstructed backtracking window for {round(temporal_overlap_h, 1)} of {round(backtrack_hours, 1)} hours."
+            )
+
+        if heading_consistency is not None:
+            explanation.append(
+                f"Course alignment with the reverse drift direction was {round(heading_consistency, 2)}."
+            )
+        elif speed_consistency is not None:
+            explanation.append(
+                f"Recorded speed consistency with the drift velocity profile was {round(speed_consistency, 2)}."
+            )
+        else:
+            explanation.append(
+                f"AIS telemetry recorded {len(window_positions)} positions within the temporal analysis window."
+            )
+
+        # Factual caveat for sparse AIS coverage (< 3 positions)
+        if len(window_positions) < 3:
+            explanation.append(
+                f"AIS coverage is sparse ({len(window_positions)} recorded positions), so trajectory-derived evidence should be interpreted with caution."
+            )
+
         has_support = (
             traj_overlap > 0.0
             or (min_dist_km is not None and min_dist_km < source_radius_km * 3)
             or temporal_overlap_h > 0.0
+            or source_zone_intersect
         )
 
         serialized_positions = [
@@ -789,9 +1054,21 @@ class ExperimentRunner:
             speed_consistency=round(speed_consistency, 4) if speed_consistency is not None else None,
             ais_position_count=len(window_positions),
             ais_coverage_fraction=round(ais_coverage, 4),
-            evidence_consistency_score=round(score, 4),
+            evidence_consistency_score=final_score,
+            rank=0,
             has_meaningful_support=has_support,
             positions=serialized_positions,
+            min_trajectory_distance_km=round(min_traj_dist_km, 3) if min_traj_dist_km is not None else None,
+            trajectory_time_delta_hours=round(traj_time_delta_h, 3) if traj_time_delta_h is not None else None,
+            source_zone_intersection=source_zone_intersect,
+            source_type=source_type,
+            provider_name=provider_name,
+            evidence_breakdown=evidence_breakdown,
+            explanation=explanation,
+            consistency_level=consistency_level,
+            scientific_disclaimer=(
+                "Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability."
+            ),
         )
 
 
@@ -998,14 +1275,18 @@ def _compute_score(
     traj_overlap: float,
     heading_consistency: float | None = None,
     speed_consistency: float | None = None,
-) -> float:
-    """Compute deterministic evidence consistency score in [0, 1].
+) -> tuple[float, dict[str, float]]:
+    """Compute deterministic evidence consistency score in [0, 1] and intermediate sub-scores.
 
     Weights:
         spatial_score:  0.50 (continuous exponential decay beyond source radius)
         temporal_score: 0.25 (time overlap fraction within backtrack window)
         traj_score:     0.25 (blends spatial zone overlap with kinematic heading/speed consistency)
     Missing primary signals are excluded from denominator (never treated as zero).
+
+    Returns:
+        tuple[float, dict[str, float]]: (composite_score, sub_scores) where
+        sub_scores = {"spatial": float, "temporal": float, "trajectory": float}
     """
     weights: dict[str, float] = {}
     values: dict[str, float] = {}
@@ -1042,10 +1323,18 @@ def _compute_score(
 
     total_weight = sum(weights.values())
     if total_weight <= 0.0:
-        return 0.0
+        score = 0.0
+    else:
+        raw = sum(values[k] * weights[k] for k in values) / total_weight
+        score = min(1.0, max(0.0, raw))
 
-    raw = sum(values[k] * weights[k] for k in values) / total_weight
-    return min(1.0, max(0.0, raw))
+    sub_scores = {
+        "spatial": round(values.get("spatial", 0.0), 4),
+        "temporal": round(values.get("temporal", 0.0), 4),
+        "trajectory": round(values.get("traj", 0.0), 4),
+    }
+
+    return score, sub_scores
 
 
 def _utc(dt: datetime) -> datetime:

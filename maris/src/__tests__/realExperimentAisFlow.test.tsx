@@ -142,6 +142,21 @@ describe('Real-Data Observation Wizard — AIS Integration Flow (Step 4 -> Step 
             evidence_consistency_score: posCount > 0 ? 0.78 : 0.0,
             rank: 1,
             has_meaningful_support: posCount > 0,
+            evidence_breakdown: {
+              spatial: { score: 0.93, weight: 0.50 },
+              temporal: { score: 1.0, weight: 0.25 },
+              trajectory: { score: 0.85, weight: 0.25 },
+            },
+            explanation: [
+              'Minimum distance to the reconstructed source zone was 1.2 km.',
+              'AIS telemetry overlapped the reconstructed backtracking window for 8.5 of 12.0 hours.',
+              'Course alignment with the reverse drift direction was 0.88.',
+            ],
+            consistency_level: 'HIGH',
+            scientific_disclaimer:
+              'Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability.',
+            source_type: 'sqlite_ais',
+            provider_name: 'ais_vessels.db',
           },
         ],
         era5_path: req.era5_netcdf_path,
@@ -216,5 +231,15 @@ describe('Real-Data Observation Wizard — AIS Integration Flow (Step 4 -> Step 
     // The rendered count must be 12, NOT 0
     expect(screen.getByText('12')).toBeDefined()
     expect(screen.queryByText('No meaningful spatial/temporal overlap with source zone')).toBeNull()
+
+    // Phase #4: Verify Evidence Breakdown & Traceability display
+    expect(screen.getByText(/Evidence Breakdown & Traceability/i)).toBeDefined()
+    expect(screen.getByText(/Evidence Consistency Level: HIGH/i)).toBeDefined()
+    expect(screen.getByText(/Weight 50%/i)).toBeDefined()
+    expect(screen.getAllByText(/Weight 25%/i).length).toBe(2)
+    expect(screen.getByText(/Attribution Evidence Chain/i)).toBeDefined()
+    expect(screen.getByText(/Minimum distance to the reconstructed source zone was 1.2 km./i)).toBeDefined()
+    expect(screen.getByText(/Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability./i)).toBeDefined()
+    expect(screen.getAllByText(/ais_vessels.db/i).length).toBeGreaterThan(0)
   })
 })

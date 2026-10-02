@@ -560,6 +560,64 @@ export function HistoricalRunDetail({
         </div>
       </div>
 
+      {/* 4b. Monte Carlo Ensemble Uncertainty Propagation (Phase #5) */}
+      {detailRun.monte_carlo_ensemble && (
+        <div
+          className="re-source-zone-card"
+          style={{
+            marginTop: '1.25rem',
+            borderColor: '#38bdf8',
+            background: 'linear-gradient(180deg, rgba(8, 47, 73, 0.4) 0%, rgba(15, 23, 42, 0.6) 100%)',
+          }}
+          data-testid="history-monte-carlo-panel"
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#38bdf8' }}>
+              <span>Uncertainty Propagation &amp; Monte Carlo Sensitivity</span>
+              <span style={{ fontSize: '0.65rem', background: 'rgba(56, 189, 248, 0.2)', padding: '0.15rem 0.45rem', borderRadius: '4px', textTransform: 'uppercase' }}>
+                Phase #5
+              </span>
+            </h4>
+            <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+              Seed: <code style={{ color: '#38bdf8' }}>{detailRun.monte_carlo_ensemble.effective_seed ?? 'N/A'}</code>
+            </div>
+          </div>
+
+          <div className="re-source-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+            <div>
+              <div className="re-source-label">Ensemble Size</div>
+              <div className="re-source-value" style={{ color: '#38bdf8' }}>
+                {detailRun.monte_carlo_ensemble.num_realizations ?? (detailRun.monte_carlo_ensemble as any).ensemble_size ?? 0} realizations
+              </div>
+            </div>
+            <div>
+              <div className="re-source-label">Dispersion Radius</div>
+              <div className="re-source-value" style={{ color: '#38bdf8' }}>
+                {((detailRun.monte_carlo_ensemble.ensemble_dispersion_radius_m != null
+                  ? detailRun.monte_carlo_ensemble.ensemble_dispersion_radius_m / 1000
+                  : (detailRun.monte_carlo_ensemble as any).dispersion_radius_km) ?? 0).toFixed(2)} km
+              </div>
+            </div>
+            <div>
+              <div className="re-source-label">P05 – P95 Longitude</div>
+              <div className="re-source-value" style={{ fontSize: '0.85rem' }}>
+                {(detailRun.monte_carlo_ensemble.percentile_bounding_box?.p05_lon ?? (detailRun.monte_carlo_ensemble as any).p05_source_lon ?? 0).toFixed(4)}° to {(detailRun.monte_carlo_ensemble.percentile_bounding_box?.p95_lon ?? (detailRun.monte_carlo_ensemble as any).p95_source_lon ?? 0).toFixed(4)}°E
+              </div>
+            </div>
+            <div>
+              <div className="re-source-label">P05 – P95 Latitude</div>
+              <div className="re-source-value" style={{ fontSize: '0.85rem' }}>
+                {(detailRun.monte_carlo_ensemble.percentile_bounding_box?.p05_lat ?? (detailRun.monte_carlo_ensemble as any).p05_source_lat ?? 0).toFixed(4)}° to {(detailRun.monte_carlo_ensemble.percentile_bounding_box?.p95_lat ?? (detailRun.monte_carlo_ensemble as any).p95_source_lat ?? 0).toFixed(4)}°N
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: '0.75rem', fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic', borderTop: '1px solid rgba(56, 189, 248, 0.15)', paddingTop: '0.5rem' }}>
+            <strong>Notice:</strong> {detailRun.monte_carlo_ensemble.scientific_notice ?? (detailRun.monte_carlo_ensemble as any).scientific_disclaimer ?? ''}
+          </div>
+        </div>
+      )}
+
       {/* 5. Candidate Vessel Comparison Table (Authoritative Backend Ranking) */}
       <h4 className="re-section-heading">Candidate Vessels</h4>
       <p className="re-section-desc">
@@ -727,6 +785,148 @@ export function HistoricalRunDetail({
                     </div>
                   )}
                 </div>
+
+                {/* Phase #4: Evidence Breakdown & Traceability */}
+                {v.evidence_breakdown && (
+                  <div
+                    style={{
+                      marginTop: '0.85rem',
+                      padding: '0.75rem',
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(56, 189, 248, 0.15)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.6rem' }}>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Evidence Breakdown &amp; Traceability
+                      </span>
+                      {v.consistency_level && (
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            fontWeight: 700,
+                            padding: '0.15rem 0.45rem',
+                            borderRadius: '4px',
+                            background:
+                              v.consistency_level === 'HIGH'
+                                ? 'rgba(74, 222, 128, 0.15)'
+                                : v.consistency_level === 'MODERATE'
+                                ? 'rgba(250, 204, 21, 0.15)'
+                                : 'rgba(148, 163, 184, 0.15)',
+                            color:
+                              v.consistency_level === 'HIGH'
+                                ? '#4ade80'
+                                : v.consistency_level === 'MODERATE'
+                                ? '#facc15'
+                                : '#94a3b8',
+                          }}
+                        >
+                          Level: {v.consistency_level}
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', marginBottom: '0.6rem', textAlign: 'center', fontSize: '0.72rem' }}>
+                      <div style={{ background: 'rgba(30, 41, 59, 0.6)', padding: '0.35rem', borderRadius: '4px' }}>
+                        <span style={{ color: '#94a3b8', display: 'block', fontSize: '0.65rem' }}>Spatial (50%)</span>
+                        <strong style={{ color: '#38bdf8' }}>
+                          {(typeof v.evidence_breakdown.spatial === 'object' ? (v.evidence_breakdown.spatial?.score ?? 0) : (v.evidence_breakdown.spatial ?? 0)).toFixed(3)}
+                        </strong>
+                      </div>
+                      <div style={{ background: 'rgba(30, 41, 59, 0.6)', padding: '0.35rem', borderRadius: '4px' }}>
+                        <span style={{ color: '#94a3b8', display: 'block', fontSize: '0.65rem' }}>Temporal (25%)</span>
+                        <strong style={{ color: '#818cf8' }}>
+                          {(typeof v.evidence_breakdown.temporal === 'object' ? (v.evidence_breakdown.temporal?.score ?? 0) : (v.evidence_breakdown.temporal ?? 0)).toFixed(3)}
+                        </strong>
+                      </div>
+                      <div style={{ background: 'rgba(30, 41, 59, 0.6)', padding: '0.35rem', borderRadius: '4px' }}>
+                        <span style={{ color: '#94a3b8', display: 'block', fontSize: '0.65rem' }}>Trajectory (25%)</span>
+                        <strong style={{ color: '#34d399' }}>
+                          {(typeof v.evidence_breakdown.trajectory === 'object' ? (v.evidence_breakdown.trajectory?.score ?? 0) : (v.evidence_breakdown.trajectory ?? 0)).toFixed(3)}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {v.explanation && v.explanation.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.72rem', color: '#cbd5e1', lineHeight: 1.45 }}>
+                        {v.explanation.map((fact: string, idx: number) => (
+                          <li key={idx}>{fact}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/* Phase #5: Ensemble Sensitivity & Physical Robustness */}
+                {v.ensemble_evidence && (
+                  <div
+                    style={{
+                      marginTop: '0.65rem',
+                      padding: '0.75rem',
+                      background: 'rgba(8, 47, 73, 0.25)',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(56, 189, 248, 0.25)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
+                        Ensemble Sensitivity &amp; Robustness
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          padding: '0.15rem 0.45rem',
+                          borderRadius: '4px',
+                          background:
+                            v.ensemble_evidence.ensemble_support_fraction >= 0.7
+                              ? 'rgba(74, 222, 128, 0.15)'
+                              : 'rgba(250, 204, 21, 0.15)',
+                          color:
+                            v.ensemble_evidence.ensemble_support_fraction >= 0.7
+                              ? '#4ade80'
+                              : '#facc15',
+                        }}
+                      >
+                        Ensemble Support: {(v.ensemble_evidence.ensemble_support_fraction * 100).toFixed(0)}%
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem', fontSize: '0.72rem' }}>
+                      <div>
+                        <span style={{ color: '#94a3b8' }}>Score Spread (μ ± σ):</span>
+                        <strong style={{ display: 'block', color: '#f8fafc', fontFamily: 'var(--font-mono)' }}>
+                          {v.ensemble_evidence.score_mean != null ? v.ensemble_evidence.score_mean.toFixed(3) : '—'} ±{' '}
+                          {v.ensemble_evidence.score_std != null ? v.ensemble_evidence.score_std.toFixed(3) : '0.000'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: '#94a3b8' }}>5th – 95th Percentile:</span>
+                        <strong style={{ display: 'block', color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
+                          [{v.ensemble_evidence.score_p05 != null ? v.ensemble_evidence.score_p05.toFixed(3) : '—'} ,{' '}
+                          {v.ensemble_evidence.score_p95 != null ? v.ensemble_evidence.score_p95.toFixed(3) : '—'}]
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: '#94a3b8' }}>Corridor Consistency:</span>
+                        <strong style={{ display: 'block', color: '#4ade80', fontFamily: 'var(--font-mono)' }}>
+                          {v.ensemble_evidence.trajectory_consistency_across_ensemble != null
+                            ? `${(v.ensemble_evidence.trajectory_consistency_across_ensemble * 100).toFixed(0)}%`
+                            : '—'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: '#94a3b8' }}>Source Zone Entry:</span>
+                        <strong style={{ display: 'block', color: '#f8fafc', fontFamily: 'var(--font-mono)' }}>
+                          {v.ensemble_evidence.source_intersection_fraction != null
+                            ? `${(v.ensemble_evidence.source_intersection_fraction * 100).toFixed(0)}%`
+                            : '0%'}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })}

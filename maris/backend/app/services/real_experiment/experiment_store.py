@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     scientific_disclaimer   TEXT NOT NULL,
     slick_characterization_json TEXT,
     forward_prediction_json TEXT,
-    observation_source      TEXT DEFAULT 'BENCHMARK_FALLBACK'
+    observation_source      TEXT DEFAULT 'BENCHMARK_FALLBACK',
+    monte_carlo_ensemble_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS experiment_run_tags (
@@ -156,7 +157,8 @@ class ExperimentStore:
                         source_lon, source_lat, source_radius_m,
                         source_zone_geojson, backward_steps, vessels_json,
                         era5_path, cmems_path, created_at, scientific_disclaimer,
-                        slick_characterization_json, forward_prediction_json
+                        slick_characterization_json, forward_prediction_json,
+                        monte_carlo_ensemble_json
                     ) VALUES (
                         :run_id, :satellite_product_id, :observation_time,
                         :observation_lon, :observation_lat, :observation_source,
@@ -164,7 +166,8 @@ class ExperimentStore:
                         :source_lon, :source_lat, :source_radius_m,
                         :source_zone_geojson, :backward_steps, :vessels_json,
                         :era5_path, :cmems_path, :created_at, :scientific_disclaimer,
-                        :slick_characterization_json, :forward_prediction_json
+                        :slick_characterization_json, :forward_prediction_json,
+                        :monte_carlo_ensemble_json
                     )
                     """,
                     row,
@@ -452,6 +455,7 @@ class ExperimentStore:
                 ("slick_characterization_json", "TEXT"),
                 ("forward_prediction_json", "TEXT"),
                 ("observation_source", "TEXT"),
+                ("monte_carlo_ensemble_json", "TEXT"),
             ):
                 try:
                     conn.execute(f"ALTER TABLE experiment_runs ADD COLUMN {col} {col_type}")
@@ -499,6 +503,11 @@ class ExperimentStore:
             if getattr(result, "forward_prediction", None)
             else None
         )
+        mc_ens_json = (
+            json.dumps(result.monte_carlo_ensemble)
+            if getattr(result, "monte_carlo_ensemble", None)
+            else None
+        )
 
         return {
             "run_id": result.run_id,
@@ -522,6 +531,7 @@ class ExperimentStore:
             "scientific_disclaimer": result.scientific_disclaimer,
             "slick_characterization_json": slick_char_json,
             "forward_prediction_json": fwd_pred_json,
+            "monte_carlo_ensemble_json": mc_ens_json,
         }
 
     @staticmethod
@@ -553,6 +563,19 @@ class ExperimentStore:
                 model_probability=v.get("model_probability"),
                 ml_feature_vector=v.get("ml_feature_vector"),
                 behavioral_intelligence=v.get("behavioral_intelligence"),
+                min_trajectory_distance_km=v.get("min_trajectory_distance_km"),
+                trajectory_time_delta_hours=v.get("trajectory_time_delta_hours"),
+                source_zone_intersection=v.get("source_zone_intersection", False),
+                source_type=v.get("source_type", "sqlite_ais"),
+                provider_name=v.get("provider_name", "ais_vessels.db"),
+                evidence_breakdown=v.get("evidence_breakdown") or {},
+                explanation=v.get("explanation") or [],
+                consistency_level=v.get("consistency_level", "LOW"),
+                scientific_disclaimer=v.get(
+                    "scientific_disclaimer",
+                    "Evidence consistency indicates spatiotemporal correlation with the reconstructed drift model, not legal liability.",
+                ),
+                ensemble_evidence=v.get("ensemble_evidence"),
             )
             for v in vessels_data
         ]
@@ -581,6 +604,27 @@ class ExperimentStore:
             except Exception:
                 fwd_pred = None
 
+        mc_ens = None
+        if row.get("monte_carlo_ensemble_json"):
+            try:
+                mc_ens = json.loads(row["monte_carlo_ensemble_json"])
+                if isinstance(mc_ens, dict):
+                    if "percentile_bounding_box" not in mc_ens or not mc_ens["percentile_bounding_box"]:
+                        mc_ens["percentile_bounding_box"] = {
+                            "p05_lon": mc_ens.get("p05_source_lon", 0.0),
+                            "p95_lon": mc_ens.get("p95_source_lon", 0.0),
+                            "p05_lat": mc_ens.get("p05_source_lat", 0.0),
+                            "p95_lat": mc_ens.get("p95_source_lat", 0.0),
+                        }
+                    if "num_realizations" not in mc_ens and "ensemble_size" in mc_ens:
+                        mc_ens["num_realizations"] = mc_ens["ensemble_size"]
+                    if "ensemble_dispersion_radius_m" not in mc_ens and "dispersion_radius_km" in mc_ens:
+                        mc_ens["ensemble_dispersion_radius_m"] = (mc_ens["dispersion_radius_km"] or 0.0) * 1000.0
+                    if "scientific_notice" not in mc_ens and "scientific_disclaimer" in mc_ens:
+                        mc_ens["scientific_notice"] = mc_ens["scientific_disclaimer"]
+            except Exception:
+                mc_ens = None
+
         return ExperimentResult(
             run_id=row["run_id"],
             satellite_product_id=row["satellite_product_id"],
@@ -604,6 +648,7 @@ class ExperimentStore:
             status="completed",
             slick_characterization=slick_char,
             forward_prediction=fwd_pred,
+            monte_carlo_ensemble=mc_ens,
         )
 
 

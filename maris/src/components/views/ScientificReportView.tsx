@@ -787,6 +787,265 @@ export default function ScientificReportView({
           </section>
         )}
 
+        {/* Phase #4: Attribution Explainability & Decomposed Scoring */}
+        {runResult.vessels.length > 0 && runResult.vessels.some((v) => v.evidence_breakdown || (reportData?.candidates ?? []).some((c: any) => c.evidence_breakdown)) && (
+          <section className="re-report-section" data-testid="report-explainability-section">
+            <h2 className="re-report-sec-title">Attribution Explainability &amp; Evidence Breakdown (Phase #4)</h2>
+            <p className="re-section-desc">
+              Decomposed consistency scores and factual attribution evidence chains. Scoring is based on fixed weights: Spatial (50%), Temporal (25%), and Trajectory (25%).
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
+              {runResult.vessels.map((v) => {
+                const cand = (reportData?.candidates ?? []).find((c: any) => c.vessel_id === v.vessel_id || c.mmsi === v.mmsi)
+                const breakdown = v.evidence_breakdown || cand?.evidence_breakdown
+                const explanation = v.explanation || cand?.explanation || []
+                const consistencyLevel = v.consistency_level || cand?.consistency_level || 'LOW'
+                if (!breakdown && explanation.length === 0) return null
+
+                return (
+                  <div
+                    key={v.vessel_id}
+                    style={{
+                      padding: '1rem',
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(56, 189, 248, 0.2)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                      <strong style={{ fontSize: '0.9rem', color: '#f8fafc' }}>
+                        #{v.rank} {v.vessel_name ?? v.mmsi ?? v.vessel_id}
+                      </strong>
+                      <span
+                        style={{
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          padding: '0.15rem 0.5rem',
+                          borderRadius: '4px',
+                          background:
+                            consistencyLevel === 'HIGH'
+                              ? 'rgba(74, 222, 128, 0.15)'
+                              : consistencyLevel === 'MODERATE'
+                              ? 'rgba(250, 204, 21, 0.15)'
+                              : 'rgba(148, 163, 184, 0.15)',
+                          color:
+                            consistencyLevel === 'HIGH'
+                              ? '#4ade80'
+                              : consistencyLevel === 'MODERATE'
+                              ? '#facc15'
+                              : '#94a3b8',
+                          border: `1px solid ${
+                            consistencyLevel === 'HIGH'
+                              ? 'rgba(74, 222, 128, 0.3)'
+                              : consistencyLevel === 'MODERATE'
+                              ? 'rgba(250, 204, 21, 0.3)'
+                              : 'rgba(148, 163, 184, 0.3)'
+                          }`,
+                        }}
+                      >
+                        Level: {consistencyLevel}
+                      </span>
+                    </div>
+
+                    {breakdown && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', marginBottom: '0.75rem', textAlign: 'center' }}>
+                        <div style={{ background: 'rgba(30, 41, 59, 0.5)', padding: '0.4rem', borderRadius: '4px' }}>
+                          <span style={{ fontSize: '0.65rem', color: '#94a3b8', display: 'block' }}>Spatial (50%)</span>
+                          <strong style={{ fontSize: '0.85rem', color: '#38bdf8' }}>
+                            {(typeof breakdown.spatial === 'object' ? (breakdown.spatial?.score ?? 0) : (breakdown.spatial ?? 0)).toFixed(3)}
+                          </strong>
+                        </div>
+                        <div style={{ background: 'rgba(30, 41, 59, 0.5)', padding: '0.4rem', borderRadius: '4px' }}>
+                          <span style={{ fontSize: '0.65rem', color: '#94a3b8', display: 'block' }}>Temporal (25%)</span>
+                          <strong style={{ fontSize: '0.85rem', color: '#818cf8' }}>
+                            {(typeof breakdown.temporal === 'object' ? (breakdown.temporal?.score ?? 0) : (breakdown.temporal ?? 0)).toFixed(3)}
+                          </strong>
+                        </div>
+                        <div style={{ background: 'rgba(30, 41, 59, 0.5)', padding: '0.4rem', borderRadius: '4px' }}>
+                          <span style={{ fontSize: '0.65rem', color: '#94a3b8', display: 'block' }}>Trajectory (25%)</span>
+                          <strong style={{ fontSize: '0.85rem', color: '#34d399' }}>
+                            {(typeof breakdown.trajectory === 'object' ? (breakdown.trajectory?.score ?? 0) : (breakdown.trajectory ?? 0)).toFixed(3)}
+                          </strong>
+                        </div>
+                      </div>
+                    )}
+
+                    {explanation.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.75rem', color: '#cbd5e1', lineHeight: 1.5 }}>
+                        {explanation.map((fact: string, idx: number) => (
+                          <li key={idx}>{fact}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Phase #5: Uncertainty Propagation & Monte Carlo Ensemble Sensitivity */}
+        {(runResult.monte_carlo_ensemble || (reportData as any)?.monte_carlo_ensemble) && (() => {
+          const mc = runResult.monte_carlo_ensemble || (reportData as any)?.monte_carlo_ensemble
+          const cands = reportData?.candidates ?? []
+          return (
+            <section className="re-report-section" data-testid="report-monte-carlo-section">
+              <h2 className="re-report-sec-title">Uncertainty Propagation &amp; Monte Carlo Sensitivity (Phase #5)</h2>
+              <p className="re-section-desc">
+                Stochastic sensitivity assessment perturbing initial observation coordinates and metocean forcing fields across {mc.num_realizations} realizations.
+              </p>
+
+              <div className="re-source-zone-card" style={{ marginBottom: '1.25rem', borderColor: '#38bdf8', background: 'rgba(8, 47, 73, 0.3)' }}>
+                <div className="re-source-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+                  <div>
+                    <div className="re-source-label">Ensemble Size</div>
+                    <div className="re-source-value" style={{ color: '#38bdf8' }}>
+                      {mc.num_realizations ?? (mc as any).ensemble_size ?? 0} realizations
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Dispersion Radius</div>
+                    <div className="re-source-value" style={{ color: '#38bdf8' }}>
+                      {((mc.ensemble_dispersion_radius_m != null
+                        ? mc.ensemble_dispersion_radius_m / 1000
+                        : (mc as any).dispersion_radius_km) ?? 0).toFixed(2)} km
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">P05 – P95 Longitude</div>
+                    <div className="re-source-value" style={{ fontSize: '0.85rem' }}>
+                      {(mc.percentile_bounding_box?.p05_lon ?? (mc as any).p05_source_lon ?? 0).toFixed(4)}° to {(mc.percentile_bounding_box?.p95_lon ?? (mc as any).p95_source_lon ?? 0).toFixed(4)}°E
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">P05 – P95 Latitude</div>
+                    <div className="re-source-value" style={{ fontSize: '0.85rem' }}>
+                      {(mc.percentile_bounding_box?.p05_lat ?? (mc as any).p05_source_lat ?? 0).toFixed(4)}° to {(mc.percentile_bounding_box?.p95_lat ?? (mc as any).p95_source_lat ?? 0).toFixed(4)}°N
+                    </div>
+                  </div>
+                  <div>
+                    <div className="re-source-label">Effective Seed</div>
+                    <div className="re-source-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
+                      {mc.effective_seed ?? 'N/A'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Candidate Ensemble Sensitivity Table */}
+              <div className="re-results-table-wrap" style={{ marginBottom: '1.25rem' }}>
+                <table className="re-table re-report-table">
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Vessel</th>
+                      <th>Deterministic Score</th>
+                      <th>Score Spread (μ ± σ)</th>
+                      <th>5th – 95th Percentile</th>
+                      <th>Corridor Consistency</th>
+                      <th>Source Zone Entry</th>
+                      <th>Ensemble Support</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {runResult.vessels.map((v) => {
+                      const cand = cands.find((c: any) => c.vessel_id === v.vessel_id || c.mmsi === v.mmsi)
+                      const ens = v.ensemble_evidence || cand?.ensemble_evidence
+                      return (
+                        <tr key={v.vessel_id}>
+                          <td className="re-td-mono"><strong>#{v.rank}</strong></td>
+                          <td><strong>{v.vessel_name ?? v.mmsi ?? v.vessel_id}</strong></td>
+                          <td className="re-td-mono">{(v.evidence_consistency_score * 100).toFixed(1)}%</td>
+                          <td className="re-td-mono">
+                            {ens?.score_mean != null ? `${ens.score_mean.toFixed(3)} ± ${ens.score_std != null ? ens.score_std.toFixed(3) : '0.000'}` : '—'}
+                          </td>
+                          <td className="re-td-mono" style={{ color: '#38bdf8' }}>
+                            {ens?.score_p05 != null ? `[${ens.score_p05.toFixed(3)}, ${ens.score_p95?.toFixed(3)}]` : '—'}
+                          </td>
+                          <td className="re-td-mono" style={{ color: '#4ade80' }}>
+                            {ens?.trajectory_consistency_across_ensemble != null ? `${(ens.trajectory_consistency_across_ensemble * 100).toFixed(0)}%` : '—'}
+                          </td>
+                          <td className="re-td-mono">
+                            {ens?.source_intersection_fraction != null ? `${(ens.source_intersection_fraction * 100).toFixed(0)}%` : '0%'}
+                          </td>
+                          <td>
+                            {ens ? (
+                              <span
+                                style={{
+                                  fontWeight: 700,
+                                  color: ens.ensemble_support_fraction >= 0.7 ? '#4ade80' : '#facc15',
+                                }}
+                              >
+                                {(ens.ensemble_support_fraction * 100).toFixed(0)}%
+                              </span>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Sample Realizations Table */}
+              {mc.realizations && mc.realizations.length > 0 && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <h4 style={{ fontSize: '0.8rem', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                    Sample Ensemble Realizations (First {Math.min(10, mc.realizations.length)} of {mc.num_realizations})
+                  </h4>
+                  <div className="re-results-table-wrap">
+                    <table className="re-table re-report-table" style={{ fontSize: '0.75rem' }}>
+                      <thead>
+                        <tr>
+                          <th>Realization</th>
+                          <th>Reconstructed Source</th>
+                          <th>Radius</th>
+                          <th>Leeway α</th>
+                          <th>Wind Δw</th>
+                          <th>Wind Δθ</th>
+                          <th>Origin Offset</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mc.realizations.slice(0, 10).map((rz: any) => {
+                          const p = rz.perturbation_parameters || {}
+                          const alpha = p.leeway_factor ?? p.leeway_fraction ?? 0.035
+                          const dw = p.wind_speed_delta_ms ?? p.delta_wind_speed_ms ?? 0
+                          const dtheta = p.wind_dir_delta_deg ?? p.delta_wind_dir_deg ?? 0
+                          const dx = p.origin_offset_m?.dx_m ?? p.dx_m ?? 0
+                          const dy = p.origin_offset_m?.dy_m ?? p.dy_m ?? 0
+                          return (
+                            <tr key={rz.realization_id}>
+                              <td className="re-td-mono">#{rz.realization_id ?? rz.id ?? 1}</td>
+                              <td className="re-td-mono">
+                                {(rz.source_lat ?? rz.final_source_lat ?? 0).toFixed(4)}°N, {(rz.source_lon ?? rz.final_source_lon ?? 0).toFixed(4)}°E
+                              </td>
+                              <td className="re-td-mono">
+                                {(((rz.source_radius_m != null ? rz.source_radius_m : (rz.source_radius_km ? rz.source_radius_km * 1000 : 0))) / 1000).toFixed(1)} km
+                              </td>
+                              <td className="re-td-mono">{alpha.toFixed(4)}</td>
+                              <td className="re-td-mono">{dw >= 0 ? `+${dw.toFixed(2)}` : dw.toFixed(2)} m/s</td>
+                              <td className="re-td-mono">{dtheta >= 0 ? `+${dtheta.toFixed(1)}` : dtheta.toFixed(1)}°</td>
+                              <td className="re-td-mono">
+                                ({dx >= 0 ? `+${dx.toFixed(0)}` : dx.toFixed(0)}m, {dy >= 0 ? `+${dy.toFixed(0)}` : dy.toFixed(0)}m)
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <div className="re-disclaimer" style={{ borderColor: '#38bdf8', background: 'rgba(56, 189, 248, 0.05)' }}>
+                <strong>Scientific Uncertainty Notice:</strong> {mc.scientific_notice ?? mc.scientific_disclaimer ?? ''}
+              </div>
+            </section>
+          )
+        })()}
+
         {/* Section 8: ML Model Signal & AIS Behavioural Intelligence */}
         {(() => {
           const cands: any[] = reportData?.candidates ?? []

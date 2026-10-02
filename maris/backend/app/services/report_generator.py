@@ -131,6 +131,13 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
                 fwd_pred = json.loads(r["forward_prediction_json"])
             except Exception:
                 fwd_pred = None
+        mc_ensemble = r.get("monte_carlo_ensemble")
+        if not mc_ensemble and r.get("monte_carlo_ensemble_json"):
+            try:
+                import json
+                mc_ensemble = json.loads(r["monte_carlo_ensemble_json"])
+            except Exception:
+                mc_ensemble = None
     else:
         run_id = getattr(run, "run_id", "")
         model_version = getattr(run, "model_version", "experiment_runner_v1")
@@ -152,6 +159,8 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
         disclaimer = getattr(run, "scientific_disclaimer", "")
         slick_char = getattr(run, "slick_characterization", None)
         fwd_pred = getattr(run, "forward_prediction", None)
+        mc_raw = getattr(run, "monte_carlo_ensemble", None)
+        mc_ensemble = mc_raw.as_dict() if mc_raw is not None and hasattr(mc_raw, "as_dict") else mc_raw
 
     # Resolve observation point if missing from benchmark or steps
     if (obs_lat is None or obs_lat == 0.0) and steps:
@@ -194,6 +203,12 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
                 "ml_feature_vector": v.get("ml_feature_vector"),
                 # Step 12 — Behavioral intelligence
                 "behavioral_intelligence": v.get("behavioral_intelligence"),
+                # Phase #4 — Attribution Explainability
+                "evidence_breakdown": v.get("evidence_breakdown") or {},
+                "explanation": v.get("explanation") or [],
+                "consistency_level": v.get("consistency_level", "LOW"),
+                # Phase #5 — Monte Carlo Ensemble Evidence
+                "ensemble_evidence": v.get("ensemble_evidence"),
             }
         else:
             positions = getattr(v, "positions", []) or []
@@ -221,6 +236,17 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
                     if getattr(v, "behavioral_intelligence", None) is not None
                     and hasattr(getattr(v, "behavioral_intelligence", None), "as_dict")
                     else getattr(v, "behavioral_intelligence", None)
+                ),
+                # Phase #4 — Attribution Explainability
+                "evidence_breakdown": getattr(v, "evidence_breakdown", None) or {},
+                "explanation": getattr(v, "explanation", None) or [],
+                "consistency_level": getattr(v, "consistency_level", "LOW"),
+                # Phase #5 — Monte Carlo Ensemble Evidence
+                "ensemble_evidence": (
+                    getattr(v, "ensemble_evidence", None).as_dict()
+                    if getattr(v, "ensemble_evidence", None) is not None
+                    and hasattr(getattr(v, "ensemble_evidence", None), "as_dict")
+                    else getattr(v, "ensemble_evidence", None)
                 ),
             }
         candidates.append(c_dict)
@@ -343,6 +369,7 @@ def build_scientific_report_data(run: Any) -> dict[str, Any]:
             else None
         ),
         "candidates": candidates,
+        "monte_carlo_ensemble": mc_ensemble,
         "provenance": {
             "satellite_observation": "European Space Agency (ESA) Copernicus Sentinel-1",
             "atmospheric_reanalysis": "European Centre for Medium-Range Weather Forecasts (ECMWF ERA5)",

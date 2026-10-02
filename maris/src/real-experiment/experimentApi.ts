@@ -39,7 +39,16 @@ import type {
   EvaluatorRunRequest,
   EvaluatorInvestigationRecord,
   EvaluatorInvestigationSummary,
+  EvidenceComponent,
+  EvidenceBreakdown,
+  VesselFeatures,
 } from './experimentTypes'
+
+export type {
+  EvidenceComponent,
+  EvidenceBreakdown,
+  VesselFeatures,
+}
 
 // ---------------------------------------------------------------------------
 // Internal request helper (same pattern as investigationApi.ts)

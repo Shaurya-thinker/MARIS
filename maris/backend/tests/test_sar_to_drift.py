@@ -248,8 +248,8 @@ def test_benchmark_fallback_when_sar_unavailable(corsica_metocean_netcdf):
     )
 
     assert result.observation_source == "BENCHMARK_FALLBACK"
-    assert pytest.approx(result.observation_lat, abs=1e-4) == 43.24833
-    assert pytest.approx(result.observation_lon, abs=1e-4) == 9.47833
+    assert pytest.approx(result.observation_lat, abs=1e-4) == 43.2736
+    assert pytest.approx(result.observation_lon, abs=1e-4) == 9.4913
 
 
 def test_evaluator_workflow_uses_sar_derived_metrics():

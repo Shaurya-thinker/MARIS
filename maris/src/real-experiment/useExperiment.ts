@@ -68,10 +68,16 @@ type Action =
   | { type: 'SET_ENABLE_FORWARD_PREDICTION'; enabled: boolean }
   | { type: 'FORWARD_PREDICT_START' }
   | { type: 'FORWARD_PREDICT_SUCCESS'; result: ForwardPredictionResult }
-  | { type: 'FORWARD_PREDICT_ERROR'; error: string }
   | { type: 'ACQUIRE_SUBSCENE_START' }
   | { type: 'ACQUIRE_SUBSCENE_SUCCESS'; response: SarAcquisitionResponse }
   | { type: 'ACQUIRE_SUBSCENE_ERROR'; error: string }
+  | { type: 'SET_ENABLE_MONTE_CARLO'; enabled: boolean }
+  | { type: 'SET_MONTE_CARLO_SIZE'; size: number }
+  | { type: 'SET_MONTE_CARLO_SEED'; seed: number | null }
+  | { type: 'SET_MONTE_CARLO_PERTURB_ORIGIN'; enabled: boolean }
+  | { type: 'SET_MONTE_CARLO_PERTURB_LEEWAY'; enabled: boolean }
+  | { type: 'SET_MONTE_CARLO_PERTURB_WIND'; enabled: boolean }
+  | { type: 'SET_MONTE_CARLO_PERTURB_CURRENT'; enabled: boolean }
 
 const initialState: ExperimentWizardState = {
   step: 1,
@@ -89,6 +95,18 @@ const initialState: ExperimentWizardState = {
   observationLon: null,
   aisSearchResult: null,
   selectedVessels: [],
+  enableMonteCarlo: false,
+  monteCarloEnsembleSize: 50,
+  monteCarloSeed: null,
+  monteCarloPerturbOrigin: true,
+  monteCarloOriginStdM: 1000.0,
+  monteCarloPerturbLeeway: true,
+  monteCarloLeewayStd: 0.005,
+  monteCarloPerturbWind: true,
+  monteCarloWindSpeedStdMs: 1.0,
+  monteCarloWindDirStdDeg: 10.0,
+  monteCarloPerturbCurrent: true,
+  monteCarloCurrentStdMs: 0.05,
   runStatus: 'idle',
   runError: null,
   runResult: null,
@@ -245,6 +263,20 @@ function reducer(state: ExperimentWizardState, action: Action): ExperimentWizard
       }
     case 'ACQUIRE_SUBSCENE_ERROR':
       return { ...state, acquiringSubscene: false, acquisitionError: action.error }
+    case 'SET_ENABLE_MONTE_CARLO':
+      return { ...state, enableMonteCarlo: action.enabled }
+    case 'SET_MONTE_CARLO_SIZE':
+      return { ...state, monteCarloEnsembleSize: action.size }
+    case 'SET_MONTE_CARLO_SEED':
+      return { ...state, monteCarloSeed: action.seed }
+    case 'SET_MONTE_CARLO_PERTURB_ORIGIN':
+      return { ...state, monteCarloPerturbOrigin: action.enabled }
+    case 'SET_MONTE_CARLO_PERTURB_LEEWAY':
+      return { ...state, monteCarloPerturbLeeway: action.enabled }
+    case 'SET_MONTE_CARLO_PERTURB_WIND':
+      return { ...state, monteCarloPerturbWind: action.enabled }
+    case 'SET_MONTE_CARLO_PERTURB_CURRENT':
+      return { ...state, monteCarloPerturbCurrent: action.enabled }
     default:
       return state
   }
@@ -536,6 +568,22 @@ export function useExperiment() {
       slick_characterization: state.slickCharacterization,
       forward_prediction_hours: state.enableForwardPrediction ? state.forwardPredictionHours : undefined,
       forward_step_hours: state.enableForwardPrediction ? state.forwardStepHours : undefined,
+      monte_carlo: state.enableMonteCarlo
+        ? {
+            enabled: true,
+            ensemble_size: state.monteCarloEnsembleSize,
+            seed: state.monteCarloSeed ?? undefined,
+            perturb_origin: state.monteCarloPerturbOrigin,
+            origin_std_m: state.monteCarloOriginStdM,
+            perturb_leeway: state.monteCarloPerturbLeeway,
+            leeway_std: state.monteCarloLeewayStd,
+            perturb_wind: state.monteCarloPerturbWind,
+            wind_speed_std_ms: state.monteCarloWindSpeedStdMs,
+            wind_dir_std_deg: state.monteCarloWindDirStdDeg,
+            perturb_current: state.monteCarloPerturbCurrent,
+            current_std_ms: state.monteCarloCurrentStdMs,
+          }
+        : undefined,
     }
 
     dispatch({ type: 'RUN_STARTED' })
@@ -619,6 +667,34 @@ export function useExperiment() {
     }
   }, [state])
 
+  const setEnableMonteCarlo = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_ENABLE_MONTE_CARLO', enabled })
+  }, [])
+
+  const setMonteCarloEnsembleSize = useCallback((size: number) => {
+    dispatch({ type: 'SET_MONTE_CARLO_SIZE', size })
+  }, [])
+
+  const setMonteCarloSeed = useCallback((seed: number | null) => {
+    dispatch({ type: 'SET_MONTE_CARLO_SEED', seed })
+  }, [])
+
+  const setMonteCarloPerturbOrigin = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_MONTE_CARLO_PERTURB_ORIGIN', enabled })
+  }, [])
+
+  const setMonteCarloPerturbLeeway = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_MONTE_CARLO_PERTURB_LEEWAY', enabled })
+  }, [])
+
+  const setMonteCarloPerturbWind = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_MONTE_CARLO_PERTURB_WIND', enabled })
+  }, [])
+
+  const setMonteCarloPerturbCurrent = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_MONTE_CARLO_PERTURB_CURRENT', enabled })
+  }, [])
+
   const loadRun = useCallback(async (runId: string): Promise<void> => {
     const result = await getExperimentRun(runId)
     dispatch({ type: 'LOAD_RUN', result })
@@ -649,6 +725,13 @@ export function useExperiment() {
     setForwardPredictionHours,
     setForwardStepHours,
     setEnableForwardPrediction,
+    setEnableMonteCarlo,
+    setMonteCarloEnsembleSize,
+    setMonteCarloSeed,
+    setMonteCarloPerturbOrigin,
+    setMonteCarloPerturbLeeway,
+    setMonteCarloPerturbWind,
+    setMonteCarloPerturbCurrent,
     predictForward,
     searchVessels,
     toggleVessel,
