@@ -632,6 +632,7 @@ export default function ScientificReportView({
               vesselPositionsMap={vesselPositionsMap}
               forwardSteps={runResult.forward_prediction?.steps}
               forwardPrediction={runResult.forward_prediction}
+              sarSurveillance={runResult.sar_surveillance ?? reportData?.sar_surveillance}
             />
           </div>
         </section>
@@ -1156,6 +1157,266 @@ export default function ScientificReportView({
                   <p style={{ fontSize: '0.72rem', color: '#64748b', fontStyle: 'italic', margin: 0 }}>
                     ZERO-FABRICATION: All findings are based exclusively on genuine received AIS transmissions. Transmission gaps are reported as observable gaps in received telemetry only. No vessel movements, transponder disabling events, or activities during gaps are inferred. No intent, wrongdoing, or legal responsibility is implied by any finding in this section.
                   </p>
+                </>
+              )}
+            </section>
+          )
+        })()}
+
+        {/* Section 8.5: SAR ↔ AIS Dual-Sensor Maritime Surveillance */}
+        {(() => {
+          const surveillance = runResult.sar_surveillance || (reportData as any)?.sar_surveillance
+          return (
+            <section className="re-report-section" data-testid="report-sar-surveillance-section">
+              <h2 className="re-report-sec-title">8.5 SAR ↔ AIS Dual-Sensor Maritime Surveillance</h2>
+
+              {!surveillance ? (
+                <div className="re-disclaimer" style={{ borderColor: 'rgba(148, 163, 184, 0.3)', background: 'rgba(30, 41, 59, 0.4)', color: '#94a3b8' }}>
+                  Dual-sensor surveillance was not enabled for this experiment.
+                </div>
+              ) : (
+                <>
+                  {/* 1. Observation metadata */}
+                  <div className="re-table-card" style={{ marginBottom: '1.25rem' }}>
+                    <table className="re-table re-report-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+                      <tbody>
+                        <tr>
+                          <th style={{ width: '28%' }}>SAR Product ID</th>
+                          <td className="re-td-mono" style={{ width: '72%', wordBreak: 'break-all' }}>
+                            {surveillance.product_id || runResult.satellite_product_id}
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>Observation Timestamp</th>
+                          <td className="re-td-mono">
+                            {formatDate(surveillance.observation_time || runResult.observation_time)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>Surveillance Model Version</th>
+                          <td className="re-td-mono">
+                            {surveillance.model_version || 'sar_ais_surveillance_v1'}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* 2. Detection summary */}
+                  {(() => {
+                    const targetsCount =
+                      surveillance.total_radar_targets_detected ??
+                      surveillance.total_sar_targets ??
+                      (surveillance.targets?.length ?? 0)
+                    const aisAssociationsCount =
+                      surveillance.correlated_ais_matches ??
+                      surveillance.matched_coincident_count ??
+                      0
+                    const spatialDiscrepanciesCount =
+                      surveillance.spatial_discrepancies ??
+                      surveillance.spatial_discrepancy_count ??
+                      0
+                    const uncorrelatedTargetsCount =
+                      surveillance.uncorrelated_radar_targets ??
+                      surveillance.uncorrelated_target_count ??
+                      0
+                    const undetectedVesselsCount =
+                      surveillance.undetected_ais_vessels ??
+                      surveillance.undetected_vessel_count ??
+                      0
+                    const associationsList: any[] =
+                      surveillance.associations ?? surveillance.correlations ?? []
+
+                    return (
+                      <>
+                        <div className="re-source-zone-card" style={{ marginBottom: '1.25rem', borderColor: '#38bdf8', background: 'rgba(8, 47, 73, 0.25)' }}>
+                          <div className="re-source-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+                            <div>
+                              <div className="re-source-label">Radar Targets Detected</div>
+                              <div className="re-source-value" style={{ color: '#fbbf24' }}>
+                                {targetsCount}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="re-source-label">AIS Associations</div>
+                              <div className="re-source-value" style={{ color: '#4ade80' }}>
+                                {aisAssociationsCount}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="re-source-label">Spatial Discrepancies</div>
+                              <div className="re-source-value" style={{ color: '#facc15' }}>
+                                {spatialDiscrepanciesCount}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="re-source-label">Uncorrelated Radar Targets</div>
+                              <div className="re-source-value" style={{ color: '#f87171' }}>
+                                {uncorrelatedTargetsCount}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="re-source-label">AIS Vessels Not Detected</div>
+                              <div className="re-source-value" style={{ color: '#94a3b8' }}>
+                                {undetectedVesselsCount}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 3. Association table / Empty State Handling */}
+                        {targetsCount === 0 && (
+                          <div className="re-empty" style={{ margin: '1rem 0' }}>
+                            No bright radar targets detected in the configured SAR scene.
+                          </div>
+                        )}
+                        {associationsList.length === 0 ? (
+                          <div className="re-empty" style={{ margin: '1rem 0' }}>
+                            No AIS observations were available within the configured search window.
+                          </div>
+                        ) : associationsList.every((c: any) => c.classification === 'RADAR_TARGET_UNCORRELATED') ? (
+                          <div className="re-empty" style={{ margin: '1rem 0' }}>
+                            No AIS association was found within the configured search gate.
+                          </div>
+                        ) : null}
+
+                        {associationsList.length > 0 && (
+                          <div className="re-results-table-wrap" style={{ marginBottom: '1.25rem' }}>
+                            <table className="re-table re-report-table" data-testid="report-surveillance-table">
+                              <thead>
+                                <tr>
+                                  <th style={{ whiteSpace: 'nowrap' }}>Radar Target</th>
+                                  <th style={{ whiteSpace: 'nowrap' }}>AIS Vessel / Track</th>
+                                  <th style={{ whiteSpace: 'nowrap' }}>Classification</th>
+                                  <th style={{ whiteSpace: 'nowrap' }}>Spatial Separation</th>
+                                  <th style={{ whiteSpace: 'nowrap' }}>Temporal Difference</th>
+                                  <th style={{ whiteSpace: 'nowrap' }}>AIS Position Provenance</th>
+                                  <th style={{ whiteSpace: 'nowrap' }}>Investigation Flag</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {associationsList.map((assoc: any, idx: number) => {
+                                  const targetId = assoc.target?.target_id ?? assoc.target_id
+                                  const targetLabel = targetId
+                                    ? `Target ${targetId}`
+                                    : 'No SAR bright target'
+                                  const vesselLabel = (assoc.vessel_name || assoc.mmsi)
+                                    ? `${assoc.vessel_name ?? 'MMSI ' + assoc.mmsi} ${assoc.mmsi ? `(${assoc.mmsi})` : ''}`
+                                    : 'No AIS association'
+                                  const prov = assoc.ais_position_provenance ?? assoc.ais_alignment_method ?? 'UNAVAILABLE'
+                                  const isAmbiguous = assoc.classification === 'AMBIGUOUS_MULTI_TARGET_PROXIMITY'
+                                  const separation = assoc.spatial_separation_m ?? assoc.distance_meters
+                                  const timeDelta = assoc.temporal_delta_seconds ?? assoc.ais_time_offset_seconds
+                                  const isFlagged = Boolean(assoc.investigation_flag || assoc.classification === 'SPATIAL_DISCREPANCY_EXCEEDANCE')
+
+                                  return (
+                                    <tr key={assoc.association_id || assoc.correlation_id || idx}>
+                                      <td className="re-td-mono" style={{ color: targetId ? '#fbbf24' : '#94a3b8' }}>
+                                        {targetLabel}
+                                      </td>
+                                      <td>
+                                        <strong>{vesselLabel}</strong>
+                                      </td>
+                                      <td>
+                                        <span style={{ fontWeight: 600 }}>
+                                          {isAmbiguous
+                                            ? 'Ambiguous Multi-Target Proximity'
+                                            : (assoc.classification || '').replace(/_/g, ' ')}
+                                        </span>
+                                      </td>
+                                      <td className="re-td-mono">
+                                        {separation != null ? (
+                                          `${separation.toFixed(1)} m`
+                                        ) : assoc.classification === 'AIS_VESSEL_NOT_DETECTED' || !targetId ? (
+                                          <span
+                                            style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '0.74rem' }}
+                                            title="No bright radar target detected within the 3,000m association gate"
+                                          >
+                                            Unassociated (&gt;3,000m)
+                                          </span>
+                                        ) : assoc.classification === 'RADAR_TARGET_UNCORRELATED' ? (
+                                          <span
+                                            style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '0.74rem' }}
+                                            title="No AIS transponder fix within the 3,000m association gate"
+                                          >
+                                            Unassociated (&gt;3,000m)
+                                          </span>
+                                        ) : (
+                                          '—'
+                                        )}
+                                      </td>
+                                      <td className="re-td-mono">
+                                        {timeDelta != null ? `${Math.abs(timeDelta).toFixed(0)} s` : '—'}
+                                      </td>
+                                      <td>
+                                        <code style={{ fontSize: '0.75rem' }}>{prov}</code>
+                                      </td>
+                                      <td>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                          <span style={{ color: isFlagged ? '#f87171' : '#4ade80', fontWeight: 600 }}>
+                                            {isFlagged ? 'Flagged' : 'Nominal'}
+                                          </span>
+                                          {(assoc.findings_summary || assoc.notes) && (
+                                            <span style={{ fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.3 }}>
+                                              {assoc.findings_summary || assoc.notes}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </>
+                    )
+                  })()}
+
+                  {/* 4. Scientific interpretation */}
+                  <div style={{ padding: '0.85rem 1rem', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '6px', border: '1px solid rgba(56, 189, 248, 0.2)', marginBottom: '1rem' }}>
+                    <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#38bdf8' }}>
+                      Scientific Interpretation Guidance
+                    </h4>
+                    <p style={{ margin: '0 0 0.4rem', fontSize: '0.78rem', color: '#cbd5e1', lineHeight: 1.5 }}>
+                      Bright radar targets are SAR scattering detections representing localized backscatter maxima and are not automatically classified as vessels. Association with an AIS record indicates spatial and temporal correspondence within configured search gating thresholds, not proof of causation, identity, intent, or illegal activity.
+                    </p>
+                    <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8', lineHeight: 1.5 }}>
+                      Spatial discrepancies and unassociated radar detections require contextual maritime investigation. Observed discrepancies may arise from transponder antenna positioning offsets, GPS precision bounds, temporal interpolation variance, or radar backscatter artifacts. No legal conclusions or culpability determinations may be inferred from dual-sensor surveillance outputs.
+                    </p>
+                  </div>
+
+                  {/* 5. Data provenance */}
+                  <div className="re-table-card" style={{ marginBottom: '1rem' }}>
+                    <table className="re-table re-report-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+                      <tbody>
+                        <tr>
+                          <th style={{ width: '28%' }}>SAR Data Source</th>
+                          <td style={{ width: '72%' }}>
+                            Copernicus Sentinel-1 SAR Subscene (Calibrated GRD backscatter amplitude / CFAR detection)
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>AIS Telemetry Source</th>
+                          <td>
+                            Curated Historical AIS Benchmark Database (ais_vessels.db)
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>AIS Telemetry Nature</th>
+                          <td style={{ fontSize: '0.8rem', color: '#cbd5e1' }}>
+                            MARIS distinguishes genuine received transponder messages (<code className="re-td-mono">GENUINE_OBSERVATION</code>) from temporally aligned interpolated kinematic fixes (<code className="re-td-mono">TEMPORALLY_ALIGNED_FIX</code>). Curated benchmark AIS is historical research data and is not authoritative operational real-time AIS.
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* 6. Scientific disclaimer */}
+                  <div className="re-disclaimer" style={{ borderColor: '#facc15', background: 'rgba(250, 204, 21, 0.08)' }} data-testid="report-surveillance-disclaimer">
+                    <strong>Scientific Assessment Disclaimer:</strong> {surveillance.scientific_disclaimer || runResult.scientific_disclaimer || 'Bright radar targets are SAR scattering detections and are not automatically classified as vessels. Association with an AIS record indicates spatial/temporal correspondence, not proof of causation, identity, intent, or illegal activity.'}
+                  </div>
                 </>
               )}
             </section>

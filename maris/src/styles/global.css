@@ -3885,6 +3885,26 @@ textarea {
   box-shadow: 0 0 14px rgba(255, 255, 255, 0.35);
 }
 
+.re-map-marker-obs-wrap:hover,
+.re-map-marker-src-wrap:hover,
+.re-map-marker-fwd-wrap:hover,
+.re-marker-vessel-wrap:hover,
+.re-map-marker-radar-target:hover,
+.re-map-marker-surv-ais:hover {
+  z-index: 1000 !important;
+}
+
+.re-map-marker-obs-wrap:hover .re-marker-pill,
+.re-map-marker-src-wrap:hover .re-marker-pill,
+.re-map-marker-fwd-wrap:hover .re-marker-pill,
+.re-marker-vessel-wrap:hover .re-marker-pill,
+.re-map-marker-radar-target:hover .re-marker-pill,
+.re-map-marker-surv-ais:hover .re-marker-pill {
+  transform: scale(1.08);
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.6);
+  z-index: 1001 !important;
+}
+
 .re-marker-dot {
   position: relative;
   width: 22px;

@@ -397,7 +397,30 @@ class MonteCarloConfigRequest(BaseModel):
     current_std_ms: float = Field(default=0.05, ge=0.0, description="Current velocity standard deviation in m/s")
 
 
+class SarSurveillanceConfigRequest(BaseModel):
+    """Configuration for Phase #6 Dual-Sensor SAR Surveillance & AIS Correlation."""
+    enabled: bool = Field(default=False, description="Enable Phase 6 SAR bright target detection and AIS correlation")
+    sar_raster_path: str | None = Field(default=None, description="Explicit path to calibrated Sentinel-1 SAR GeoTIFF")
+    cfar_k_sigma: float = Field(
+        default=4.0,
+        ge=1.0,
+        le=10.0,
+        description="Multiplier for local clutter standard deviation (default 4.0 matching Phase 6.1 detector)",
+    )
+    guard_band_pixels: int = Field(default=15, ge=1, le=100)
+    clutter_band_pixels: int = Field(default=40, ge=5, le=200)
+    tcr_threshold_db: float = Field(default=4.5, ge=1.0, le=30.0)
+    min_pixels: int = Field(default=2, ge=1, le=100)
+    max_pixels: int = Field(default=2000, ge=10, le=100000)
+    coincident_spatial_gate_m: float = Field(default=1000.0, ge=10.0, le=10000.0)
+    max_association_gate_m: float = Field(default=3000.0, ge=100.0, le=20000.0)
+    temporal_window_minutes: float = Field(default=30.0, ge=5.0, le=180.0)
+    max_interpolation_interval_s: float = Field(default=900.0, ge=60.0, le=3600.0)
+    coincident_time_threshold_s: float = Field(default=60.0, ge=0.0, le=300.0)
+
+
 class ExperimentRunRequest(BaseModel):
+
     satellite_product_id: str = Field(description="CDSE Sentinel-1 product ID")
     observation_lon: float = Field(ge=-180.0, le=180.0)
     observation_lat: float = Field(ge=-90.0, le=90.0)
@@ -431,6 +454,11 @@ class ExperimentRunRequest(BaseModel):
         default=None,
         description="Optional Step 5 Monte Carlo Ensemble configuration"
     )
+    sar_surveillance: SarSurveillanceConfigRequest | None = Field(
+        default=None,
+        description="Optional Step 12 Dual-Sensor SAR Surveillance & AIS Correlation configuration"
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +586,77 @@ class MonteCarloEnsembleResultItem(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase #6 — Dual-Sensor SAR Surveillance & AIS Correlation Schemas
+# ---------------------------------------------------------------------------
+
+class SarBrightTargetSchema(BaseModel):
+    """Physical bright radar target detected in calibrated Sentinel-1 SAR imagery."""
+    target_id: str
+    pixel_x: int
+    pixel_y: int
+    lon: float
+    lat: float
+    peak_backscatter_db: float
+    local_clutter_mean_db: float
+    target_to_clutter_ratio_db: float
+    pixel_count: int
+    bounding_box_pixels: list[int]
+
+
+class SarAisAssociationSchema(BaseModel):
+    """Spatiotemporal association between a radar bright target and an AIS transponder."""
+    association_id: str
+    classification: str
+    target_id: str | None = None
+    vessel_id: str | None = None
+    mmsi: str | None = None
+    vessel_name: str | None = None
+    distance_meters: float | None = None
+    target_lat: float | None = None
+    target_lon: float | None = None
+    target_peak_db: float | None = None
+    target_tcr_db: float | None = None
+    ais_lat: float | None = None
+    ais_lon: float | None = None
+    ais_sog_knots: float | None = None
+    ais_cog_degrees: float | None = None
+    ais_alignment_method: str | None = None
+    ais_time_offset_seconds: float | None = None
+    ais_gap_seconds: float | None = None
+    ambiguous_candidate_ids: list[str] = Field(default_factory=list)
+    ambiguous_distances_m: list[float] = Field(default_factory=list)
+    notes: str = ""
+
+
+class SarSurveillanceResultSchema(BaseModel):
+    """Complete Phase #6 SAR Surveillance and AIS Correlation result."""
+    observation_time_iso: str
+    scene_bbox: list[float]
+    total_sar_targets: int
+    total_ais_candidates: int
+    matched_coincident_count: int
+    spatial_discrepancy_count: int
+    uncorrelated_target_count: int
+    undetected_vessel_count: int
+    observation_gap_count: int
+    ambiguous_count: int
+    associations: list[SarAisAssociationSchema] = Field(default_factory=list)
+    targets: list[SarBrightTargetSchema] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    scientific_disclaimer: str = Field(
+        default=(
+            "Dual-sensor observational comparison only. Radar scatterer detections "
+            "represent physical reflectivity anomalies and do NOT constitute confirmed vessel "
+            "identifications. Observational discrepancies indicate surveillance anomalies, "
+            "not proof of intentional AIS manipulation or illicit activity."
+        )
+    )
+
+
+SarSurveillanceResultItem = SarSurveillanceResultSchema
+
+
 class ExperimentRunResponse(BaseModel):
     run_id: str
     satellite_product_id: str
@@ -582,6 +681,7 @@ class ExperimentRunResponse(BaseModel):
     slick_characterization: SlickCharacterizationItem | None = None
     forward_prediction: ForwardPredictionResultItem | None = None
     monte_carlo_ensemble: MonteCarloEnsembleResultItem | None = None
+    sar_surveillance: SarSurveillanceResultSchema | None = None
 
 
 class ExperimentRunSummary(BaseModel):
@@ -601,6 +701,8 @@ class ExperimentRunSummary(BaseModel):
     status: str = "completed"
     slick_characterization: SlickCharacterizationItem | None = None
     forward_prediction: ForwardPredictionResultItem | None = None
+    sar_surveillance_summary: dict[str, int] | None = None
+
 
 
 class ExperimentListResponse(BaseModel):

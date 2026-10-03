@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
     slick_characterization_json TEXT,
     forward_prediction_json TEXT,
     observation_source      TEXT DEFAULT 'BENCHMARK_FALLBACK',
-    monte_carlo_ensemble_json TEXT
+    monte_carlo_ensemble_json TEXT,
+    sar_surveillance_json   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS experiment_run_tags (
@@ -158,7 +159,7 @@ class ExperimentStore:
                         source_zone_geojson, backward_steps, vessels_json,
                         era5_path, cmems_path, created_at, scientific_disclaimer,
                         slick_characterization_json, forward_prediction_json,
-                        monte_carlo_ensemble_json
+                        monte_carlo_ensemble_json, sar_surveillance_json
                     ) VALUES (
                         :run_id, :satellite_product_id, :observation_time,
                         :observation_lon, :observation_lat, :observation_source,
@@ -167,7 +168,7 @@ class ExperimentStore:
                         :source_zone_geojson, :backward_steps, :vessels_json,
                         :era5_path, :cmems_path, :created_at, :scientific_disclaimer,
                         :slick_characterization_json, :forward_prediction_json,
-                        :monte_carlo_ensemble_json
+                        :monte_carlo_ensemble_json, :sar_surveillance_json
                     )
                     """,
                     row,
@@ -456,6 +457,7 @@ class ExperimentStore:
                 ("forward_prediction_json", "TEXT"),
                 ("observation_source", "TEXT"),
                 ("monte_carlo_ensemble_json", "TEXT"),
+                ("sar_surveillance_json", "TEXT"),
             ):
                 try:
                     conn.execute(f"ALTER TABLE experiment_runs ADD COLUMN {col} {col_type}")
@@ -508,6 +510,11 @@ class ExperimentStore:
             if getattr(result, "monte_carlo_ensemble", None)
             else None
         )
+        sar_surv_json = (
+            json.dumps(result.sar_surveillance)
+            if getattr(result, "sar_surveillance", None)
+            else None
+        )
 
         return {
             "run_id": result.run_id,
@@ -532,6 +539,7 @@ class ExperimentStore:
             "slick_characterization_json": slick_char_json,
             "forward_prediction_json": fwd_pred_json,
             "monte_carlo_ensemble_json": mc_ens_json,
+            "sar_surveillance_json": sar_surv_json,
         }
 
     @staticmethod
@@ -625,6 +633,13 @@ class ExperimentStore:
             except Exception:
                 mc_ens = None
 
+        sar_surv = None
+        if row.get("sar_surveillance_json"):
+            try:
+                sar_surv = json.loads(row["sar_surveillance_json"])
+            except Exception:
+                sar_surv = None
+
         return ExperimentResult(
             run_id=row["run_id"],
             satellite_product_id=row["satellite_product_id"],
@@ -649,6 +664,7 @@ class ExperimentStore:
             slick_characterization=slick_char,
             forward_prediction=fwd_pred,
             monte_carlo_ensemble=mc_ens,
+            sar_surveillance=sar_surv,
         )
 
 

@@ -264,6 +264,23 @@ export interface ExperimentRunRequest {
   forward_prediction_hours?: number;
   forward_step_hours?: number;
   monte_carlo?: MonteCarloConfig;
+  sar_surveillance?: SarSurveillanceConfig | null;
+}
+
+export interface SarSurveillanceConfig {
+  enabled?: boolean;
+  sar_raster_path?: string | null;
+  cfar_k_sigma?: number;
+  guard_band_pixels?: number;
+  clutter_band_pixels?: number;
+  tcr_threshold_db?: number;
+  min_pixels?: number;
+  max_pixels?: number;
+  coincident_spatial_gate_m?: number;
+  max_association_gate_m?: number;
+  temporal_window_minutes?: number;
+  max_interpolation_interval_s?: number;
+  coincident_time_threshold_s?: number;
 }
 
 export interface MonteCarloConfig {
@@ -483,6 +500,87 @@ export interface ForwardPredictionResponse {
   prediction?: ForwardPredictionResult;
 }
 
+// ---------------------------------------------------------------------------
+// Phase #6 — Dual-Sensor SAR Surveillance & AIS Correlation Types
+// ---------------------------------------------------------------------------
+
+export interface SarBrightTarget {
+  target_id: string;
+  pixel_x: number;
+  pixel_y: number;
+  lon: number;
+  lat: number;
+  peak_backscatter_db: number;
+  local_clutter_mean_db: number;
+  target_to_clutter_ratio_db: number;
+  apparent_major_extent_m?: number | null;
+  apparent_minor_extent_m?: number | null;
+  pixel_count: number;
+  bounding_box_pixels?: number[];
+  detection_confidence?: number | null;
+  provenance?: string;
+}
+
+export interface SarAisAssociation {
+  association_id?: string;
+  correlation_id?: string;
+  classification: string;
+  target?: SarBrightTarget | null;
+  target_id?: string | null;
+  vessel_id?: string | null;
+  mmsi?: string | null;
+  vessel_name?: string | null;
+  vessel_type?: string | null;
+  ais_lon?: number | null;
+  ais_lat?: number | null;
+  ais_timestamp?: string | null;
+  ais_position_provenance?: string | null;
+  ais_alignment_method?: string | null;
+  spatial_separation_m?: number | null;
+  distance_meters?: number | null;
+  temporal_delta_seconds?: number | null;
+  ais_time_offset_seconds?: number | null;
+  ais_gap_seconds?: number | null;
+  ais_sog_knots?: number | null;
+  ais_cog_degrees?: number | null;
+  target_lat?: number | null;
+  target_lon?: number | null;
+  target_peak_db?: number | null;
+  target_tcr_db?: number | null;
+  ambiguous_candidate_ids?: string[];
+  ambiguous_distances_m?: number[];
+  notes?: string;
+  findings_summary?: string | null;
+  investigation_flag?: string | boolean | null;
+}
+
+export interface SarSurveillanceResult {
+  product_id?: string;
+  observation_time?: string;
+  observation_time_iso?: string;
+  scene_bbox?: number[];
+  total_radar_targets_detected?: number;
+  total_sar_targets?: number;
+  total_ais_candidates?: number;
+  correlated_ais_matches?: number;
+  matched_coincident_count?: number;
+  spatial_discrepancies?: number;
+  spatial_discrepancy_count?: number;
+  uncorrelated_radar_targets?: number;
+  uncorrelated_target_count?: number;
+  undetected_ais_vessels?: number;
+  undetected_vessel_count?: number;
+  observation_gap_count?: number;
+  ambiguous_count?: number;
+  correlations?: SarAisAssociation[];
+  associations?: SarAisAssociation[];
+  targets?: SarBrightTarget[];
+  parameters?: Record<string, any>;
+  model_version?: string;
+  provenance?: string;
+  scientific_disclaimer?: string;
+}
+
 export interface ExperimentRunResult {
   run_id: string;
   satellite_product_id: string;
@@ -508,6 +606,7 @@ export interface ExperimentRunResult {
   slick_characterization?: SlickCharacterization | null;
   forward_prediction?: ForwardPredictionResult | null;
   monte_carlo_ensemble?: MonteCarloEnsembleResult | null;
+  sar_surveillance?: SarSurveillanceResult | null;
 }
 
 export interface ExperimentRunSummary {
@@ -528,6 +627,7 @@ export interface ExperimentRunSummary {
   slick_characterization?: SlickCharacterization | null;
   forward_prediction?: ForwardPredictionResult | null;
   monte_carlo_ensemble?: MonteCarloEnsembleResult | null;
+  sar_surveillance_summary?: Record<string, number> | null;
 }
 
 export interface ExperimentListResponse {
@@ -595,6 +695,9 @@ export interface ExperimentWizardState {
   acquiredRasterPath: string | null;
   acquisitionResponse: SarAcquisitionResponse | null;
   acquisitionError: string | null;
+  // Phase #6 — SAR ↔ AIS Dual-Sensor Maritime Surveillance
+  enableSarSurveillance: boolean;
+  sarSurveillanceCfarKSigma: number;
 }
 
 // ---------------------------------------------------------------------------

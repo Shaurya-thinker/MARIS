@@ -13,11 +13,13 @@
  */
 
 import React, { useEffect, useState } from 'react'
+import { Radio } from 'lucide-react'
 import { useExperiment } from '../../real-experiment/useExperiment'
 import type { AisPosition, SentinelProduct, VesselFeatures } from '../../real-experiment/experimentTypes'
 import AttributionMap from './AttributionMap'
 import HistoryView from './HistoryView'
 import ScientificReportView from './ScientificReportView'
+import SarSurveillanceSection from './SarSurveillanceSection'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1279,6 +1281,8 @@ function Step5Run({ experiment }: { experiment: ReturnType<typeof useExperiment>
     setMonteCarloPerturbLeeway,
     setMonteCarloPerturbWind,
     setMonteCarloPerturbCurrent,
+    setEnableSarSurveillance,
+    setSarSurveillanceCfarKSigma,
   } = experiment
 
   return (
@@ -1320,6 +1324,14 @@ function Step5Run({ experiment }: { experiment: ReturnType<typeof useExperiment>
               {state.enableMonteCarlo
                 ? `Enabled (${state.monteCarloEnsembleSize} runs${state.monteCarloSeed != null ? `, seed=${state.monteCarloSeed}` : ''})`
                 : 'Disabled (Deterministic Baseline)'}
+            </strong>
+          </div>
+          <div className="re-info-row">
+            <span>SAR ↔ AIS Surveillance:</span>
+            <strong style={{ color: state.enableSarSurveillance ? '#c084fc' : '#94a3b8' }}>
+              {state.enableSarSurveillance
+                ? `Enabled (k=${state.sarSurveillanceCfarKSigma.toFixed(1)}σ, ${state.acquiredRasterPath ? 'Acquired GeoTIFF' : 'Authoritative fallback'})`
+                : 'Disabled'}
             </strong>
           </div>
           <div className="re-info-row"><span>ERA5 acquired:</span><strong>{state.environment?.era5_netcdf_path ? '✓' : '✗'}</strong></div>
@@ -1486,6 +1498,121 @@ function Step5Run({ experiment }: { experiment: ReturnType<typeof useExperiment>
         )}
       </div>
 
+      {/* Phase #6 — Dual-Sensor SAR ↔ AIS Maritime Surveillance Configuration Card */}
+      <div
+        className="re-source-zone-card"
+        data-testid="sar-surveillance-config-card"
+        style={{
+          marginTop: '1.25rem',
+          padding: '1.25rem',
+          background: 'rgba(15, 23, 42, 0.65)',
+          borderRadius: 'var(--radius-md, 8px)',
+          border: state.enableSarSurveillance ? '1px solid #c084fc' : '1px solid rgba(148, 163, 184, 0.2)',
+          boxShadow: state.enableSarSurveillance ? '0 0 16px rgba(192, 132, 252, 0.15)' : 'none',
+          transition: 'all 0.2s ease',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Radio size={16} style={{ color: '#c084fc' }} />
+              <h4 style={{ margin: 0, fontSize: '0.95rem', color: '#f8fafc', fontWeight: 700 }}>
+                SAR ↔ AIS Dual-Sensor Maritime Surveillance
+              </h4>
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  padding: '0.15rem 0.5rem',
+                  borderRadius: '4px',
+                  background: 'rgba(192, 132, 252, 0.15)',
+                  color: '#c084fc',
+                  border: '1px solid rgba(192, 132, 252, 0.3)',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                Phase #6
+              </span>
+            </div>
+            <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.78rem', color: '#94a3b8' }}>
+              Performs 2D CA-CFAR radar bright-target detection and spatiotemporally correlates radar targets against candidate AIS vessel tracks.
+            </p>
+          </div>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.6rem',
+              cursor: 'pointer',
+              background: state.enableSarSurveillance ? 'rgba(192, 132, 252, 0.15)' : 'rgba(30, 41, 59, 0.5)',
+              padding: '0.4rem 0.8rem',
+              borderRadius: '6px',
+              border: state.enableSarSurveillance ? '1px solid rgba(192, 132, 252, 0.4)' : '1px solid rgba(148, 163, 184, 0.2)',
+            }}
+          >
+            <input
+              type="checkbox"
+              data-testid="toggle-sar-surveillance"
+              checked={state.enableSarSurveillance}
+              onChange={(e) => setEnableSarSurveillance(e.target.checked)}
+              style={{ accentColor: '#c084fc', cursor: 'pointer' }}
+            />
+            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: state.enableSarSurveillance ? '#c084fc' : '#cbd5e1' }}>
+              {state.enableSarSurveillance ? 'Surveillance Enabled' : 'Enable Surveillance (Phase #6)'}
+            </span>
+          </label>
+        </div>
+
+        {state.enableSarSurveillance && (
+          <div style={{ marginTop: '1rem', borderTop: '1px solid rgba(148, 163, 184, 0.15)', paddingTop: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '0.5rem' }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                  <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>CFAR Detection Sensitivity (k-σ):</span>
+                  <strong style={{ fontSize: '0.82rem', color: '#c084fc', fontFamily: 'var(--font-mono)' }}>
+                    {state.sarSurveillanceCfarKSigma.toFixed(1)} σ
+                  </strong>
+                </div>
+                <input
+                  type="range"
+                  data-testid="sar-cfar-k-sigma-slider"
+                  min="2.0"
+                  max="8.0"
+                  step="0.5"
+                  value={state.sarSurveillanceCfarKSigma}
+                  onChange={(e) => setSarSurveillanceCfarKSigma(parseFloat(e.target.value))}
+                  style={{ width: '100%', accentColor: '#c084fc', cursor: 'pointer' }}
+                />
+              </div>
+
+              <div>
+                <span style={{ fontSize: '0.78rem', color: '#94a3b8', display: 'block', marginBottom: '0.35rem' }}>
+                  SAR Subscene Source:
+                </span>
+                <div style={{ fontSize: '0.78rem', color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.35rem' }}>
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: state.acquiredRasterPath ? '#4ade80' : '#38bdf8',
+                    }}
+                  />
+                  <span>
+                    {state.acquiredRasterPath
+                      ? 'Acquired GeoTIFF subscene (Step 1)'
+                      : 'Authoritative Corsica benchmark subscene'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="re-disclaimer">
         <strong>Method:</strong> Physics + feature-based attribution baseline (not a trained ML model).
         The backward Leeway-Euler drift engine computes a spatially and temporally expanding
@@ -1612,6 +1739,7 @@ function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperim
         vesselPositionsMap={vesselPositionsMap}
         forwardSteps={result.forward_prediction?.steps}
         forwardPrediction={result.forward_prediction}
+        sarSurveillance={result.sar_surveillance}
       />
 
       {/* 2. Reconstructed Source Candidate Zone Metrics */}
@@ -1831,6 +1959,14 @@ function Step6Results({ experiment }: { experiment: ReturnType<typeof useExperim
           </details>
         </div>
       )}
+
+      {/* SAR ↔ AIS Dual-Sensor Maritime Surveillance Section */}
+      <SarSurveillanceSection
+        surveillance={result.sar_surveillance}
+        observationTime={result.observation_time}
+        productId={result.satellite_product_id}
+        onConfigureStep={() => goToStep(5)}
+      />
 
       {/* 3. Candidate Comparison Table (Authoritative Ranking from Backend) */}
       <h4 className="re-section-heading">Candidate Vessel Comparison</h4>

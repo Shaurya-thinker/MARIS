@@ -78,6 +78,8 @@ type Action =
   | { type: 'SET_MONTE_CARLO_PERTURB_LEEWAY'; enabled: boolean }
   | { type: 'SET_MONTE_CARLO_PERTURB_WIND'; enabled: boolean }
   | { type: 'SET_MONTE_CARLO_PERTURB_CURRENT'; enabled: boolean }
+  | { type: 'SET_ENABLE_SAR_SURVEILLANCE'; enabled: boolean }
+  | { type: 'SET_SAR_SURVEILLANCE_CFAR_K_SIGMA'; kSigma: number }
 
 const initialState: ExperimentWizardState = {
   step: 1,
@@ -122,6 +124,8 @@ const initialState: ExperimentWizardState = {
   acquiredRasterPath: null,
   acquisitionResponse: null,
   acquisitionError: null,
+  enableSarSurveillance: true,
+  sarSurveillanceCfarKSigma: 4.5,
 }
 
 function reducer(state: ExperimentWizardState, action: Action): ExperimentWizardState {
@@ -277,6 +281,10 @@ function reducer(state: ExperimentWizardState, action: Action): ExperimentWizard
       return { ...state, monteCarloPerturbWind: action.enabled }
     case 'SET_MONTE_CARLO_PERTURB_CURRENT':
       return { ...state, monteCarloPerturbCurrent: action.enabled }
+    case 'SET_ENABLE_SAR_SURVEILLANCE':
+      return { ...state, enableSarSurveillance: action.enabled }
+    case 'SET_SAR_SURVEILLANCE_CFAR_K_SIGMA':
+      return { ...state, sarSurveillanceCfarKSigma: action.kSigma }
     default:
       return state
   }
@@ -584,6 +592,13 @@ export function useExperiment() {
             current_std_ms: state.monteCarloCurrentStdMs,
           }
         : undefined,
+      sar_surveillance: state.enableSarSurveillance
+        ? {
+            enabled: true,
+            sar_raster_path: state.acquiredRasterPath ?? undefined,
+            cfar_k_sigma: state.sarSurveillanceCfarKSigma,
+          }
+        : undefined,
     }
 
     dispatch({ type: 'RUN_STARTED' })
@@ -695,6 +710,14 @@ export function useExperiment() {
     dispatch({ type: 'SET_MONTE_CARLO_PERTURB_CURRENT', enabled })
   }, [])
 
+  const setEnableSarSurveillance = useCallback((enabled: boolean) => {
+    dispatch({ type: 'SET_ENABLE_SAR_SURVEILLANCE', enabled })
+  }, [])
+
+  const setSarSurveillanceCfarKSigma = useCallback((kSigma: number) => {
+    dispatch({ type: 'SET_SAR_SURVEILLANCE_CFAR_K_SIGMA', kSigma })
+  }, [])
+
   const loadRun = useCallback(async (runId: string): Promise<void> => {
     const result = await getExperimentRun(runId)
     dispatch({ type: 'LOAD_RUN', result })
@@ -732,6 +755,8 @@ export function useExperiment() {
     setMonteCarloPerturbLeeway,
     setMonteCarloPerturbWind,
     setMonteCarloPerturbCurrent,
+    setEnableSarSurveillance,
+    setSarSurveillanceCfarKSigma,
     predictForward,
     searchVessels,
     toggleVessel,

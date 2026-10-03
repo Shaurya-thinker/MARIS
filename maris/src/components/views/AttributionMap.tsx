@@ -15,6 +15,9 @@ import type {
   BackwardStep,
   ForwardDriftStep,
   ForwardPredictionResult,
+  SarAisAssociation,
+  SarBrightTarget,
+  SarSurveillanceResult,
   VesselFeatures,
 } from '../../real-experiment/experimentTypes'
 
@@ -55,6 +58,7 @@ export interface AttributionMapProps {
   vesselPositionsMap?: Record<string, AisPosition[]>
   forwardSteps?: ForwardDriftStep[]
   forwardPrediction?: ForwardPredictionResult | null
+  sarSurveillance?: SarSurveillanceResult | null
 }
 
 export function buildCirclePolygon(
@@ -93,6 +97,7 @@ export default function AttributionMap({
   vesselPositionsMap = {},
   forwardSteps = [],
   forwardPrediction = null,
+  sarSurveillance = null,
 }: AttributionMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -106,6 +111,7 @@ export default function AttributionMap({
   const [showWind, setShowWind] = useState(false)
   const [showCurrents, setShowCurrents] = useState(false)
   const [showUncertainty, setShowUncertainty] = useState(true)
+  const [showSurveillance, setShowSurveillance] = useState(true)
 
   // Map state
   const [_mapLoaded, setMapLoaded] = useState(false)
@@ -115,8 +121,71 @@ export default function AttributionMap({
     | { type: 'source' }
     | { type: 'forward_step'; step: ForwardDriftStep; index: number }
     | { type: 'vessel'; vessel: VesselFeatures }
+    | { type: 'radar_target'; target: SarBrightTarget }
+    | { type: 'sar_ais_obs'; association: SarAisAssociation }
+    | { type: 'sar_ais_assoc'; association: SarAisAssociation }
     | null
   >(null)
+
+  // Surveillance data memoization
+  const associationsList = useMemo(() => {
+    return sarSurveillance?.associations ?? sarSurveillance?.correlations ?? []
+  }, [sarSurveillance])
+
+  const surveillanceTargets = useMemo(() => {
+    if (!sarSurveillance) return []
+    const seen = new Set<string>()
+    const list: SarBrightTarget[] = []
+
+    // 1. Direct targets array on surveillance result
+    if (sarSurveillance.targets && Array.isArray(sarSurveillance.targets)) {
+      sarSurveillance.targets.forEach((t) => {
+        if (!seen.has(t.target_id) && Number.isFinite(t.lat) && Number.isFinite(t.lon)) {
+          seen.add(t.target_id)
+          list.push(t)
+        }
+      })
+    }
+
+    // 2. Targets attached to associations
+    associationsList.forEach((c) => {
+      if (c.target && !seen.has(c.target.target_id) && Number.isFinite(c.target.lat) && Number.isFinite(c.target.lon)) {
+        seen.add(c.target.target_id)
+        list.push(c.target)
+      } else if (c.target_id && c.target_lat != null && c.target_lon != null && !seen.has(c.target_id)) {
+        seen.add(c.target_id)
+        list.push({
+          target_id: c.target_id,
+          pixel_x: 0,
+          pixel_y: 0,
+          lon: c.target_lon,
+          lat: c.target_lat,
+          peak_backscatter_db: c.target_peak_db ?? 0,
+          local_clutter_mean_db: 0,
+          target_to_clutter_ratio_db: c.target_tcr_db ?? 0,
+          pixel_count: 1,
+        })
+      }
+    })
+    return list
+  }, [sarSurveillance, associationsList])
+
+  const surveillanceAisObs = useMemo(() => {
+    return associationsList.filter(
+      (c) => c.ais_lon != null && c.ais_lat != null && Number.isFinite(c.ais_lon) && Number.isFinite(c.ais_lat)
+    )
+  }, [associationsList])
+
+  const surveillanceAssociations = useMemo(() => {
+    return associationsList.filter((c) => {
+      const hasTarget =
+        (c.target && Number.isFinite(c.target.lon) && Number.isFinite(c.target.lat)) ||
+        (c.target_lon != null && c.target_lat != null && Number.isFinite(c.target_lon) && Number.isFinite(c.target_lat))
+      const hasAis =
+        c.ais_lon != null && c.ais_lat != null && Number.isFinite(c.ais_lon) && Number.isFinite(c.ais_lat)
+      return hasTarget && hasAis
+    })
+  }, [associationsList])
 
   // Compute effective vessel positions per candidate
   const candidateTrackData = useMemo(() => {
@@ -228,6 +297,25 @@ export default function AttributionMap({
       })
     }
 
+    if (sarSurveillance) {
+      surveillanceTargets.forEach((t) => {
+        if (Number.isFinite(t.lat) && Number.isFinite(t.lon)) {
+          minLat = Math.min(minLat, t.lat)
+          maxLat = Math.max(maxLat, t.lat)
+          minLon = Math.min(minLon, t.lon)
+          maxLon = Math.max(maxLon, t.lon)
+        }
+      })
+      surveillanceAisObs.forEach((c) => {
+        if (c.ais_lat != null && c.ais_lon != null && Number.isFinite(c.ais_lat) && Number.isFinite(c.ais_lon)) {
+          minLat = Math.min(minLat, c.ais_lat)
+          maxLat = Math.max(maxLat, c.ais_lat)
+          minLon = Math.min(minLon, c.ais_lon)
+          maxLon = Math.max(maxLon, c.ais_lon)
+        }
+      })
+    }
+
     // Add 18% padding so all markers, pills, and tracks fit comfortably
     const padLat = Math.max((maxLat - minLat) * 0.18, 0.05)
     const padLon = Math.max((maxLon - minLon) * 0.18, 0.05)
@@ -238,7 +326,7 @@ export default function AttributionMap({
       west: minLon - padLon,
       east: maxLon + padLon,
     }
-  }, [observation, reconstructedSource, backwardSteps, candidateTrackData])
+  }, [observation, reconstructedSource, backwardSteps, candidateTrackData, forwardLineCoords, sarSurveillance])
 
   // Metocean vector availability check
   const hasWindVectors = useMemo(() => {
@@ -333,7 +421,10 @@ export default function AttributionMap({
         // Only small subtle badges at intermediate steps away from source & observation
         backwardSteps.forEach((step, idx) => {
           const stepNum = idx + 1
-          if (stepNum === 2 || stepNum === 6) {
+          const dObs = Math.hypot(step.lon - observation.lon, step.lat - observation.lat)
+          const dSrc = Math.hypot(step.lon - reconstructedSource.lon, step.lat - reconstructedSource.lat)
+          // Avoid cluttering near slick observation (< 0.06°) or source (< 0.06°)
+          if ((stepNum === 3 || stepNum === 6) && dObs > 0.06 && dSrc > 0.06) {
             const stepEl = document.createElement('div')
             stepEl.className = 're-drift-step-pill'
             stepEl.innerText = `t−${stepNum}h`
@@ -355,7 +446,7 @@ export default function AttributionMap({
           fwdEl.style.cursor = 'pointer'
           const durationH = forwardPrediction?.prediction_hours ?? lastStep.step
           fwdEl.innerHTML = `
-            <div class="re-marker-pill" style="background: rgba(6, 40, 50, 0.92); color: #22d3ee; border: 1.5px solid #06b6d4; font-size: 0.72rem; box-shadow: 0 0 14px rgba(6, 182, 212, 0.45);">
+            <div class="re-marker-pill" style="background: rgba(6, 40, 50, 0.92); color: #22d3ee; border: 1.5px solid #06b6d4; font-size: 0.72rem; box-shadow: 0 0 14px rgba(6, 182, 212, 0.45); white-space: nowrap;">
               🔮 FORWARD PROJECTION (+${durationH}h)
             </div>
             <div class="re-marker-dot" style="width: 12px; height: 12px; border-radius: 50%; background: #06b6d4; border: 2px solid #ffffff; box-shadow: 0 0 8px #22d3ee; margin: 2px auto 0 auto;"></div>
@@ -364,7 +455,13 @@ export default function AttributionMap({
             e.stopPropagation()
             setActivePopup({ type: 'forward_step', step: lastStep, index: effectiveForwardSteps.length - 1 })
           }
-          const fwdMarker = new maplibregl.Marker({ element: fwdEl, anchor: 'bottom' })
+          // Position cleanly to North-West so it never overlaps the Detected Slick marker at North
+          const isNearObs = Math.hypot(lastStep.lon - observation.lon, lastStep.lat - observation.lat) < 0.04
+          const fwdMarker = new maplibregl.Marker({
+            element: fwdEl,
+            anchor: 'bottom-right',
+            offset: isNearObs ? [-38, -14] : [-16, -12],
+          })
             .setLngLat([lastStep.lon, lastStep.lat])
             .addTo(map)
           markersRef.current.push(fwdMarker)
@@ -394,12 +491,13 @@ export default function AttributionMap({
           })
 
           const isUlysse = (ct.vessel.vessel_name ?? '').toUpperCase().includes('ULYSSE')
+          const isNearOrigin = Math.hypot(bestPos.lon - observation.lon, bestPos.lat - observation.lat) < 0.012
 
           const vesselEl = document.createElement('div')
           vesselEl.className = 're-marker-vessel-wrap'
           const icon = isUlysse ? '🔷' : '🟡'
           vesselEl.innerHTML = `
-            <div class="re-marker-pill re-marker-pill-vessel" style="border-color: ${ct.color}; color: ${ct.color};">
+            <div class="re-marker-pill re-marker-pill-vessel" style="border-color: ${ct.color}; color: ${ct.color}; white-space: nowrap;">
               ${icon} ${ct.vessel.vessel_name ?? ct.vessel.mmsi} (${(ct.vessel.evidence_consistency_score * 100).toFixed(1)}%)
             </div>
           `
@@ -409,10 +507,87 @@ export default function AttributionMap({
             setActivePopup({ type: 'vessel', vessel: ct.vessel })
           }
 
-          const vMarker = new maplibregl.Marker({ element: vesselEl, anchor: 'left' })
+          // Non-overlapping quadrant: If co-located near collision origin, position at South / Center-Bottom
+          // (underneath the surveillance AIS fan) with enough clearance so it never overlaps any marker
+          const vMarker = new maplibregl.Marker({
+            element: vesselEl,
+            anchor: isNearOrigin ? 'top' : 'left',
+            offset: isNearOrigin ? (showSurveillance ? [0, 60] : [24, 24]) : [10, 0],
+          })
             .setLngLat([bestPos.lon, bestPos.lat])
             .addTo(map)
           markersRef.current.push(vMarker)
+        })
+      }
+
+      // 6. SAR ↔ AIS Surveillance Markers (Bright Radar Targets & AIS Positions)
+      if (showSurveillance && sarSurveillance) {
+        // A. Bright Radar Targets (◆)
+        surveillanceTargets.forEach((target, tIdx) => {
+          if (!Number.isFinite(target.lat) || !Number.isFinite(target.lon)) return
+          const el = document.createElement('div')
+          el.className = 're-map-marker-radar-target'
+          el.style.cursor = 'pointer'
+          el.innerHTML = `
+            <div class="re-marker-pill" style="background: rgba(45, 26, 3, 0.95); color: #fbbf24; border: 1.5px solid #f59e0b; font-size: 0.7rem; box-shadow: 0 0 10px rgba(245, 158, 11, 0.5); white-space: nowrap;">
+              ◆ Bright Radar Target (${target.target_id})
+            </div>
+            <div style="width: 10px; height: 10px; background: #f59e0b; border: 2px solid #ffffff; transform: rotate(45deg); margin: 2px auto 0 auto; box-shadow: 0 0 8px #fbbf24;"></div>
+          `
+          el.onclick = (e) => {
+            e.stopPropagation()
+            setActivePopup({ type: 'radar_target', target })
+          }
+          // Position at North-East quadrant
+          const tMarker = new maplibregl.Marker({
+            element: el,
+            anchor: 'bottom-left',
+            offset: [24 + tIdx * 16, -16],
+          })
+            .setLngLat([target.lon, target.lat])
+            .addTo(map)
+          markersRef.current.push(tMarker)
+        })
+
+        // B. AIS Surveillance Positions (○)
+        // Radial / staggered layout so multiple AIS fixes near collision origin don't occlude each other
+        surveillanceAisObs.forEach((assoc, sIdx) => {
+          if (assoc.ais_lat == null || assoc.ais_lon == null || !Number.isFinite(assoc.ais_lat) || !Number.isFinite(assoc.ais_lon)) return
+          const el = document.createElement('div')
+          el.className = 're-map-marker-surv-ais'
+          el.style.cursor = 'pointer'
+          el.innerHTML = `
+            <div class="re-marker-pill" style="background: rgba(12, 34, 56, 0.95); color: #38bdf8; border: 1.5px solid #38bdf8; font-size: 0.7rem; box-shadow: 0 0 10px rgba(56, 189, 248, 0.45); white-space: nowrap;">
+              ○ AIS: ${assoc.vessel_name ?? assoc.mmsi ?? 'Track'}
+            </div>
+            <div style="width: 10px; height: 10px; border-radius: 50%; background: #0284c7; border: 2px solid #38bdf8; margin: 2px auto 0 auto; box-shadow: 0 0 8px #38bdf8;"></div>
+          `
+          el.onclick = (e) => {
+            e.stopPropagation()
+            setActivePopup({ type: 'sar_ais_obs', association: assoc })
+          }
+
+          // Fan out below origin:
+          // Left branch (MV Ulysse) to South-West, Right branch (CSL Virginia) to South-East
+          const isLeft = sIdx % 2 === 0
+          const tier = Math.floor(sIdx / 2)
+          const isNearObs = Math.hypot(assoc.ais_lon - observation.lon, assoc.ais_lat - observation.lat) < 0.012
+
+          const offX = isNearObs
+            ? (isLeft ? -(38 + tier * 20) : (38 + tier * 20))
+            : (isLeft ? -(26 + tier * 16) : (26 + tier * 16))
+          const offY = isNearObs
+            ? (20 + tier * 28)
+            : (16 + tier * 28)
+
+          const marker = new maplibregl.Marker({
+            element: el,
+            anchor: isLeft ? 'top-right' : 'top-left',
+            offset: [offX, offY],
+          })
+            .setLngLat([assoc.ais_lon, assoc.ais_lat])
+            .addTo(map)
+          markersRef.current.push(marker)
         })
       }
     },
@@ -428,6 +603,10 @@ export default function AttributionMap({
       forwardPrediction,
       forwardLineCoords,
       showAis,
+      showSurveillance,
+      sarSurveillance,
+      surveillanceTargets,
+      surveillanceAisObs,
       onSelectVessel,
       clearMarkers,
     ]
@@ -823,6 +1002,63 @@ export default function AttributionMap({
           })
         }
       }
+
+      // 5. SAR ↔ AIS Surveillance Association Vectors
+      if (sarSurveillance && surveillanceAssociations.length > 0) {
+        const assocFeatures: GeoJSON.Feature[] = surveillanceAssociations.map((assoc, idx) => {
+          const tLon = assoc.target?.lon ?? assoc.target_lon!
+          const tLat = assoc.target?.lat ?? assoc.target_lat!
+          return {
+            type: 'Feature',
+            properties: {
+              id: assoc.association_id || assoc.correlation_id || `assoc-${idx}`,
+              classification: assoc.classification,
+              separation_m: assoc.spatial_separation_m ?? assoc.distance_meters,
+            },
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                [tLon, tLat],
+                [assoc.ais_lon!, assoc.ais_lat!],
+              ],
+            },
+          }
+        })
+
+        const assocSrc = map.getSource('sar-ais-assoc-src') as maplibregl.GeoJSONSource | undefined
+        if (assocSrc) {
+          assocSrc.setData({ type: 'FeatureCollection', features: assocFeatures })
+        } else {
+          map.addSource('sar-ais-assoc-src', {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: assocFeatures },
+          })
+          map.addLayer({
+            id: 'sar-ais-assoc-casing',
+            type: 'line',
+            source: 'sar-ais-assoc-src',
+            paint: {
+              'line-color': '#000000',
+              'line-width': 5,
+              'line-opacity': 0.7,
+            },
+          })
+          map.addLayer({
+            id: 'sar-ais-assoc-lines',
+            type: 'line',
+            source: 'sar-ais-assoc-src',
+            paint: {
+              'line-color': '#c084fc',
+              'line-width': 2.5,
+              'line-dasharray': [3, 2],
+            },
+          })
+        }
+
+        const vis = showSurveillance ? 'visible' : 'none'
+        if (map.getLayer('sar-ais-assoc-casing')) map.setLayoutProperty('sar-ais-assoc-casing', 'visibility', vis)
+        if (map.getLayer('sar-ais-assoc-lines')) map.setLayoutProperty('sar-ais-assoc-lines', 'visibility', vis)
+      }
     },
     [
       uncertaintyPolygon,
@@ -836,6 +1072,9 @@ export default function AttributionMap({
       backwardSteps,
       showWind,
       showCurrents,
+      showSurveillance,
+      sarSurveillance,
+      surveillanceAssociations,
     ]
   )
 
@@ -1052,6 +1291,17 @@ export default function AttributionMap({
             />
             <span className="re-toggle-text">Show currents</span>
           </label>
+
+          {sarSurveillance && (
+            <label className="re-toggle-label" data-testid="surveillance-layer-toggle">
+              <input
+                type="checkbox"
+                checked={showSurveillance}
+                onChange={(e) => setShowSurveillance(e.target.checked)}
+              />
+              <span className="re-toggle-text" style={{ color: '#c084fc' }}>Show surveillance</span>
+            </label>
+          )}
 
           <button
             type="button"
@@ -1406,6 +1656,103 @@ export default function AttributionMap({
                   </g>
                 )
               })()}
+
+              {/* 6. SAR ↔ AIS Surveillance (SVG fallback) */}
+              {showSurveillance && sarSurveillance && (
+                <g data-testid="sar-surveillance-svg-layer">
+                  {/* Association lines */}
+                  {surveillanceAssociations.map((assoc, idx) => {
+                    const tLon = assoc.target?.lon ?? assoc.target_lon!
+                    const tLat = assoc.target?.lat ?? assoc.target_lat!
+                    const tPt = project(tLon, tLat)
+                    const aPt = project(assoc.ais_lon!, assoc.ais_lat!)
+                    return (
+                      <g
+                        key={`sar-line-${assoc.association_id || assoc.correlation_id || idx}`}
+                        data-testid="sar-ais-association-line"
+                        onClick={() => setActivePopup({ type: 'sar_ais_assoc', association: assoc })}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <line
+                          x1={tPt.x}
+                          y1={tPt.y}
+                          x2={aPt.x}
+                          y2={aPt.y}
+                          stroke="#000000"
+                          strokeWidth="5"
+                          strokeOpacity="0.7"
+                        />
+                        <line
+                          x1={tPt.x}
+                          y1={tPt.y}
+                          x2={aPt.x}
+                          y2={aPt.y}
+                          stroke="#c084fc"
+                          strokeWidth="2.5"
+                          strokeDasharray="4 3"
+                        />
+                      </g>
+                    )
+                  })}
+
+                  {/* Bright Radar Targets */}
+                  {surveillanceTargets.map((target) => {
+                    const pt = project(target.lon, target.lat)
+                    const d = 9
+                    return (
+                      <g
+                        key={`svg-target-${target.target_id}`}
+                        data-testid="bright-radar-target-marker"
+                        onClick={() => setActivePopup({ type: 'radar_target', target })}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <polygon
+                          points={`${pt.x},${pt.y - d} ${pt.x + d},${pt.y} ${pt.x},${pt.y + d} ${pt.x - d},${pt.y}`}
+                          fill="#f59e0b"
+                          stroke="#ffffff"
+                          strokeWidth="2"
+                        />
+                        <text
+                          x={pt.x + 12}
+                          y={pt.y + 4}
+                          fill="#fbbf24"
+                          fontSize="11"
+                          fontWeight="bold"
+                          fontFamily="sans-serif"
+                        >
+                          ◆ Bright Radar Target ({target.target_id})
+                        </text>
+                      </g>
+                    )
+                  })}
+
+                  {/* AIS Surveillance Positions */}
+                  {surveillanceAisObs.map((assoc, idx) => {
+                    const pt = project(assoc.ais_lon!, assoc.ais_lat!)
+                    return (
+                      <g
+                        key={`svg-ais-obs-${assoc.correlation_id || idx}`}
+                        data-testid="ais-observation-marker"
+                        onClick={() => setActivePopup({ type: 'sar_ais_obs', association: assoc })}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <circle cx={pt.x} cy={pt.y} r="8" fill="rgba(56, 189, 248, 0.2)" stroke="#38bdf8" strokeWidth="2.5" />
+                        <circle cx={pt.x} cy={pt.y} r="3" fill="#38bdf8" />
+                        <text
+                          x={pt.x + (idx % 2 === 0 ? -120 : 12)}
+                          y={pt.y + (idx % 2 === 0 ? -10 : 16)}
+                          fill="#38bdf8"
+                          fontSize="11"
+                          fontWeight="bold"
+                          fontFamily="sans-serif"
+                        >
+                          ○ AIS ({assoc.vessel_name ?? assoc.mmsi ?? 'Track'})
+                        </text>
+                      </g>
+                    )
+                  })}
+                </g>
+              )}
             </svg>
           </div>
         )}
@@ -1626,6 +1973,166 @@ export default function AttributionMap({
                 </div>
               </div>
             )}
+
+            {activePopup.type === 'radar_target' && (
+              <div className="re-popup-content" data-testid="radar-target-popup">
+                <div className="re-popup-header" style={{ color: '#fbbf24', borderBottom: '1px solid #f59e0b' }}>
+                  <Compass size={14} />
+                  <strong>Bright Radar Target ({activePopup.target.target_id})</strong>
+                </div>
+                <div className="re-popup-body">
+                  <div className="re-popup-row">
+                    <span>Coordinates:</span>
+                    <code>
+                      {activePopup.target.lat.toFixed(4)}°N, {activePopup.target.lon.toFixed(4)}°E
+                    </code>
+                  </div>
+                  <div className="re-popup-row">
+                    <span>Peak Backscatter:</span>
+                    <strong style={{ color: '#fbbf24' }}>{activePopup.target.peak_backscatter_db.toFixed(2)} dB</strong>
+                  </div>
+                  <div className="re-popup-row">
+                    <span>Local Clutter Mean:</span>
+                    <strong>{activePopup.target.local_clutter_mean_db.toFixed(2)} dB</strong>
+                  </div>
+                  <div className="re-popup-row">
+                    <span>Target-to-Clutter Ratio (TCR):</span>
+                    <strong style={{ color: '#4ade80' }}>{activePopup.target.target_to_clutter_ratio_db.toFixed(2)} dB</strong>
+                  </div>
+                  {activePopup.target.apparent_major_extent_m != null && (
+                    <div className="re-popup-row">
+                      <span>Apparent Radar Extent:</span>
+                      <strong>
+                        {activePopup.target.apparent_major_extent_m.toFixed(0)}m × {activePopup.target.apparent_minor_extent_m != null ? `${activePopup.target.apparent_minor_extent_m.toFixed(0)}m` : '—'}
+                      </strong>
+                    </div>
+                  )}
+                  <div className="re-popup-row">
+                    <span>Pixel Count:</span>
+                    <strong>{activePopup.target.pixel_count} px</strong>
+                  </div>
+                  {activePopup.target.detection_confidence != null && (
+                    <div className="re-popup-row">
+                      <span>Detection Confidence:</span>
+                      <strong>{(activePopup.target.detection_confidence * 100).toFixed(0)}%</strong>
+                    </div>
+                  )}
+                  <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontStyle: 'italic', marginTop: '0.4rem', borderTop: '1px solid rgba(148, 163, 184, 0.2)', paddingTop: '0.35rem' }}>
+                    Bright radar targets are SAR scattering detections and are not automatically classified as vessels.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activePopup.type === 'sar_ais_obs' && (() => {
+              const assoc = activePopup.association
+              const prov = assoc.ais_position_provenance ?? assoc.ais_alignment_method ?? 'UNAVAILABLE'
+              const timeOffset = assoc.temporal_delta_seconds ?? assoc.ais_time_offset_seconds
+              return (
+                <div className="re-popup-content" data-testid="sar-ais-obs-popup">
+                  <div className="re-popup-header" style={{ color: '#38bdf8', borderBottom: '1px solid #0284c7' }}>
+                    <Ship size={14} />
+                    <strong>AIS Observation ({assoc.vessel_name ?? assoc.mmsi ?? 'Vessel'})</strong>
+                  </div>
+                  <div className="re-popup-body">
+                    {assoc.mmsi && (
+                      <div className="re-popup-row">
+                        <span>MMSI:</span>
+                        <code>{assoc.mmsi}</code>
+                      </div>
+                    )}
+                    {assoc.vessel_type && (
+                      <div className="re-popup-row">
+                        <span>Vessel Type:</span>
+                        <span>{assoc.vessel_type}</span>
+                      </div>
+                    )}
+                    <div className="re-popup-row">
+                      <span>AIS Coordinates:</span>
+                      <code>
+                        {assoc.ais_lat?.toFixed(4)}°N, {assoc.ais_lon?.toFixed(4)}°E
+                      </code>
+                    </div>
+                    {assoc.ais_timestamp && (
+                      <div className="re-popup-row">
+                        <span>Timestamp:</span>
+                        <strong>{assoc.ais_timestamp.replace('T', ' ').slice(0, 19)} UTC</strong>
+                      </div>
+                    )}
+                    {timeOffset != null && (
+                      <div className="re-popup-row">
+                        <span>Time Offset:</span>
+                        <strong>{Math.abs(timeOffset).toFixed(0)} s</strong>
+                      </div>
+                    )}
+                    {assoc.ais_sog_knots != null && (
+                      <div className="re-popup-row">
+                        <span>Speed Over Ground (SOG):</span>
+                        <strong>{assoc.ais_sog_knots.toFixed(1)} kn</strong>
+                      </div>
+                    )}
+                    {assoc.ais_cog_degrees != null && (
+                      <div className="re-popup-row">
+                        <span>Course Over Ground (COG):</span>
+                        <strong>{assoc.ais_cog_degrees.toFixed(0)}°</strong>
+                      </div>
+                    )}
+                    <div className="re-popup-row">
+                      <span>AIS Position Provenance:</span>
+                      <strong style={{ color: prov === 'GENUINE_OBSERVATION' ? '#4ade80' : prov === 'TEMPORALLY_ALIGNED_FIX' ? '#38bdf8' : '#facc15' }}>
+                        {prov}
+                      </strong>
+                    </div>
+                    {assoc.classification && (
+                      <div className="re-popup-row">
+                        <span>Surveillance State:</span>
+                        <strong style={{ color: '#38bdf8' }}>
+                          {assoc.classification.replace(/_/g, ' ')}
+                        </strong>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
+
+            {activePopup.type === 'sar_ais_assoc' && (
+              <div className="re-popup-content" data-testid="sar-ais-assoc-popup">
+                <div className="re-popup-header" style={{ color: '#c084fc', borderBottom: '1px solid #a855f7' }}>
+                  <Compass size={14} />
+                  <strong>SAR ↔ AIS Association</strong>
+                </div>
+                <div className="re-popup-body">
+                  <div className="re-popup-row">
+                    <span>Classification:</span>
+                    <strong>{activePopup.association.classification.replace(/_/g, ' ')}</strong>
+                  </div>
+                  {activePopup.association.spatial_separation_m != null && (
+                    <div className="re-popup-row">
+                      <span>Spatial Separation:</span>
+                      <strong>{activePopup.association.spatial_separation_m.toFixed(1)} m</strong>
+                    </div>
+                  )}
+                  {activePopup.association.temporal_delta_seconds != null && (
+                    <div className="re-popup-row">
+                      <span>Temporal Difference:</span>
+                      <strong>{Math.abs(activePopup.association.temporal_delta_seconds).toFixed(0)} s</strong>
+                    </div>
+                  )}
+                  <div className="re-popup-row">
+                    <span>Investigation Flag:</span>
+                    <strong style={{ color: activePopup.association.investigation_flag ? '#f87171' : '#4ade80' }}>
+                      {activePopup.association.investigation_flag ? 'Flagged for Review' : 'Nominal Gate Match'}
+                    </strong>
+                  </div>
+                  {activePopup.association.findings_summary && (
+                    <div style={{ fontSize: '0.74rem', color: '#cbd5e1', marginTop: '0.4rem' }}>
+                      {activePopup.association.findings_summary}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1705,6 +2212,22 @@ export default function AttributionMap({
               <span className="re-arrow re-arrow-curr" />
               <span>CMEMS Current Vector</span>
             </div>
+          )}
+          {sarSurveillance && (
+            <>
+              <div className="re-legend-entry" data-testid="legend-sar-target">
+                <span style={{ color: '#f59e0b', fontSize: '0.85rem' }}>◆</span>
+                <strong style={{ color: '#fbbf24' }}>Bright Radar Target</strong>
+              </div>
+              <div className="re-legend-entry" data-testid="legend-ais-obs">
+                <span style={{ color: '#38bdf8', fontSize: '0.85rem' }}>○</span>
+                <strong style={{ color: '#38bdf8' }}>AIS Observation</strong>
+              </div>
+              <div className="re-legend-entry" data-testid="legend-sar-ais-assoc">
+                <span className="re-line" style={{ background: '#c084fc', borderTop: '2px dashed #ffffff' }} />
+                <strong style={{ color: '#c084fc' }}>SAR ↔ AIS Association</strong>
+              </div>
+            </>
           )}
         </div>
       </div>

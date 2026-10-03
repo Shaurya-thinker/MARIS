@@ -21,12 +21,15 @@ Method label: "Physics + feature-based attribution baseline (not a trained ML mo
 from __future__ import annotations
 
 import json
+import logging
 import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from app.models.asset import Asset
 from app.models.common import AssetType, Provenance
@@ -220,6 +223,7 @@ class ExperimentResult:
     slick_characterization: dict[str, Any] | None = None
     forward_prediction: dict[str, Any] | None = None
     monte_carlo_ensemble: dict[str, Any] | None = None
+    sar_surveillance: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.observation_time, str):
@@ -252,7 +256,9 @@ class ExperimentResult:
             "slick_characterization": self.slick_characterization,
             "forward_prediction": self.forward_prediction,
             "monte_carlo_ensemble": self.monte_carlo_ensemble,
+            "sar_surveillance": self.sar_surveillance,
         }
+
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +294,7 @@ class ExperimentRunner:
         forward_prediction_hours: float | None = None,
         forward_step_hours: float = 1.0,
         monte_carlo_config: dict[str, Any] | None = None,
+        sar_surveillance_config: dict[str, Any] | None = None,
     ) -> ExperimentResult:
         """Execute the full real-data attribution experiment.
 
@@ -674,8 +681,53 @@ class ExperimentRunner:
                     slick_characterization=slick_characterization,
                 )
             except Exception:
-                # Do not abort backward attribution if forward prediction meets a data horizon limitation
                 forward_prediction_data = None
+
+        # Step 6 — Phase #6 Dual-Sensor SAR Surveillance & AIS Correlation (if configured)
+        sar_surveillance_data = None
+        if sar_surveillance_config is not None:
+            is_enabled = False
+            config_kwargs = {}
+            if isinstance(sar_surveillance_config, dict):
+                is_enabled = sar_surveillance_config.get("enabled", True)
+                config_kwargs = {k: v for k, v in sar_surveillance_config.items() if k != "enabled"}
+            elif hasattr(sar_surveillance_config, "enabled"):
+                is_enabled = getattr(sar_surveillance_config, "enabled", True)
+                if hasattr(sar_surveillance_config, "model_dump"):
+                    config_kwargs = sar_surveillance_config.model_dump()
+                elif hasattr(sar_surveillance_config, "dict"):
+                    config_kwargs = sar_surveillance_config.dict()
+                config_kwargs.pop("enabled", None)
+            elif isinstance(sar_surveillance_config, bool):
+                is_enabled = sar_surveillance_config
+
+            if is_enabled:
+                try:
+                    from app.services.real_experiment.sar_surveillance import (
+                        SarSurveillanceConfig,
+                        execute_sar_surveillance,
+                    )
+                    raster_path_to_use = config_kwargs.get("sar_raster_path")
+                    bbox_coords = None
+                    if search_bbox and isinstance(search_bbox, dict):
+                        bbox_coords = [
+                            search_bbox.get("west", 9.38),
+                            search_bbox.get("south", 43.15),
+                            search_bbox.get("east", 9.58),
+                            search_bbox.get("north", 43.35),
+                        ]
+                    sar_surveillance_data = execute_sar_surveillance(
+                        sar_raster_path=raster_path_to_use,
+                        observation_lon=origin_lon,
+                        observation_lat=origin_lat,
+                        observation_time=obs_utc,
+                        search_bbox=bbox_coords,
+                        ais_vessels=[v.as_dict() for v in vessel_features],
+                        config=config_kwargs,
+                    )
+                except Exception as sar_surv_err:
+                    logger.warning("SAR surveillance correlation encountered error: %s", sar_surv_err)
+                    sar_surveillance_data = None
 
         return ExperimentResult(
             run_id=run_id,
@@ -712,7 +764,10 @@ class ExperimentRunner:
             slick_characterization=slick_characterization,
             forward_prediction=forward_prediction_data,
             monte_carlo_ensemble=ensemble_res.as_dict() if ensemble_res is not None else None,
+            sar_surveillance=sar_surveillance_data,
         )
+
+    run_experiment = run
 
     # ------------------------------------------------------------------
     # Vessel feature calculation (all computed from actual input data)

@@ -42,12 +42,20 @@ import type {
   EvidenceComponent,
   EvidenceBreakdown,
   VesselFeatures,
+  SarBrightTarget,
+  SarAisAssociation,
+  SarSurveillanceResult,
+  SarSurveillanceConfig,
 } from './experimentTypes'
 
 export type {
   EvidenceComponent,
   EvidenceBreakdown,
   VesselFeatures,
+  SarBrightTarget,
+  SarAisAssociation,
+  SarSurveillanceResult,
+  SarSurveillanceConfig,
 }
 
 // ---------------------------------------------------------------------------

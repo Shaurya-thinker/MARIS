@@ -31,6 +31,8 @@ from app.api.experiment_schemas import (
     MonteCarloConfigRequest,
     MonteCarloEnsembleResultItem,
     EnsembleEvidenceItem,
+    SarSurveillanceConfigRequest,
+    SarSurveillanceResultItem,
     SentinelDiscoverRequest,
     SentinelDiscoverResponse,
     SentinelProductItem,
@@ -761,6 +763,7 @@ def run_experiment(body: ExperimentRunRequest) -> ExperimentRunResponse:
             forward_prediction_hours=body.forward_prediction_hours,
             forward_step_hours=body.forward_step_hours,
             monte_carlo_config=body.monte_carlo.model_dump() if body.monte_carlo else None,
+            sar_surveillance_config=body.sar_surveillance.model_dump() if body.sar_surveillance else None,
         )
     except ExperimentError as exc:
         logger.warning("Experiment run failed: %s", exc)
@@ -835,6 +838,21 @@ def list_runs(limit: int = 50) -> ExperimentListResponse:
             except Exception:
                 fwd_pred_item = None
 
+        sar_surv_summary = None
+        if r.get("sar_surveillance_json"):
+            try:
+                surv_data = json.loads(r["sar_surveillance_json"])
+                sar_surv_summary = {
+                    "total_sar_targets": surv_data.get("total_sar_targets", 0),
+                    "total_ais_candidates": surv_data.get("total_ais_candidates", 0),
+                    "matched_coincident_count": surv_data.get("matched_coincident_count", 0),
+                    "spatial_discrepancy_count": surv_data.get("spatial_discrepancy_count", 0),
+                    "uncorrelated_target_count": surv_data.get("uncorrelated_target_count", 0),
+                    "undetected_vessel_count": surv_data.get("undetected_vessel_count", 0),
+                }
+            except Exception:
+                sar_surv_summary = None
+
         summaries.append(
             ExperimentRunSummary(
                 run_id=r["run_id"],
@@ -852,6 +870,7 @@ def list_runs(limit: int = 50) -> ExperimentListResponse:
                 status="completed",
                 slick_characterization=slick_char_item,
                 forward_prediction=fwd_pred_item,
+                sar_surveillance_summary=sar_surv_summary,
             )
         )
     return ExperimentListResponse(runs=summaries, count=len(summaries))
@@ -954,6 +973,7 @@ def export_run_json(run_id: str) -> Response:
     )
 
 
+
 # ---------------------------------------------------------------------------
 # Internal helper
 # ---------------------------------------------------------------------------
@@ -1043,6 +1063,14 @@ def _result_to_response(result: Any) -> ExperimentRunResponse:
             logger.warning("Failed to serialize monte_carlo_ensemble in response: %s", exc)
             mc_ens_item = None
 
+    sar_surv_item = None
+    if getattr(result, "sar_surveillance", None):
+        try:
+            sar_surv_item = SarSurveillanceResultItem(**result.sar_surveillance)
+        except Exception as exc:
+            logger.warning("Failed to serialize sar_surveillance in response: %s", exc)
+            sar_surv_item = None
+
     return ExperimentRunResponse(
         run_id=result.run_id,
         satellite_product_id=result.satellite_product_id,
@@ -1066,6 +1094,7 @@ def _result_to_response(result: Any) -> ExperimentRunResponse:
         slick_characterization=slick_char_item,
         forward_prediction=fwd_pred_item,
         monte_carlo_ensemble=mc_ens_item,
+        sar_surveillance=sar_surv_item,
     )
 
 
